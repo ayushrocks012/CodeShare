@@ -57,6 +57,10 @@ Public Sub RunGUIScript()
 
     For i = 2 To LastRow
 
+        If i = 5 Then 'Change 5 to whichever iteration number you want to pause at
+            Stop 'This pauses the execution
+        End If
+
         objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = ws.Cells(i, 1).Value
         objSess.FindById("wnd[0]").sendVKey 0
 
