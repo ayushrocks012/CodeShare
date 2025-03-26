@@ -57,11 +57,11 @@ Public Sub RunGUIScript()
             objSess.FindById("wnd[2]/tbar[0]/btn[0]").press
         End If
 
-        ws.Cells(i, 3).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
-        ws.Cells(i, 4).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
+        ws.Cells(i, 4).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
+        ws.Cells(i, 5).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
         objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
-        ws.Cells(i, 5).Value = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
-        ws.Cells(i, 6).Value = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
+        ws.Cells(i, 6).Value = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
+        ws.Cells(i, 7).Value = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
 
         objSess.FindById("wnd[1]/tbar[0]/btn[3]").press
         objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
