@@ -1,3 +1,6 @@
+Option Explicit
+
+' Global variables
 Public SapGuiAuto, WScript, msgcol
 Public objGui       As GuiApplication
 Public objConn      As GuiConnection
@@ -8,64 +11,69 @@ Public Const W_System As String = "PEA100"
 Public Const Max_Possible_Session As Integer = 6
 
 Sub StartExtract()
-    
     Result1 = ""
     Result2 = ""
     
-    Dim W_Ret   As Boolean
+    ' Try to attach to an existing session
+    Dim W_Ret As Boolean
+    W_Ret = Attach_Session()
     
-    W_Ret = Attach_Session
-    
-    If Result1 = 1 Or Result2 = 1 Then
-        Exit Sub
-    End If
+    If Result1 = 1 Or Result2 = 1 Then Exit Sub
     
     If Not W_Ret Then
-        
         Application.Wait (Now + TimeValue("0:00:03"))
-        
-        W_Ret = Attach_Session
-        
-        If Not W_Ret Then
-            Exit Sub
-        End If
-        
+        W_Ret = Attach_Session()
+        If Not W_Ret Then Exit Sub
     End If
     
-    RunGUIScript        ' Run the actual GUI script
+    ' Run the actual GUI script
+    RunGUIScript()
     
+    ' End the transaction and clean up
     objSess.EndTransaction
-    
     Set objSess = Nothing
-    
 End Sub
 
-Public Sub RunGUIScript()
+Sub RunGUIScript()
+    On Error GoTo ErrorHandler
+    
+    ' Interact with SAP GUI elements
+    With objSess
+        .FindById("wnd[0]").Maximize
+        .FindById("wnd[0]/tbar[0]/okcd").Text = "mm03"
+        .sendVKey 0
+        .FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = "20063584"
+        .sendVKey 0
+        .FindById("wnd[1]/tbar[0]/btn[20]").press
+        .FindById("wnd[1]/tbar[0]/btn[0]").press
+        .FindById("wnd[1]/tbar[0]/btn[0]").press
+        
+        ' Extract data and write to Excel
+        WriteToExcel 2, 3, .FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
+        WriteToExcel 2, 4, .FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
+        .FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
+        WriteToExcel 2, 5, .FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
+        WriteToExcel 2, 6, .FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
+        
+        .FindById("wnd[1]/tbar[0]/btn[3]").press
+        .FindById("wnd[0]/tbar[0]/btn[3]").press
+        .FindById("wnd[0]/tbar[0]/btn[3]").press
+    End With
+    
+    Exit Sub
 
-
-objSess.FindById("wnd[0]").Maximize
-objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "mm03"
-objSess.FindById("wnd[0]").sendVKey 0
-objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = "20063584"
-objSess.FindById("wnd[0]").sendVKey 0
-objSess.FindById("wnd[1]/tbar[0]/btn[20]").press
-objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
-objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 3).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 4).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
-objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 5).Value = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 6).Value = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
-objSess.FindById("wnd[1]/tbar[0]/btn[3]").press
-objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
-objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
-
-
+ErrorHandler:
+    MsgBox "Error in RunGUIScript: " & Err.Description, vbCritical
 End Sub
 
 Function Attach_Session() As Boolean
-    Dim i, j
-    Dim W_conn, W_Sess
+    On Error GoTo ErrorHandler
+    
+    Dim i As Integer, j As Integer
+    Dim W_conn As Object, W_Sess As Object
+    Dim SessionFound As Boolean
+    Dim Session_Nr_All As Integer
+    Dim Session_Nr As Integer
     
     If W_System = "" Then
         Attach_Session = False
@@ -87,21 +95,22 @@ Function Attach_Session() As Boolean
     Session_Nr = -1
     
     For i = 0 To objGui.Children.Count - 1
-        Set W_conn = objGui.Children(i + 0)
+        Set W_conn = objGui.Children(i)
         Session_Nr_All = W_conn.Children.Count
         For j = 0 To W_conn.Children.Count - 1
-            Set W_Sess = W_conn.Children(j + 0)
+            Set W_Sess = W_conn.Children(j)
             If W_Sess.Info.SystemName & W_Sess.Info.Client = W_System Then
                 If W_Sess.Info.Transaction = "SESSION_MANAGER" Or W_Sess.Info.Transaction = "SMEN" Or W_Sess.Info.Transaction = "S000" Then
                     Session_Nr = W_Sess.Info.SessionNumber - 1
-                    Set objConn = objGui.Children(i + 0)
-                    Set objSess = objConn.Children(j + 0)
+                    Set objConn = W_conn
+                    Set objSess = W_Sess
                     Attach_Session = True
                     Exit For
                 End If
             End If
-        Next
-    Next
+        Next j
+        If Attach_Session Then Exit For
+    Next i
     
     If Session_Nr_All = Max_Possible_Session And Session_Nr = -1 Then
         Result1 = MsgBox("Maximum number of sessions reached", vbCritical + vbOKOnly)
@@ -110,24 +119,22 @@ Function Attach_Session() As Boolean
     
     If Session_Nr = -1 Then
         For i = 0 To objGui.Children.Count - 1
-            Set W_conn = objGui.Children(i + 0)
+            Set W_conn = objGui.Children(i)
             For j = 0 To W_conn.Children.Count - 1
-                Set W_Sess = W_conn.Children(j + 0)
+                Set W_Sess = W_conn.Children(j)
                 If W_Sess.Info.SystemName & W_Sess.Info.Client = W_System Then
                     W_Sess.CreateSession
                     SessionFound = True
                     Attach_Session = False
                     Exit For
                 End If
-            Next
-            If SessionFound = True Then
-                Exit For
-            End If
-        Next
+            Next j
+            If SessionFound Then Exit For
+        Next i
     End If
     
-    If SessionFound <> True And objSess Is Nothing Then
-        Result2 = MsgBox("No active session To system " + W_System + ", Or scripting Is Not enabled.", vbCritical + vbOKOnly)
+    If Not SessionFound And objSess Is Nothing Then
+        Result2 = MsgBox("No active session to system " & W_System & ", or scripting is not enabled.", vbCritical + vbOKOnly)
         Attach_Session = False
         Exit Function
     End If
@@ -137,8 +144,22 @@ Function Attach_Session() As Boolean
         WScript.ConnectObject objGui, "on"
     End If
     
-    If Not objSess Is Nothing Then
-    Set objSBar = objSess.FindById("wnd[0]/sbar")
-    End If
+    If Not objSess Is Nothing Then Set objSBar = objSess.FindById("wnd[0]/sbar")
     
+    Attach_Session = True
+    Exit Function
+
+ErrorHandler:
+    MsgBox "Error in Attach_Session: " & Err.Description, vbCritical
+    Attach_Session = False
 End Function
+
+Sub WriteToExcel(row As Integer, col As Integer, value As String)
+    On Error GoTo ErrorHandler
+    
+    ActiveWorkbook.Sheets("Sheet1").Cells(row, col).Value = value
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "Error in WriteToExcel: " & Err.Description, vbCritical
+End Sub
