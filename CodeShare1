@@ -1,64 +1,60 @@
-Public SapGuiAuto, WScript, msgcol
-Public objGui       As GuiApplication
-Public objConn      As GuiConnection
-Public objSess      As GuiSession
-Public objSBar      As GuiStatusbar
-Dim Result1, Result2
-Public Const W_System As String = "PEA100"
-Public Const Max_Possible_Session As Integer = 6
-
 Sub StartExtract()
-    
     Result1 = ""
     Result2 = ""
-    
+
     Dim W_Ret   As Boolean
-    
+
     W_Ret = Attach_Session
-    
+
     If Result1 = 1 Or Result2 = 1 Then
         Exit Sub
     End If
-    
+
     If Not W_Ret Then
-        
         Application.Wait (Now + TimeValue("0:00:03"))
-        
         W_Ret = Attach_Session
-        
         If Not W_Ret Then
             Exit Sub
         End If
-        
     End If
-    
+
     RunGUIScript        ' Run the actual GUI script
-    
+
     objSess.EndTransaction
-    
+
     Set objSess = Nothing
-    
 End Sub
 
 Public Sub RunGUIScript()
+    Dim ws As Worksheet
+    Dim LastRow As Long, i As Long
 
-objSess.FindById("wnd[0]").Maximize
-objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "mm03"
-objSess.FindById("wnd[0]").sendVKey 0
-objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = "20063584"
-objSess.FindById("wnd[0]").sendVKey 0
-objSess.FindById("wnd[1]/tbar[0]/btn[20]").press
-objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
-objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 3).value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 4).value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
-objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 5).value = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
-ActiveWorkbook.Sheets("Sheet1").Cells(2, 6).value = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
-objSess.FindById("wnd[1]/tbar[0]/btn[3]").press
-objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
-objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
+    Set ws = ThisWorkbook.Sheets("Sheet1")
+    LastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
 
+    For i = 2 To LastRow
+        objSess.FindById("wnd[0]").Maximize
+        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "mm03"
+        objSess.FindById("wnd[0]").sendVKey 0
+
+        objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = ws.Cells(i, 1).Value
+        objSess.FindById("wnd[0]").sendVKey 0
+
+        On Error Resume Next
+        objSess.FindById("wnd[1]/tbar[0]/btn[20]").press
+        objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
+        objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
+
+        ws.Cells(i, 3).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
+        ws.Cells(i, 4).Value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
+        objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
+        ws.Cells(i, 5).Value = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
+        ws.Cells(i, 6).Value = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
+
+        objSess.FindById("wnd[1]/tbar[0]/btn[3]").press
+        objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
+        objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
+    Next i
 End Sub
 
 Function Attach_Session() As Boolean
