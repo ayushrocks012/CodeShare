@@ -84,11 +84,11 @@ Public Sub RunGUIScript()
             dataArr(i - 1, 5) = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
         End If
 
+        ws.Range("C" & i).Resize(1, 5).Value = Application.Index(dataArr, i - 1, 0)
+
         objSess.FindById("wnd[1]/tbar[0]/btn[3]").press
         objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
     Next i
-
-    ws.Range("C2").Resize(UBound(dataArr), 5).Value = dataArr
 
     objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
 
