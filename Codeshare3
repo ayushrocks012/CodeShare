@@ -9,6 +9,9 @@ Public Const Max_Possible_Session As Integer = 6
 
 Sub StartExtract()
 
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
     Result1 = ""
     Result2 = ""
 
@@ -16,14 +19,14 @@ Sub StartExtract()
     W_Ret = Attach_Session
 
     If Result1 = 1 Or Result2 = 1 Then
-        Exit Sub
+        GoTo Cleanup
     End If
 
     If Not W_Ret Then
         Application.Wait (Now + TimeValue("0:00:03"))
         W_Ret = Attach_Session
         If Not W_Ret Then
-            Exit Sub
+            GoTo Cleanup
         End If
     End If
 
@@ -31,20 +34,30 @@ Sub StartExtract()
 
     objSess.EndTransaction
     Set objSess = Nothing
+
+Cleanup:
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
 End Sub
 
 Public Sub RunGUIScript()
     Dim ws As Worksheet
     Dim LastRow As Long, i As Long
+    Dim infoText As String
+    Dim dataArr()
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
-    LastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).row
+    LastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    ReDim dataArr(1 To LastRow - 1, 1 To 5)
+
+    objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "mm03"
+    objSess.FindById("wnd[0]").sendVKey 0
 
     For i = 2 To LastRow
-        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "mm03"
-        objSess.FindById("wnd[0]").sendVKey 0
 
-        objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = ws.Cells(i, 1).value
+        objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = ws.Cells(i, 1).Value
         objSess.FindById("wnd[0]").sendVKey 0
 
         On Error Resume Next
@@ -52,21 +65,33 @@ Public Sub RunGUIScript()
         objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
         objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
 
-        If Not objSess.FindById("wnd[2]") Is Nothing Then
-        ws.Cells(i, 3).value = objSess.FindById("wnd[2]").PopupDialogText
+        If Not objSess.FindById("wnd[2]/tbar[0]/btn[0]") Is Nothing Then
+            dataArr(i - 1, 1) = objSess.FindById("wnd[2]").PopupDialogText
             objSess.FindById("wnd[2]/tbar[0]/btn[0]").press
         End If
 
-        ws.Cells(i, 4).value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
-        ws.Cells(i, 5).value = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
+        dataArr(i - 1, 2) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
+        dataArr(i - 1, 3) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
         objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
-        ws.Cells(i, 6).value = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
-        ws.Cells(i, 7).value = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
+
+        infoText = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
+
+        If Left(infoText, 7) <> "Created" Then
+            dataArr(i - 1, 4) = objSess.FindById("wnd[1]/usr/lbl[1,6]").DisplayedText
+            dataArr(i - 1, 5) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
+        Else
+            dataArr(i - 1, 4) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
+            dataArr(i - 1, 5) = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
+        End If
 
         objSess.FindById("wnd[1]/tbar[0]/btn[3]").press
         objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
-        objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
     Next i
+
+    ws.Range("C2").Resize(UBound(dataArr), 5).Value = dataArr
+
+    objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
+
 End Sub
 
 Function Attach_Session() As Boolean
