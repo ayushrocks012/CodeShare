@@ -48,7 +48,7 @@ Public Sub RunGUIScript()
     Dim dataArr()
 
     Set ws = ThisWorkbook.Sheets("Sheet1")
-    LastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    LastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).row
 
     ReDim dataArr(1 To LastRow - 1, 1 To 5)
 
@@ -56,20 +56,25 @@ Public Sub RunGUIScript()
     objSess.FindById("wnd[0]").sendVKey 0
 
     For i = 2 To LastRow
-
-        If i = 5 Then 'Change 5 to whichever iteration number you want to pause at
+    
+        If i = 9999 Then 'Change 23 to whichever iteration number you want to pause at
             Stop 'This pauses the execution
         End If
 
-        objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = ws.Cells(i, 1).Value
+        objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = ws.Cells(i, 1).value
         objSess.FindById("wnd[0]").sendVKey 0
+        
+         If objSess.FindById("wnd[1]") Is Nothing Then
+            dataArr(i - 1, 1) = objSess.FindById("wnd[0]/sbar").Text
+            Next i
+        End If
 
         On Error Resume Next
         objSess.FindById("wnd[1]/tbar[0]/btn[20]").press
         objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
         objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
 
-        If Not objSess.FindById("wnd[2]/tbar[0]/btn[0]") Is Nothing Then
+        If Not objSess.FindById("wnd[2]") Is Nothing Then
             dataArr(i - 1, 1) = objSess.FindById("wnd[2]").PopupDialogText
             objSess.FindById("wnd[2]/tbar[0]/btn[0]").press
         End If
@@ -88,7 +93,7 @@ Public Sub RunGUIScript()
             dataArr(i - 1, 5) = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
         End If
 
-        ws.Range("C" & i).Resize(1, 5).Value = Application.Index(dataArr, i - 1, 0)
+        ws.Range("C" & i).Resize(1, 5).value = Application.Index(dataArr, i - 1, 0)
 
         objSess.FindById("wnd[1]/tbar[0]/btn[3]").press
         objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
