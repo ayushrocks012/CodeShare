@@ -9,7 +9,6 @@ Public Sub RunGUIScript()
     Dim wnd0 As Object ' GuiMainWindow
     Dim sbar As Object ' GuiStatusbar
     Dim wnd1 As Object ' GuiMainWindow (for popups)
-    ' Dim wnd2 As Object ' No longer needed for this logic flow
     Dim startTime As Double
     Dim lastRow As Long
     Dim firstDataRow As Long
@@ -64,11 +63,11 @@ Public Sub RunGUIScript()
     wnd0.sendVKey 0
 
     ' --- Loop through Materials ---
-    For i = 2 To UBound(inputData, 1) ' Start Loop from Row 2 (after header)
+    For i = 2 To UBound(inputData, 1) ' Start Loop from Row 2
         outputRowIndex = i - 1
         material = Trim(CStr(inputData(i, 1)))
         Application.StatusBar = "Processing Material " & outputRowIndex & " of " & numRowsToProcess & ": " & material
-        Set wnd1 = Nothing ' Reset popup handle
+        Set wnd1 = Nothing ' Reset popup handle for each iteration
 
         If Len(material) = 0 Then
             outputData(outputRowIndex, 1) = "Skipped: Empty Material"
@@ -99,85 +98,101 @@ Public Sub RunGUIScript()
             GoTo NextIteration
         End If
 
-        ' --- Handle Popups Sequentially (Select Views then Org Levels) ---
-        Set wnd1 = Nothing ' Ensure reset before first check
+        ' --- Handle Popups Sequentially ---
+        Set wnd1 = Nothing
         On Error Resume Next
-        Set wnd1 = objSess.FindById("wnd[1]") ' Check for 'Select View(s)' popup
+        Set wnd1 = objSess.FindById("wnd[1]") ' Check for 'Select View(s)'
         On Error GoTo SapErrorHandler
 
-        If Not wnd1 Is Nothing Then
-             ' --- First Popup Found: Select View(s) ---
-             If wnd1.Text = "Select View(s)" Then ' Optional: Check window title
-                 wnd1.FindById("tbar[0]/btn[20]").press ' Select All
-                 wnd1.sendVKey 0                     ' Press Enter on Select Views
+        If Not wnd1 Is Nothing And wnd1.Text = "Select View(s)" Then ' Check Title for safety
+             wnd1.FindById("tbar[0]/btn[20]").press ' Select All
+             wnd1.sendVKey 0                     ' Press Enter on Select Views
 
-                 ' --- Check for Second Popup (Org Levels, likely reusing wnd[1]) ---
-                 Set wnd1 = Nothing ' Reset before checking again
-                 Application.Wait (Now + TimeValue("0:00:01")) ' Brief wait for next window
+             ' --- Check for Org Levels Popup ---
+             Set wnd1 = Nothing ' Reset before checking again
+             Application.Wait (Now + TimeValue("0:00:01"))
+             On Error Resume Next
+             Set wnd1 = objSess.FindById("wnd[1]") ' Check *again* for wnd[1]
+             On Error GoTo SapErrorHandler
+
+             If Not wnd1 Is Nothing Then ' Found a popup after Select Views
+                 ' Assume it's Org Levels for now (could add title check If wnd1.Text = "Organizational Levels")
+                 wnd1.sendVKey 0 ' Press Enter on Org Levels (accept blank)
+                 ' Check status bar immediately after Org Levels confirmation
+                 If sbar.MessageType = "E" Or sbar.MessageType = "A" Or sbar.MessageType = "X" Then
+                      outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error after Org Levels: " & sbar.Text)
+                      GoTo NextIteration
+                 End If
+                 ' --- Check for Warning Popup AFTER Org Levels ---
+                 Set wnd1 = Nothing ' Reset before checking yet again
+                 Application.Wait (Now + TimeValue("0:00:01")) ' Brief wait
                  On Error Resume Next
-                 Set wnd1 = objSess.FindById("wnd[1]") ' Check *again* for wnd[1]
+                 Set wnd1 = objSess.FindById("wnd[1]") ' Is there ANOTHER wnd[1]? (The Warning)
                  On Error GoTo SapErrorHandler
 
                  If Not wnd1 Is Nothing Then
-                      ' --- Second Popup Found: Likely Organizational Levels ---
-                      ' Optional: Check title if needed: If wnd1.Text = "Organizational Levels" Then ...
-                      ' User wants to leave blank, so just press Enter to accept defaults
-                      wnd1.sendVKey 0 ' Press Enter on Org Levels
-                      ' Check status bar immediately after Org Levels confirmation
-                      If sbar.MessageType = "E" Or sbar.MessageType = "A" Or sbar.MessageType = "X" Then
-                           outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error after Org Levels: " & sbar.Text)
-                           GoTo NextIteration ' Skip to next material if error here
-                      End If
-                 Else
-                      ' Select Views was shown, but Org Levels was not (maybe not needed for these views)
-                      ' Continue processing
+                     ' --- Warning/Info Popup Found ---
+                     Dim popupText As String
+                     On Error Resume Next
+                     popupText = wnd1.Text ' Get window title/text
+                     If Err.Number <> 0 Then popupText = "Additional Popup Info/Warning"
+                     On Error GoTo SapErrorHandler
+                     outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Popup: " & popupText)
+
+                     ' Acknowledge the popup (Usually Enter is sufficient)
+                     wnd1.sendVKey 0
+                     Application.Wait (Now + TimeValue("0:00:01")) ' Wait for SAP to process acknowledgement
                  End If
-                 ' --- End Second Popup Handling ---
+                 ' --- End Warning Popup Handling ---
              Else
-                 ' Found a wnd[1] but it wasn't "Select View(s)" - Unexpected
-                 outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Unexpected popup wnd[1]: " & wnd1.Text)
-                 On Error Resume Next ' Try to close it and continue
-                 wnd1.Close
-                 On Error GoTo SapErrorHandler
-                 GoTo NextIteration ' Skip this material as state is unknown
+                 ' Select Views was shown, but Org Levels did not follow immediately.
+                 ' No Org Levels popup found, continue processing.
+                 ' Might still get a warning later, handle below if needed (though less common path)
              End If
+        ElseIf Not wnd1 Is Nothing Then ' Found wnd[1] but it wasn't Select Views
+             outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Unexpected popup wnd[1]: " & wnd1.Text)
+             On Error Resume Next: wnd1.Close: On Error GoTo SapErrorHandler
+             GoTo NextIteration
         Else
-            ' No "Select Views" popup appeared. Check status bar for warnings/info.
+            ' No "Select Views" popup appeared initially.
             If sbar.MessageType = "W" Or sbar.MessageType = "I" Or sbar.MessageType = "S" Then
-                 outputData(outputRowIndex, 1) = sbar.Text ' Record status bar message
+                 outputData(outputRowIndex, 1) = sbar.Text
             End If
-            ' Check if we landed on Basic Data Tab directly
-            Dim basicDataTab As Object
-            On Error Resume Next
-            Set basicDataTab = wnd0.FindById("usr/tabsTABSPR1/tabpSP01")
-            On Error GoTo SapErrorHandler
-            If basicDataTab Is Nothing Then
-                 outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error: Expected Material Display screen, found neither popup nor tab.")
-                 GoTo NextIteration
-            End If
-            ' If we got here, seems okay, we likely landed directly on material display
+            ' Proceed assuming Basic Data Tab should be visible, check below.
         End If
-        ' --- End Popup Handling ---
+        ' --- End Popup Handling Sequence ---
 
 
         ' --- Extract Data from Basic Data 1 View ---
+        ' At this point, any expected popups should have been handled.
+        ' We should be on wnd[0] expecting the Basic Data 1 tab.
         Dim currentTab As Object
         On Error Resume Next
         Set currentTab = wnd0.FindById("usr/tabsTABSPR1/tabpSP01") ' Basic Data 1 tab
         On Error GoTo SapErrorHandler
         If currentTab Is Nothing Or currentTab.selected = False Then
-             outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error: Not on Basic Data 1 tab.")
+             ' Check if maybe a delayed warning popup is blocking wnd[0]
+             Set wnd1 = Nothing
+             On Error Resume Next
+             Set wnd1 = objSess.FindById("wnd[1]")
+             On Error GoTo SapErrorHandler
+             If Not wnd1 Is Nothing Then
+                 outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Blocked by Popup: " & wnd1.Text)
+                 On Error Resume Next: wnd1.sendVKey 0: On Error GoTo SapErrorHandler ' Try to close it
+             Else
+                 outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error: Not on Basic Data 1 tab and no blocking popup found.")
+             End If
              On Error Resume Next: wnd0.sendVKey 3: On Error GoTo SapErrorHandler ' Try back
              GoTo NextIteration
         End If
 
-        ' Extract fields...
+        ' Extract fields... (Safeguarded with On Error Resume Next)
         On Error Resume Next
         outputData(outputRowIndex, 2) = wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").Text
         If Err.Number <> 0 Then outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Err PRDHA"): Err.Clear
         outputData(outputRowIndex, 3) = wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").Text
         If Err.Number <> 0 Then outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Err BISMT"): Err.Clear
-        On Error GoTo SapErrorHandler
+        On Error GoTo SapErrorHandler ' Restore main handler
 
         ' --- Get Creation Info ---
         wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
@@ -224,7 +239,9 @@ NextIteration:
 
     ' --- Go back from MM03 ---
     On Error Resume Next
-    If wnd0.FindById("tbar[0]/okcd").Text = "mm03" Then wnd0.sendVKey 3
+    If Not wnd0 Is Nothing Then ' Check if wnd0 is still valid
+       If wnd0.FindById("tbar[0]/okcd").Text = "mm03" Then wnd0.sendVKey 3
+    End If
     On Error GoTo SapErrorHandler
 
     ' --- Write Output ---
