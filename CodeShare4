@@ -1,6 +1,7 @@
 Public Sub RunGUIScript()
     Dim wsData As Worksheet
-    Dim rngData As Range
+    Dim rngInput As Range ' Renamed from rngData for clarity
+    Dim rngActualData As Range ' The range we will actually read
     Dim inputData As Variant
     Dim outputData As Variant
     Dim i As Long
@@ -10,43 +11,74 @@ Public Sub RunGUIScript()
     Dim wnd1 As Object ' GuiMainWindow (for popups)
     Dim wnd2 As Object ' GuiMainWindow (for popups)
     Dim startTime As Double
+    Dim lastRow As Long
+    Dim firstDataRow As Long
+    Dim numRowsToProcess As Long
+    Dim outputRowIndex As Long
 
     startTime = Timer ' For performance measurement
 
     ' --- User Selection for Data Source ---
     On Error Resume Next ' In case user cancels
-    Set rngData = Application.InputBox("Please select the range containing Material Numbers (single column).", "Select Material Data Range", Type:=8)
+    Set rngInput = Application.InputBox("Select the range containing Material Numbers (single column, including header in the first row).", "Select Material Data Range", Type:=8)
     On Error GoTo 0 ' Turn off error bypass
 
-    If rngData Is Nothing Then
+    If rngInput Is Nothing Then
         MsgBox "Operation cancelled by user.", vbInformation
         Exit Sub
     End If
 
-    If rngData.Columns.Count > 1 Then
+    If rngInput.Columns.Count > 1 Then
         MsgBox "Please select a single column range for Material Numbers.", vbExclamation
         Exit Sub
     End If
 
-    Set wsData = rngData.Worksheet ' Get the worksheet from the selected range
+    Set wsData = rngInput.Worksheet ' Get the worksheet from the selected range
 
-    ' --- Read Input Data from Selected Range ---
-    If rngData.Rows.Count = 1 And IsEmpty(rngData.Value) Then ' Handle single empty cell selection
-         MsgBox "Selected range is empty.", vbInformation
-         Exit Sub
-    ElseIf rngData.Rows.Count = 1 Then ' Handle single cell selection with data
-        ReDim inputData(1 To 1, 1 To 1)
-        inputData(1, 1) = rngData.Value
-    Else ' Handle multi-cell selection
-        inputData = rngData.Value ' Read all material numbers into an array
+    ' --- Determine the Actual Range to Process ---
+    firstDataRow = rngInput.Row ' The sheet row number where the selection starts
+
+    ' Check if user selected entire column(s)
+    If rngInput.Rows.Count = wsData.Rows.Count Then
+        ' User selected entire column(s). Find last used row in the selected column.
+        lastRow = wsData.Cells(wsData.Rows.Count, rngInput.Column).End(xlUp).Row
+        ' Ensure lastRow is at least the start row if column is empty below header
+        If lastRow < firstDataRow Then lastRow = firstDataRow
+    Else
+        ' User selected a specific range. Use the end of their selection.
+        lastRow = firstDataRow + rngInput.Rows.Count - 1
     End If
 
-    Dim numRows As Long
-    numRows = UBound(inputData, 1)
+    ' Define the actual range including header (if present) up to the last data row
+    Set rngActualData = wsData.Range(wsData.Cells(firstDataRow, rngInput.Column), wsData.Cells(lastRow, rngInput.Column))
+
+    ' --- Read Input Data from Actual Range ---
+    If rngActualData.Rows.Count <= 1 Then ' Handle empty or header-only selection
+        ' Check if the single cell is empty OR if it's just the header row
+        If rngActualData.Rows.Count = 1 And IsEmpty(rngActualData.Value) Then
+            MsgBox "Selected range appears empty.", vbInformation
+            Exit Sub
+        ElseIf rngActualData.Rows.Count = 1 Then ' Only header selected
+             MsgBox "Selected range only contains the header row.", vbInformation
+             Exit Sub
+        End If
+    End If
+
+    ' Read the actual data range (including header) into array
+    inputData = rngActualData.Value
+
+    ' Assuming Row 1 of inputData is the header
+    numRowsToProcess = UBound(inputData, 1) - 1 ' Number of materials = total rows read - 1 (header)
+
+    If numRowsToProcess <= 0 Then
+        MsgBox "No data found below the header row in the selected range.", vbInformation
+        Exit Sub
+    End If
+
 
     ' --- Prepare Output Array ---
-    ' Dimension to hold 5 columns of results: Status/Error, PRDHA, BISMT, Created By/User, Created On/Date
-    ReDim outputData(1 To numRows, 1 To 5)
+    ' Dimension to hold results for actual data rows (excluding header)
+    ReDim outputData(1 To numRowsToProcess, 1 To 5)
 
     ' --- SAP GUI Scripting ---
     On Error GoTo SapErrorHandler ' Set up main error handler
@@ -56,59 +88,54 @@ Public Sub RunGUIScript()
         MsgBox "SAP session object is not valid. Please ensure connection is established.", vbCritical
         GoTo CleanExit
     End If
-    
+
     ' Maximize SAP window for consistency (optional but recommended)
     objSess.FindById("wnd[0]").Maximize
     Set wnd0 = objSess.FindById("wnd[0]")
     Set sbar = wnd0.FindById("sbar") ' Cache status bar object
 
-    ' Start Transaction MM03
-    wnd0.FindById("tbar[0]/okcd").Text = "mm03"
+    ' Start Transaction MM03 - ensure we are there initially
+    wnd0.FindById("tbar[0]/okcd").Text = "/nmm03" ' Use /n to ensure new session context if needed
     wnd0.sendVKey 0 ' Press Enter
 
-    ' --- Loop through Materials ---
-    For i = 1 To numRows
-        material = Trim(CStr(inputData(i, 1))) ' Get material, remove leading/trailing spaces
+    ' --- Loop through Materials (Starting from Row 2 of the input array) ---
+    For i = 2 To UBound(inputData, 1) ' Loop from 2nd item to skip header
+
+        outputRowIndex = i - 1 ' Index for the outputData array (1-based)
+        material = Trim(CStr(inputData(i, 1))) ' Get material from current row
 
         ' Update Excel status bar for progress
-        Application.StatusBar = "Processing Material " & i & " of " & numRows & ": " & material
+        Application.StatusBar = "Processing Material " & outputRowIndex & " of " & numRowsToProcess & ": " & material
 
         ' Reset potential popup window objects for this iteration
         Set wnd1 = Nothing
         Set wnd2 = Nothing
 
-        If Len(material) = 0 Then ' Skip empty rows
-            outputData(i, 1) = "Skipped: Empty Material"
-            GoTo NextIteration ' Use GoTo sparingly, but okay for simple loop skipping
+        If Len(material) = 0 Then ' Skip empty rows found after the header
+            outputData(outputRowIndex, 1) = "Skipped: Empty Material"
+            GoTo NextIteration ' Skip to the next material
         End If
 
-        ' --- Ensure we are on the initial MM03 screen ---
-        ' Check if the OK Code field exists and is for MM03, otherwise try to go back
-        On Error Resume Next ' In case the ID doesn't exist on an unexpected screen
-        Dim currentOKCodeField As Object
-        Set currentOKCodeField = wnd0.FindById("tbar[0]/okcd")
+        ' --- Check if we are on the MM03 Initial Screen ---
+        Dim matField As Object
+        On Error Resume Next ' Check if material field exists
+        Set matField = wnd0.FindById("usr/ctxtRMMG1-MATNR")
         On Error GoTo SapErrorHandler ' Restore main handler
-        
-        If currentOKCodeField Is Nothing Then
-            ' Not on a screen with the standard OK Code field, likely an error state or unexpected popup
-             outputData(i, 1) = "Error: Unexpected SAP screen state before entering material."
-             ' Try closing potential popups and going back
-             If objSess.ActiveWindow.Name <> "wnd[0]" Then objSess.ActiveWindow.Close
-             wnd0.sendVKey 12 ' PF12 = Cancel / Exit
-             wnd0.sendVKey 3  ' PF3 = Back
-             ' Re-enter transaction if needed
-             wnd0.FindById("tbar[0]/okcd").Text = "mm03"
-             wnd0.sendVKey 0
-             GoTo NextIteration ' Skip current material after attempting recovery
-        ElseIf currentOKCodeField.Text <> "mm03" Then
-             ' On wnd[0], but not in MM03 initial screen - likely finished previous material incorrectly
-             wnd0.FindById("tbar[0]/okcd").Text = "mm03"
-             wnd0.sendVKey 0 ' Re-enter MM03 transaction
-        End If
-        ' Clear the object variable
-        Set currentOKCodeField = Nothing
-        ' --- End Initial Screen Check ---
 
+        If matField Is Nothing Then
+             ' We are NOT on the MM03 initial screen. Attempt recovery.
+             outputData(outputRowIndex, 1) = "Error: Not on MM03 screen. Attempting recovery..."
+             If objSess.ActiveWindow.Name <> "wnd[0]" Then
+                 On Error Resume Next ' Ignore error if closing fails
+                 objSess.ActiveWindow.Close ' Close unexpected popups
+                 On Error GoTo SapErrorHandler
+             End If
+             wnd0.FindById("tbar[0]/okcd").Text = "/nmm03" ' Use /n for robust recovery
+             wnd0.sendVKey 0
+             GoTo NextIteration ' Skip current material after recovery attempt
+        End If
+        Set matField = Nothing ' Clean up check variable
+        ' --- End Initial Screen Check ---
 
         ' Enter Material Number
         wnd0.FindById("usr/ctxtRMMG1-MATNR").Text = material
@@ -116,8 +143,8 @@ Public Sub RunGUIScript()
 
         ' Check SAP Status Bar for immediate errors after entering material
         If sbar.MessageType = "E" Or sbar.MessageType = "A" Or sbar.MessageType = "X" Then ' Error, Abort or Dump message
-            outputData(i, 1) = sbar.Text
-            ' No need to go back here, SAP usually returns to the initial screen on such errors
+            outputData(outputRowIndex, 1) = sbar.Text
+            ' SAP usually returns to the initial screen on these errors, so no 'Back' needed here
             GoTo NextIteration
         End If
 
@@ -128,128 +155,107 @@ Public Sub RunGUIScript()
         On Error GoTo SapErrorHandler ' Restore main error handler
 
         If wnd1 Is Nothing Then
-            ' wnd[1] did not appear. This could be okay if the material only has basic data,
-            ' or it could indicate a warning/info message on wnd[0], or an unexpected state.
-            ' Let's check the status bar again.
+            ' wnd[1] did not appear. Check if Basic Data tab exists; if so, proceed. Otherwise, log issue.
             If sbar.MessageType = "W" Or sbar.MessageType = "I" Or sbar.MessageType = "S" Then
-                 outputData(i, 1) = sbar.Text ' Record the status bar message from wnd[0]
+                 outputData(outputRowIndex, 1) = sbar.Text ' Record status bar message
             End If
-            ' If we are already on the Basic Data screen, we can proceed. Otherwise, log issue.
             Dim basicDataTab As Object
             On Error Resume Next
             Set basicDataTab = wnd0.FindById("usr/tabsTABSPR1/tabpSP01") ' Basic Data 1 tab
             On Error GoTo SapErrorHandler
             If basicDataTab Is Nothing Then
-                 ' We are not on the material display screen and wnd[1] didn't show. Problem.
-                 outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Error: Expected 'Select Views' or Material Display screen, found neither."
-                 GoTo NextIteration ' Skip this material
+                 outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error: Expected 'Select Views' or Material Display screen, found neither.")
+                 GoTo NextIteration
             End If
-            ' It seems we landed directly on the material display screen (maybe only Basic View exists/was selected previously)
-            ' Proceed to data extraction
+            ' If we got here, seems okay, we likely landed directly on material display
         Else
             ' --- Process Views if wnd[1] Appeared ---
-            ' Assuming btn[20] = Select All, btn[0] = OK/Enter
-            wnd1.FindById("tbar[0]/btn[20]").press ' Select All Views (adjust if specific views are needed)
-            wnd1.sendVKey 0 ' Confirm selection (usually Enter/btn[0])
+            wnd1.FindById("tbar[0]/btn[20]").press ' Select All Views
+            wnd1.sendVKey 0 ' Confirm selection
         End If
-
 
         ' --- Check for potential intermediate pop-up (wnd[2]) ---
         Set wnd2 = Nothing
-        On Error Resume Next ' Check for wnd[2] (e.g., Org Level selection)
+        On Error Resume Next ' Check for wnd[2]
         Set wnd2 = objSess.FindById("wnd[2]")
         On Error GoTo SapErrorHandler
-
         If Not wnd2 Is Nothing Then
-            ' Capture message from wnd[2] and close it
-            ' This might require specific handling based on what wnd[2] is for (e.g., entering Plant/Org data)
-            ' For now, just record text and press Enter/OK (btn[0])
             Dim wnd2Text As String
             On Error Resume Next
-            wnd2Text = wnd2.Text ' Try getting window title or main text
+            wnd2Text = wnd2.Text
             If Err.Number <> 0 Then wnd2Text = "Intermediate Popup"
             On Error GoTo SapErrorHandler
-            outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Info/Warning: " & wnd2Text
+            outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Info/Warning: " & wnd2Text)
             wnd2.FindById("tbar[0]/btn[0]").press ' Press OK/Enter on wnd[2]
         End If
 
         ' --- Extract Data from Basic Data 1 View ---
-        ' Verify we are on the correct tab before extracting
         Dim currentTab As Object
         On Error Resume Next
         Set currentTab = wnd0.FindById("usr/tabsTABSPR1/tabpSP01") ' Basic Data 1 tab
         On Error GoTo SapErrorHandler
-        
         If currentTab Is Nothing Or currentTab.selected = False Then
-             outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Error: Not on Basic Data 1 tab as expected."
+             outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error: Not on Basic Data 1 tab as expected.")
+             On Error Resume Next ' Try to go back safely
              wnd0.sendVKey 3 ' Try to go back
+             On Error GoTo SapErrorHandler
              GoTo NextIteration
         End If
-        
-        ' Extract fields - use error handling for each field in case it doesn't exist
-        On Error Resume Next
-        outputData(i, 2) = wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").Text ' Product hierarchy
-        If Err.Number <> 0 Then outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Err reading PRDHA" : Err.Clear
-        
-        outputData(i, 3) = wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").Text ' Old material number
-        If Err.Number <> 0 Then outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Err reading BISMT" : Err.Clear
+
+        ' Extract fields
+        On Error Resume Next ' Use specific error handling per field
+        outputData(outputRowIndex, 2) = wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").Text
+        If Err.Number <> 0 Then outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Err reading PRDHA") : Err.Clear
+
+        outputData(outputRowIndex, 3) = wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").Text
+        If Err.Number <> 0 Then outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Err reading BISMT") : Err.Clear
         On Error GoTo SapErrorHandler ' Restore main handler
 
         ' --- Get Creation Info ---
         wnd0.FindById("usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
 
-        ' Handle the Information pop-up (likely wnd[1] again)
-        Set wnd1 = Nothing
+        Set wnd1 = Nothing ' Reset for reuse
         On Error Resume Next ' Wait briefly and check for the info pop-up
-        Application.Wait (Now + TimeValue("0:00:01")) ' Small pause for window to appear
+        Application.Wait (Now + TimeValue("0:00:01"))
         Set wnd1 = objSess.FindById("wnd[1]")
         On Error GoTo SapErrorHandler
-
         If Not wnd1 Is Nothing Then
              Dim infoText As String
-             ' Attempt to read label text - Fragile! Stable IDs are preferred.
-             On Error Resume Next ' Use specific error handling for potentially missing labels
-             infoText = wnd1.FindById("usr/lbl[1,7]").Text ' Read text from label at row 7, col 1
-
-             If Err.Number = 0 Then ' Successfully read label at [1,7]
-                 ' Original logic based on text content
+             On Error Resume Next ' Handle fragile label reading
+             infoText = wnd1.FindById("usr/lbl[1,7]").Text
+             If Err.Number = 0 Then
                  If Left(infoText, 7) <> "Created" Then
-                     outputData(i, 4) = wnd1.FindById("usr/lbl[1,6]").Text ' User/Created By
-                     If Err.Number <> 0 Then outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Err reading CreatedBy (alt)" : Err.Clear
-                     outputData(i, 5) = infoText ' Date/Created On
+                     outputData(outputRowIndex, 4) = wnd1.FindById("usr/lbl[1,6]").Text
+                     If Err.Number <> 0 Then outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Err reading CreatedBy (alt)") : Err.Clear
+                     outputData(outputRowIndex, 5) = infoText
                  Else
-                     outputData(i, 4) = infoText ' Created By info might span multiple labels depending on text
-                     outputData(i, 5) = wnd1.FindById("usr/lbl[1,8]").Text ' Created On info
-                     If Err.Number <> 0 Then outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Err reading CreatedOn" : Err.Clear
+                     outputData(outputRowIndex, 4) = infoText
+                     outputData(outputRowIndex, 5) = wnd1.FindById("usr/lbl[1,8]").Text
+                     If Err.Number <> 0 Then outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Err reading CreatedOn") : Err.Clear
                  End If
              Else
-                 outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Could not read creation info labels (lbl[1,7])."
+                 outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Could not read creation info labels (lbl[1,7]).")
                  Err.Clear
              End If
-             On Error GoTo SapErrorHandler ' Restore main handler
-
-             ' Close the Information pop-up
-             wnd1.sendVKey 3 ' F3 = Back from info pop-up (or btn[3] if that is more reliable)
-             ' wnd1.FindById("tbar[0]/btn[3]").press ' Alternative way to close
+             On Error GoTo SapErrorHandler
+             wnd1.sendVKey 3 ' Close info pop-up
         Else
-             outputData(i, 1) = IIf(outputData(i, 1) = "", "", outputData(i, 1) & "; ") & "Creation Info pop-up (wnd[1]) did not appear after clicking Info button."
+             outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Creation Info pop-up (wnd[1]) did not appear.")
         End If
 
-
-        ' Record success message if no specific error/warning was stored yet
-        If IsEmpty(outputData(i, 1)) Or outputData(i, 1) = "" Then
-             outputData(i, 1) = "Successfully processed"
+        ' Record success if no specific message stored yet
+        If IsEmpty(outputData(outputRowIndex, 1)) Or outputData(outputRowIndex, 1) = "" Then
+             outputData(outputRowIndex, 1) = "Successfully processed"
         End If
 
         ' Go back from the material display screen to the initial MM03 screen
         wnd0.sendVKey 3 ' F3 = Back
 
 NextIteration: ' Label for skipping to next material
-    Next i ' *** CORRECTED LINE *** Was "Loop", now "Next i"
+    Next i ' Process next material
 
     ' --- Go back from MM03 initial screen to SAP Easy Access Menu ---
-    ' Check if we are on the initial MM03 screen before going back
-    On Error Resume Next ' In case FindById fails if not on wnd[0]
+    On Error Resume Next ' In case we are not on wnd[0] or FindById fails
     If wnd0.FindById("tbar[0]/okcd").Text = "mm03" Then
         wnd0.sendVKey 3 ' F3 = Back
     End If
@@ -257,19 +263,20 @@ NextIteration: ' Label for skipping to next material
 
     ' --- Write Output Data back to Excel ---
     Dim outputStartCell As Range
-    On Error Resume Next ' Handle potential error if rngData sheet/workbook was closed
-    Set outputStartCell = rngData.Cells(1, 1).Offset(0, 2) ' Offset 2 columns (A->C) from the first selected cell
+    On Error Resume Next ' Handle error if source range/sheet was closed
+    ' Output starts next to the *first data cell* (row after header)
+    Set outputStartCell = rngActualData.Cells(2, 1).Offset(0, 2) ' Offset from 2nd cell in actual range, Col C
     If Err.Number <> 0 Then
-        MsgBox "Error finding output range. Was the source workbook/worksheet closed?", vbCritical
+        MsgBox "Error finding output range (starting at " & wsData.Name & "!" & rngActualData.Cells(2, 1).Offset(0, 2).Address & "). Was the source workbook/worksheet closed?", vbCritical
         GoTo CleanExit
     End If
     On Error GoTo SapErrorHandler ' Restore handler
 
-    ' Write the entire output array in one operation
-    outputStartCell.Resize(numRows, 5).Value = outputData
+    ' Write the entire output array (sized for data rows only)
+    outputStartCell.Resize(numRowsToProcess, 5).Value = outputData
 
-    Application.StatusBar = "Finished processing " & numRows & " materials in " & Format(Timer - startTime, "0.00") & " seconds."
-    MsgBox "Extraction complete for " & numRows & " materials.", vbInformation
+    Application.StatusBar = "Finished processing " & numRowsToProcess & " materials in " & Format(Timer - startTime, "0.00") & " seconds."
+    MsgBox "Extraction complete for " & numRowsToProcess & " materials.", vbInformation
 
 CleanExit:
     Application.StatusBar = False ' Clear status bar
@@ -278,10 +285,11 @@ CleanExit:
     Set wnd1 = Nothing
     Set wnd2 = Nothing
     Set wsData = Nothing
-    Set rngData = Nothing
+    Set rngInput = Nothing
+    Set rngActualData = Nothing
     Set currentTab = Nothing
     Set basicDataTab = Nothing
-    Set currentOKCodeField = Nothing
+    Set matField = Nothing
     Exit Sub
 
 SapErrorHandler:
@@ -290,38 +298,36 @@ SapErrorHandler:
                "Error Number: " & Err.Number & vbCrLf & _
                "Description: " & Err.Description & vbCrLf & _
                "Source: " & Err.Source
-    ' Add context if available
-    If i > 0 And i <= numRows Then errorMsg = errorMsg & vbCrLf & "Occurred while processing Material: " & material & " (Input Row " & i & ")"
+    ' Add context if available (using outputRowIndex)
+    If outputRowIndex > 0 And outputRowIndex <= numRowsToProcess Then errorMsg = errorMsg & vbCrLf & "Occurred while processing Material: " & material & " (Input Row " & i & ", Output Row " & outputRowIndex & ")"
     If Not objSess Is Nothing Then errorMsg = errorMsg & vbCrLf & "Current SAP Window: " & objSess.ActiveWindow.Text
 
     MsgBox errorMsg, vbCritical, "SAP GUI Scripting Error"
 
     ' Try to store the error in the output array for the current item
-    If i > 0 And i <= numRows Then
-        If IsEmpty(outputData(i, 1)) Or outputData(i, 1) = "" Then
-             outputData(i, 1) = "Error: " & Err.Description
-        Else ' Append error if status already exists
-             outputData(i, 1) = outputData(i, 1) & "; Error: " & Err.Description
-        End If
+    If outputRowIndex > 0 And outputRowIndex <= numRowsToProcess Then
+         outputData(outputRowIndex, 1) = AppendStatus(outputData(outputRowIndex, 1), "Error: " & Err.Description)
     End If
 
     ' --- Behavior on Error ---
     ' Option 1: Stop the entire script (Default)
        Application.StatusBar = "Error occurred. Script stopped. Check output for details."
+       ' Try to write whatever data was collected so far before exiting
+       On Error Resume Next ' Ignore errors during final write attempt
+       If Not outputStartCell Is Nothing And numRowsToProcess > 0 Then
+            outputStartCell.Resize(numRowsToProcess, 5).Value = outputData
+       End If
+       On Error GoTo 0
        GoTo CleanExit ' Stop processing
 
-    ' Option 2: Try to continue with the next material
-    '    If i > 0 And i <= numRows Then
+    ' Option 2: Try to continue with the next material (Use with caution)
+    '    If outputRowIndex > 0 And outputRowIndex <= numRowsToProcess Then
     '        ' Attempt to recover SAP state (go back to MM03 initial screen)
     '        On Error Resume Next ' Ignore errors during recovery attempt
     '        If Not wnd0 Is Nothing Then
     '            If objSess.ActiveWindow.Name <> "wnd[0]" Then objSess.ActiveWindow.Close ' Close popups
-    '            wnd0.sendVKey 12 ' Cancel
-    '            wnd0.sendVKey 3  ' Back
-    '            If wnd0.FindById("tbar[0]/okcd").Text <> "mm03" Then
-    '                 wnd0.FindById("tbar[0]/okcd").Text = "mm03" ' Ensure back in MM03
-    '                 wnd0.sendVKey 0
-    '            End If
+    '             wnd0.FindById("tbar[0]/okcd").Text = "/nmm03" ' Use /n for robust recovery
+    '             wnd0.sendVKey 0
     '        End If
     '        On Error GoTo SapErrorHandler ' Restore handler (important!)
     '        Resume NextIteration ' Try the next loop iteration
@@ -332,3 +338,12 @@ SapErrorHandler:
     ' --- End Behavior on Error ---
 
 End Sub
+
+' Helper function to safely append status messages
+Private Function AppendStatus(existingStatus As Variant, newStatus As String) As String
+    If IsEmpty(existingStatus) Or existingStatus = "" Then
+        AppendStatus = newStatus
+    Else
+        AppendStatus = existingStatus & "; " & newStatus
+    End If
+End Function
