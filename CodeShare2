@@ -1,1 +1,116 @@
+Option Explicit
 
+Public SapGuiAuto, WScript
+Public objGui As GuiApplication
+Public objConn As GuiConnection
+Public objSess As GuiSession
+Public objSBar As GuiStatusbar
+
+Public Const SAP_SYSTEM As String = "PEA100"
+Public Const MAX_SESSIONS As Integer = 6
+
+Sub StartExtract()
+
+    Dim sessionFound As Boolean
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    sessionFound = AttachToSAPSession(SAP_SYSTEM)
+
+    If Not sessionFound Then
+        MsgBox "No active SAP session found or scripting is disabled.", vbCritical
+        GoTo Cleanup
+    End If
+
+    RunGUIScript
+
+Cleanup:
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    If Not objSess Is Nothing Then
+        objSess.EndTransaction
+        Set objSess = Nothing
+    End If
+
+End Sub
+
+Function AttachToSAPSession(systemID As String) As Boolean
+
+    Dim i As Integer, j As Integer
+    Dim W_conn, W_Sess As Object
+
+    On Error GoTo ErrorHandler
+
+    If objGui Is Nothing Then
+        Set SapGuiAuto = GetObject("SAPGUI")
+        Set objGui = SapGuiAuto.GetScriptingEngine
+    End If
+
+    For i = 0 To objGui.Children.Count - 1
+        Set W_conn = objGui.Children(i)
+        If W_conn.Children.Count > MAX_SESSIONS Then
+            MsgBox "Maximum number of SAP sessions reached.", vbCritical
+            AttachToSAPSession = False
+            Exit Function
+        End If
+        
+        For j = 0 To W_conn.Children.Count - 1
+            Set W_Sess = W_conn.Children(j)
+            If W_Sess.Info.SystemName & W_Sess.Info.Client = systemID Then
+                If W_Sess.Info.Transaction Like "SESSION_MANAGER" Or _
+                   W_Sess.Info.Transaction Like "SMEN" Or _
+                   W_Sess.Info.Transaction Like "S000" Then
+
+                    Set objConn = W_conn
+                    Set objSess = W_Sess
+                    Set objSBar = objSess.FindById("wnd[0]/sbar")
+                    AttachToSAPSession = True
+                    Exit Function
+
+                End If
+            End If
+        Next
+    Next
+
+ErrorHandler:
+    AttachToSAPSession = False
+
+End Function
+
+Sub RunGUIScript()
+
+    Dim outputPath As String, outputFilename As String
+    Dim timestamp As String
+
+    timestamp = Format(Now, "YYYYMMDD_HHMMSS")
+
+    outputPath = "Z:\Demand\Demand Review\" & Year(Now) & "\" & Format(Now, "mm mmm yy") & "\SAP H2H Report"
+    outputFilename = "H2H_Usage_Report_" & timestamp & ".xlsx"
+
+    On Error GoTo ScriptError
+
+    With objSess
+        .FindById("wnd[0]/tbar[0]/okcd").Text = "mb51"
+        .FindById("wnd[0]").sendVKey 0
+        .FindById("wnd[0]/usr/ctxtWERKS-LOW").Text = "1534"
+        .FindById("wnd[0]/usr/ctxtBUDAT-LOW").Text = "01.03.2025"
+        .FindById("wnd[0]/usr/ctxtBUDAT-HIGH").Text = "31.03.2025"
+        .FindById("wnd[0]/usr/radRFLAT_L").Select
+        .FindById("wnd[0]/usr/ctxtALV_DEF").Text = "AYUSH_TRY"
+        .FindById("wnd[0]/tbar[1]/btn[8]").press
+        .FindById("wnd[0]/usr/cntlGRID1/shellcont/shell").SelectContextMenuItem "&XXL"
+        .FindById("wnd[1]/tbar[0]/btn[0]").press
+        .FindById("wnd[1]/usr/ctxtDY_PATH").Text = outputPath
+        .FindById("wnd[1]/usr/ctxtDY_FILENAME").Text = outputFilename
+        .FindById("wnd[1]/tbar[0]/btn[0]").press
+        .FindById("wnd[0]/tbar[0]/btn[15]").press
+        .FindById("wnd[0]/tbar[0]/btn[15]").press
+    End With
+
+    Exit Sub
+
+ScriptError:
+    MsgBox "Error encountered during SAP script execution: " & Err.Description, vbCritical
+
+End Sub
