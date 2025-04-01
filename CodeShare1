@@ -96,6 +96,7 @@ Public Sub RunGUIScript()
     objSess.FindById("wnd[0]/usr/radRFLAT_L").Select
     objSess.FindById("wnd[0]/usr/ctxtALV_DEF").Text = "AYUSH_TRY"
     objSess.FindById("wnd[0]/tbar[1]/btn[8]").press
+    objSess.FindById("wnd[0]/usr/cntlGRID1/shellcont/shell").ContextMenu
     objSess.FindById("wnd[0]/usr/cntlGRID1/shellcont/shell").SelectContextMenuItem "&XXL"
     objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
     objSess.FindById("wnd[1]/usr/ctxtDY_PATH").Text = "Z:\Demand\Demand Review\2025\03 Mar 25\SAP H2H Report"
