@@ -1,1 +1,261 @@
+Option Explicit ' Enforces variable declaration
 
+' --- Configuration ---
+Private Const TARGET_SYSTEM As String = "PEA100" ' Target SAP System ID + Client
+Private Const MAX_POSSIBLE_SESSIONS As Integer = 6
+Private Const EXPORT_PATH As String = "Z:\Demand\Demand Review\2025\03 Mar 25\SAP H2H Report"
+Private Const EXPORT_FILENAME As String = "H2H Usage Report v4.XLSX"
+Private Const PLANT_CODE As String = "1534"
+Private Const DATE_LOW As String = "01.03.2025"
+Private Const DATE_HIGH As String = "31.03.2025"
+Private Const ALV_LAYOUT As String = "AYUSH_TRY"
+
+' --- Module Level Variables ---
+' Keep objGui public only if needed by other modules, otherwise make Private
+Public objGui As Object ' GuiApplication
+' Make these Private if only used within this module
+Private objConn As Object ' GuiConnection
+Private objSess As Object ' GuiSession
+
+' --- Main Procedure ---
+Sub StartMB51Extraction()
+    Dim sessionFound As Boolean
+
+    ' Optimize Excel
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    On Error GoTo Cleanup ' Basic error handling
+
+    ' Validate Configuration
+    If TARGET_SYSTEM = "" Then
+        MsgBox "Target SAP System (TARGET_SYSTEM constant) is not defined.", vbCritical + vbOKOnly, "Configuration Error"
+        GoTo Cleanup ' Use GoTo only for centralized cleanup on error
+    End If
+
+    ' --- Find or Attach to SAP Session ---
+    Set objSess = FindSapSession(TARGET_SYSTEM)
+
+    ' --- Execute Script if Session Found ---
+    If Not objSess Is Nothing Then
+        ' Run the actual SAP automation
+        ExecuteMB51Export objSess, PLANT_CODE, DATE_LOW, DATE_HIGH, ALV_LAYOUT, EXPORT_PATH, EXPORT_FILENAME
+        
+        ' Optional: Close transaction or leave session as is
+        ' objSess.EndTransaction ' Uncomment if you want to end the MB51 transaction
+        
+        MsgBox "SAP script executed successfully.", vbInformation, "Success"
+        
+    Else
+        ' Error message handled within FindSapSession or if it returns Nothing unexpectedly
+        ' MsgBox "Could not find or attach to a suitable SAP session.", vbExclamation, "SAP Connection Failed"
+        ' (MsgBox is now inside FindSapSession for specific errors)
+    End If
+
+Cleanup:
+    If Err.Number <> 0 Then
+        MsgBox "An error occurred: " & vbCrLf & Err.Description, vbCritical, "Runtime Error " & Err.Number
+    End If
+    ' Restore Excel settings
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    
+    ' Clean up SAP objects (optional but good practice)
+    ' Set objSess = Nothing ' Be careful if you intend to reuse the session later
+    ' Set objConn = Nothing
+    ' Set objGui = Nothing
+End Sub
+
+' --- Function to Find a Suitable SAP Session ---
+Private Function FindSapSession(systemId As String) As Object ' Returns GuiSession or Nothing
+    Dim i As Integer, j As Integer
+    Dim currentConn As Object ' GuiConnection
+    Dim currentSess As Object ' GuiSession
+    Dim sessionCount As Integer
+    Dim sessionFound As Boolean
+    Dim suitableSession As Object ' GuiSession
+    
+    Set FindSapSession = Nothing ' Default return value
+    Set suitableSession = Nothing
+    sessionFound = False
+    
+    On Error Resume Next ' Temporarily ignore errors during SAP object access
+    Set objGui = GetObject("SAPGUI").GetScriptingEngine
+    If Err.Number <> 0 Then
+        MsgBox "Could not get SAP GUI Scripting Engine. Is SAP GUI running and scripting enabled?", vbCritical, "SAP Connection Error"
+        Exit Function
+    End If
+    On Error GoTo 0 ' Restore error handling
+
+    ' Check if already connected to the correct session (e.g., running script multiple times)
+    If Not objSess Is Nothing Then
+        If objSess.Info.SystemName & objSess.Info.Client = systemId Then
+             ' Check if the existing session is usable (e.g., at main menu)
+             Select Case objSess.Info.Transaction
+                Case "SESSION_MANAGER", "SMEN", "S000", "" ' Allow empty transaction code too
+                    Set FindSapSession = objSess ' Return existing valid session
+                    Exit Function
+                Case Else
+                    ' Optional: Decide if an active transaction is acceptable or needs closing
+                    ' For now, we'll search for a new one if the current one is busy
+             End Select
+        End If
+        ' If objSess is set but not the right system/client, clear it to force search
+        Set objSess = Nothing
+        Set objConn = Nothing
+    End If
+
+
+    ' Iterate through connections and sessions
+    If objGui Is Nothing Then Exit Function ' Should have been caught above, but double-check
+    
+    For i = 0 To objGui.Children.Count - 1
+        Set currentConn = objGui.Children(CLng(i)) ' Use CLng for safety
+        sessionCount = currentConn.Children.Count
+        
+        For j = 0 To sessionCount - 1
+            Set currentSess = currentConn.Children(CLng(j))
+            
+            ' Check if this session matches the target system
+            If currentSess.Info.SystemName & currentSess.Info.Client = systemId Then
+                ' Check if the session is at a suitable starting point
+                Select Case currentSess.Info.Transaction
+                    Case "SESSION_MANAGER", "SMEN", "S000", "" ' Allow empty TCode if session just opened
+                        ' Found a suitable idle session
+                        Set suitableSession = currentSess
+                        Set objConn = currentConn ' Store the connection as well
+                        sessionFound = True
+                        Exit For ' Stop searching sessions in this connection
+                    Case Else
+                        ' Session is busy, continue searching
+                End Select
+            End If
+        Next j ' Next session
+        
+        If sessionFound Then Exit For ' Stop searching connections
+        
+        ' Check if maximum sessions for *this specific connection* are reached only if we haven't found one yet
+        If Not sessionFound And sessionCount >= MAX_POSSIBLE_SESSIONS Then
+            ' Check if *any* of the sessions belong to the target system on this full connection
+            Dim k As Integer
+            Dim targetSystemExistsOnConnection As Boolean
+            targetSystemExistsOnConnection = False
+            For k = 0 To sessionCount - 1
+                 If currentConn.Children(k).Info.SystemName & currentConn.Children(k).Info.Client = systemId Then
+                    targetSystemExistsOnConnection = True
+                    Exit For
+                 End If
+            Next k
+            
+            If targetSystemExistsOnConnection Then
+                 MsgBox "Maximum number of sessions (" & MAX_POSSIBLE_SESSIONS & ") reached for system " & systemId & " on this connection, and no idle session found.", vbCritical + vbOKOnly, "SAP Session Limit"
+                 Exit Function ' Cannot proceed
+            End If
+            ' If max sessions reached but none are for the target system, continue checking other connections
+        End If
+        
+    Next i ' Next connection
+
+    ' --- Final Check and Return ---
+    If sessionFound Then
+        Set FindSapSession = suitableSession ' Return the found session
+    Else
+        ' If no suitable session was found after checking all connections/sessions
+        MsgBox "No active and idle session found for system " & systemId & "." & vbCrLf & _
+               "Please ensure you are logged into SAP, scripting is enabled, and a session is available at the main menu.", vbCritical + vbOKOnly, "SAP Session Not Found"
+        Set FindSapSession = Nothing
+    End If
+
+End Function
+
+' --- Subroutine to Perform SAP Actions ---
+Private Sub ExecuteMB51Export(ByVal sapSession As Object, _
+                              ByVal plant As String, _
+                              ByVal dateLow As String, _
+                              ByVal dateHigh As String, _
+                              ByVal layout As String, _
+                              ByVal exportPath As String, _
+                              ByVal exportFileName As String)
+                              
+    If sapSession Is Nothing Then
+        MsgBox "ExecuteMB51Export called with no valid SAP session.", vbCritical, "Internal Error"
+        Exit Sub
+    End If
+
+    Dim WshShell As Object ' For checking directory existence
+
+    On Error GoTo SapScriptError
+
+    ' Set status bar object (optional, but can be useful for messages/checks)
+    Dim objSBar As Object ' GuiStatusbar
+    Set objSBar = sapSession.FindById("wnd[0]/sbar")
+
+    ' --- Start MB51 Transaction ---
+    sapSession.FindById("wnd[0]/tbar[0]/okcd").Text = "mb51"
+    sapSession.FindById("wnd[0]").sendVKey 0 ' 0 = Enter Key
+
+    ' --- Fill Selection Screen ---
+    sapSession.FindById("wnd[0]/usr/ctxtWERKS-LOW").Text = plant
+    sapSession.FindById("wnd[0]/usr/ctxtBUDAT-LOW").Text = dateLow
+    sapSession.FindById("wnd[0]/usr/ctxtBUDAT-HIGH").Text = dateHigh
+    sapSession.FindById("wnd[0]/usr/radRFLAT_L").Select ' Select "Flat List" radio button
+    sapSession.FindById("wnd[0]/usr/ctxtALV_DEF").Text = layout ' ALV Layout
+
+    ' --- Execute Report ---
+    sapSession.FindById("wnd[0]/tbar[1]/btn[8]").press ' F8 = Execute
+
+    ' --- Export to Excel ---
+    ' Check if directory exists before exporting
+    Set WshShell = CreateObject("WScript.Shell") ' Need WScript runtime for FileSystemObject access indirectly
+    On Error Resume Next ' Check if path exists without crashing
+    Dim fs As Object
+    Set fs = CreateObject("Scripting.FileSystemObject")
+    If Not fs.FolderExists(exportPath) Then
+         On Error GoTo 0 ' Turn error trapping back on
+         MsgBox "The export directory does not exist:" & vbCrLf & exportPath & vbCrLf & vbCrLf & "Please create the directory before running the script.", vbCritical, "Directory Not Found"
+         Set fs = Nothing
+         Set WshShell = Nothing
+         ' Optional: Go back in SAP? Or just exit?
+         sapSession.FindById("wnd[0]/tbar[0]/btn[3]").press ' F3 = Back button (might vary)
+         Exit Sub ' Stop the export process
+    End If
+    On Error GoTo SapScriptError ' Restore SAP script error handling
+    Set fs = Nothing
+    Set WshShell = Nothing
+
+
+    sapSession.FindById("wnd[0]/usr/cntlGRID1/shellcont/shell").SelectContextMenuItem "&XXL" ' Export option
+    sapSession.FindById("wnd[1]/tbar[0]/btn[0]").press ' Confirm Spreadsheet format (usually OK button)
+    sapSession.FindById("wnd[1]/usr/ctxtDY_PATH").Text = exportPath
+    sapSession.FindById("wnd[1]/usr/ctxtDY_FILENAME").Text = exportFileName
+    sapSession.FindById("wnd[1]/tbar[0]/btn[0]").press ' Confirm path and filename (Generate/Save/OK button)
+
+    ' --- Check for Success/Error Message from SAP (Optional but Recommended) ---
+    ' Example: Read status bar message after export confirmation
+    ' Dim statusMessage As String
+    ' statusMessage = objSBar.Text
+    ' If InStr(1, statusMessage, "exported", vbTextCompare) = 0 Then ' Or check for specific error messages
+    '     MsgBox "SAP Export might have failed. Status bar message: " & statusMessage, vbExclamation
+    ' End If
+
+    ' --- Go Back Twice (as in original code) ---
+    sapSession.FindById("wnd[0]/tbar[0]/btn[15]").press ' F15 or Exit button
+    sapSession.FindById("wnd[0]/tbar[0]/btn[15]").press ' F15 or Exit button (maybe back to main menu?)
+
+    Exit Sub ' Successful execution
+
+SapScriptError:
+    MsgBox "An error occurred during SAP GUI Scripting:" & vbCrLf & _
+           "Error Number: " & Err.Number & vbCrLf & _
+           "Description: " & Err.Description & vbCrLf & vbCrLf & _
+           "Attempting to return to SAP main menu.", vbCritical, "SAP Script Error"
+    ' Try to safely exit the current transaction if possible
+    On Error Resume Next ' Ignore errors during cleanup attempt
+    If Not sapSession Is Nothing Then
+        ' Depending on where the error occurred, might need different keys (F12=Cancel, F3=Back, Shift+F3=Exit)
+        sapSession.FindById("wnd[0]/tbar[0]/btn[12]").press ' Try Cancel first
+        sapSession.FindById("wnd[0]/tbar[0]/btn[3]").press  ' Try Back
+        sapSession.FindById("wnd[0]/tbar[0]/btn[3]").press  ' Try Back again
+    End If
+    On Error GoTo 0 ' Resume normal error handling (will likely go to Cleanup in calling Sub)
+
+End Sub
