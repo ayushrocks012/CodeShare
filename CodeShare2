@@ -16,7 +16,6 @@ Sub StartExtract()
     
     ' Initialize SAP Session
     If Not InitializeSAPSession Then
-        MsgBox "SAP session initialization failed.", vbCritical
         GoTo Cleanup
     End If
     
@@ -43,20 +42,29 @@ Private Function InitializeSAPSession() As Boolean
 
     Dim i As Integer, j As Integer
     Dim W_conn As Object, W_Sess As Object
-    InitializeSAPSession = False
     
+    InitializeSAPSession = False
+
     If objGui Is Nothing Then
         Set SapGuiAuto = GetObject("SAPGUI")
-        If SapGuiAuto Is Nothing Then Exit Function
+        If SapGuiAuto Is Nothing Then
+            MsgBox "Could not find SAP GUI.", vbCritical
+            Exit Function
+        End If
         Set objGui = SapGuiAuto.GetScriptingEngine
-        If objGui Is Nothing Then Exit Function
+        If objGui Is Nothing Then
+            MsgBox "Could not initialize SAP scripting engine.", vbCritical
+            Exit Function
+        End If
     End If
     
-    ' Loop through existing connections and sessions
+    ' Loop through existing connections and sessions correctly with numeric indexing
     For i = 0 To objGui.Children.Count - 1
         Set W_conn = objGui.Children(i)
+        
         For j = 0 To W_conn.Children.Count - 1
             Set W_Sess = W_conn.Children(j)
+            
             If (W_Sess.Info.SystemName & W_Sess.Info.Client) = W_System Then
                 If W_Sess.Info.Transaction = "SESSION_MANAGER" _
                     Or W_Sess.Info.Transaction = "SMEN" _
@@ -68,11 +76,12 @@ Private Function InitializeSAPSession() As Boolean
                     Exit Function
                 End If
             End If
-        Next
-    Next
+        Next j
+    Next i
     
     ' If no suitable session found, inform user
     MsgBox "No active session to system " & W_System & " or scripting is not enabled.", vbCritical
+
 End Function
 
 ' Procedure to run SAP GUI automation tasks
@@ -82,18 +91,17 @@ Private Sub RunGUIScript()
     Dim fullFilePath As String
     Dim timeStamp As String
     
-    ' Define dynamic file naming with timestamp
+    ' Dynamic file naming with timestamp
     timeStamp = Format(Now(), "YYYYMMDD_HHMMSS")
     filePath = "Z:\Demand\Demand Review\2025\03 Mar 25\SAP H2H Report\"
     fileName = "H2H_Usage_Report_" & timeStamp & ".xlsx"
     fullFilePath = filePath & fileName
     
     With objSess
-        ' Run Transaction MB51
         .FindById("wnd[0]/tbar[0]/okcd").Text = "mb51"
         .FindById("wnd[0]").sendVKey 0
         
-        ' Set Transaction Parameters (adapt dates as required)
+        ' Set parameters (customize dates as necessary)
         .FindById("wnd[0]/usr/ctxtWERKS-LOW").Text = "1534"
         .FindById("wnd[0]/usr/ctxtBUDAT-LOW").Text = "01.03.2025"
         .FindById("wnd[0]/usr/ctxtBUDAT-HIGH").Text = "31.03.2025"
@@ -108,7 +116,7 @@ Private Sub RunGUIScript()
         .FindById("wnd[1]/usr/ctxtDY_FILENAME").Text = fileName
         .FindById("wnd[1]/tbar[0]/btn[0]").press
         
-        ' Exit Transaction
+        ' Exit transaction
         .FindById("wnd[0]/tbar[0]/btn[15]").press
         .FindById("wnd[0]/tbar[0]/btn[15]").press
     End With
