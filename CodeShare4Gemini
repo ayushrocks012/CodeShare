@@ -1,1 +1,162 @@
+' --- Windows API Declaration for Sleep Function ---
+#If VBA7 Then
+    ' For 64-bit and 32-bit Office (VBA version 7+)
+    Public Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As LongPtr)
+#Else
+    ' For 32-bit Office only (VBA version 6 and below)
+    Public Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
 
+Option Explicit
+
+' --- Global Objects required by both Subs (or across multiple calls) ---
+Public objGui      As GuiApplication ' SAP GUI Application object
+Public objConn     As GuiConnection  ' SAP GUI Connection object
+Public objSess     As GuiSession     ' SAP GUI Session object
+Public objSBar     As GuiStatusbar   ' SAP GUI Statusbar object
+
+' --- Keep the StartExtract Subroutine exactly as provided in the previous answer ---
+Sub StartExtract()
+    ' ... (Code from the previous answer remains unchanged) ...
+End Sub
+
+' --- Modified RunGUIScript Subroutine ---
+Public Sub RunGUIScript()
+    ' --- Constants specific to RunGUIScript ---
+    Const cTRANSACTION As String = "mb51"
+    Const cPLANT As String = "1534"
+    Const cDATE_LOW As String = "01.03.2025" ' Be mindful of date format expected by SAP DD.MM.YYYY
+    Const cDATE_HIGH As String = "31.03.2025" ' Be mindful of date format expected by SAP DD.MM.YYYY
+    Const cLAYOUT As String = "AYUSH_TRY"
+    Const cDOWNLOAD_PATH As String = "Z:\Demand\Demand Review\2025\03 Mar 25\SAP H2H Report" ' Ensure this path exists
+    Const cFILENAME_PREFIX As String = "MB51 Report"
+    Const cFILENAME_EXTENSION As String = ".XLSX" ' Ensure extension matches download format (&XXL -> XLSX typically)
+    Const cREPORT_TIMEOUT_SECONDS As Long = 300 ' Timeout for report execution (e.g., 300 seconds = 5 minutes)
+
+    ' --- Local Variables for RunGUIScript ---
+    Dim formattedDateLow As String
+    Dim formattedDateHigh As String
+    Dim formattedTimestamp As String
+    Dim dynamicFilename As String
+    Dim startTime As Single
+    Dim success As Boolean
+
+    On Error GoTo GuiScriptError ' Enable error handling for script steps
+
+    ' Check if objSess is valid before proceeding
+    If objSess Is Nothing Then
+        MsgBox "SAP Session object is not valid. Cannot run GUI script.", vbCritical, "Script Error"
+        Exit Sub
+    End If
+
+    ' --- Prepare Dynamic Filename Parts ---
+    ' Format dates from DD.MM.YYYY to YYYYMMDD for filename friendliness
+    On Error Resume Next ' Handle potential errors if date constants are not in expected format
+    formattedDateLow = Right$(cDATE_LOW, 4) & Mid$(cDATE_LOW, 4, 2) & Left$(cDATE_LOW, 2)
+    formattedDateHigh = Right$(cDATE_HIGH, 4) & Mid$(cDATE_HIGH, 4, 2) & Left$(cDATE_HIGH, 2)
+    If Err.Number <> 0 Then
+        MsgBox "Could not parse dates (" & cDATE_LOW & ", " & cDATE_HIGH & ") for filename. Using placeholder.", vbWarning, "Filename Warning"
+        Err.Clear
+        formattedDateLow = "DateFrom"
+        formattedDateHigh = "DateTo"
+    End If
+    On Error GoTo GuiScriptError ' Restore error handling
+
+    formattedTimestamp = Format$(Now, "yyyymmdd_hhmmss")
+    dynamicFilename = cFILENAME_PREFIX & "_" & formattedDateLow & "-" & formattedDateHigh & "_" & formattedTimestamp & cFILENAME_EXTENSION
+
+    ' --- SAP GUI Scripting Steps ---
+    objSess.FindById("wnd[0]/tbar[0]/okcd").Text = cTRANSACTION
+    objSess.FindById("wnd[0]").sendVKey 0 ' 0 = Enter key
+
+    ' Wait briefly for the initial screen elements to load (optional)
+    Sleep 500 ' Pause for 500 milliseconds
+
+    ' --- **Improvement 3: Clear Material Fields** ---
+    On Error Resume Next ' Ignore error if fields don't exist on this screen variant
+    objSess.FindById("wnd[0]/usr/ctxtMATNR-LOW").Text = ""
+    objSess.FindById("wnd[0]/usr/ctxtMATNR-HIGH").Text = ""
+    ' If using Multiple Selection button for Material, clear that too if necessary
+    ' Example: objSess.FindById("wnd[0]/usr/btn%_MATNR_%_APP_%-VALS_PUSH").press followed by clearing logic in popup
+    On Error GoTo GuiScriptError ' Restore default error handling
+
+    ' --- Set Report Criteria ---
+    objSess.FindById("wnd[0]/usr/ctxtWERKS-LOW").Text = cPLANT
+    objSess.FindById("wnd[0]/usr/ctxtBUDAT-LOW").Text = cDATE_LOW
+    objSess.FindById("wnd[0]/usr/ctxtBUDAT-HIGH").Text = cDATE_HIGH
+    objSess.FindById("wnd[0]/usr/radRFLAT_L").Select ' Select 'Flat List' radiobutton
+    objSess.FindById("wnd[0]/usr/ctxtALV_DEF").Text = cLAYOUT ' Set Layout
+
+    ' --- Execute Report ---
+    objSess.FindById("wnd[0]/tbar[1]/btn[8]").press ' 8 = Execute button (F8)
+
+    ' --- **Improvement 2: Wait for Report Execution with Timeout** ---
+    startTime = Timer ' Record start time for timeout
+    Do While objSess.Busy
+        DoEvents ' Keep Excel responsive
+        Sleep 500 ' Pause VBA for 500ms to yield to SAP, reduce CPU usage
+        If Timer - startTime > cREPORT_TIMEOUT_SECONDS Then
+            MsgBox "The report execution timed out after " & cREPORT_TIMEOUT_SECONDS & " seconds.", vbCritical, "Timeout Error"
+            ' Optional: Try to safely navigate back or close SAP window if needed
+            On Error Resume Next ' Try to go back even if timeout occurred
+            objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' Try Back
+            On Error GoTo GuiScriptError ' Restore normal error handling
+            Exit Sub ' Exit the script after timeout error
+        End If
+    Loop
+    ' Additional check: Sometimes 'Busy' flips too fast, check status bar briefly
+    Sleep 500 ' Short pause after Busy=False before proceeding
+
+    ' --- Export to Excel ---
+    ' Ensure the grid/report screen is active (wnd[0])
+    success = False ' Flag to track export success
+    On Error Resume Next ' Temporarily ignore errors during export steps to allow cleanup
+    objSess.FindById("wnd[0]/usr/cntlGRID1/shellcont/shell").ContextMenu
+    objSess.FindById("wnd[0]/usr/cntlGRID1/shellcont/shell").SelectContextMenuItem "&XXL" ' Spreadsheet...
+    If Err.Number <> 0 Then GoTo ExportError ' Jump if context menu failed
+
+    ' --- Handle Export Dialog (wnd[1]) ---
+    objSess.FindById("wnd[1]/tbar[0]/btn[0]").press ' Continue (Enter) button on format selection
+    If Err.Number <> 0 Then GoTo ExportError ' Jump if format selection failed
+
+    ' --- Handle File Save Dialog (wnd[1] again) ---
+    objSess.FindById("wnd[1]/usr/ctxtDY_PATH").Text = cDOWNLOAD_PATH
+    If Err.Number <> 0 Then GoTo ExportError ' Jump if path field not found
+    objSess.FindById("wnd[1]/usr/ctxtDY_FILENAME").Text = dynamicFilename ' Use the dynamic filename
+    If Err.Number <> 0 Then GoTo ExportError ' Jump if filename field not found
+    objSess.FindById("wnd[1]/tbar[0]/btn[0]").press ' Generate/Save button (Check ID: btn[0] or btn[11])
+    If Err.Number <> 0 Then GoTo ExportError ' Jump if save button failed
+
+    success = True ' Mark export as potentially successful if no error so far
+
+ExportError:
+    On Error GoTo GuiScriptError ' Restore main error handling
+    If Not success Then
+         MsgBox "An error occurred during the export process." & vbCrLf & _
+                "Please check if the report generated data and the path '" & cDOWNLOAD_PATH & "' is accessible.", vbExclamation, "Export Warning"
+         ' Continue to navigate back even if export failed
+    End If
+
+    ' --- Navigate Back (always attempt this) ---
+    On Error Resume Next ' Ignore errors during back navigation
+    objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' 15 = Back button (F3)
+    objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' Press Back again
+    On Error GoTo GuiScriptError ' Restore main error handler (though usually we exit now)
+
+    Exit Sub ' Normal exit
+
+GuiScriptError:
+    MsgBox "An error occurred during SAP GUI script execution:" & vbCrLf & vbCrLf & _
+           "Error Number: " & Err.Number & vbCrLf & _
+           "Description: " & Err.Description & vbCrLf & vbCrLf & _
+           "Check SAP screen state and script logic.", _
+           vbCritical, "SAP Scripting Error"
+    ' Optionally add cleanup here if needed (e.g., try to navigate back safely)
+    On Error Resume Next ' Prevent error loop if cleanup fails
+    If Not objSess Is Nothing Then ' Check if session object is valid
+       If objSess.ActiveWindow.Name = "wnd[0]" Or objSess.ActiveWindow.Name = "wnd[1]" Then ' Avoid errors if SAP crashed
+          objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' Try to go back
+       End If
+    End If
+    On Error GoTo 0 ' Disable error handling within the handler
+End Sub
