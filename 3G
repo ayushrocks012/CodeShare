@@ -1,0 +1,626 @@
+Option Explicit
+
+' --- Windows API Declaration for OLE Message Filter ---
+' Used to suppress Excel's "Server Busy" / "Waiting for OLE Action" popup
+Private Declare PtrSafe Function CoRegisterMessageFilter Lib "OLE32.DLL" _
+    (ByVal lpMessageFilter As LongPtr, ByRef lplpMessageFilter As LongPtr) As Long ' HRESULT return
+
+' --- Windows API Declaration for Sleep Function ---
+#If VBA7 Then
+    ' For 64-bit and 32-bit Office (VBA version 7+)
+    Public Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As LongPtr)
+#Else
+    ' For 32-bit Office only (VBA version 6 and below)
+    Public Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
+
+' --- Global Objects required by both Subs (or across multiple calls) ---
+' These hold the connection to the SAP GUI session
+' Using Object type for late binding robustness, can use specific types if preferred (GuiApplication, etc.)
+Public objGui       As Object ' SAP GUI Application object (e.g., GuiApplication)
+Public objConn      As Object ' SAP GUI Connection object (e.g., GuiConnection)
+Public objSess      As Object ' SAP GUI Session object (e.g., GuiSession)
+Public objSBar      As Object ' SAP GUI Statusbar object (e.g., GuiStatusbar)
+
+' //========================================================================
+' // Sub: StartExtract
+' // Purpose: Finds an appropriate SAP session or verifies an existing one.
+' //          Sets the global objSess and objSBar objects if successful.
+' //          Calls RunGUIScript if a session is ready.
+' //          This is the main macro intended to be run by the user.
+' //========================================================================
+Public Sub StartExtract() ' <-- Marked Public so it appears in Macro list
+    ' --- Constants specific to StartExtract ---
+    Const cTARGET_SYSTEM As String = "PEA100"  ' <<< ADJUST: Your Target SAP System(Client) (e.g., "P01100")
+    Const cMAX_SESSIONS As Integer = 6         ' Maximum allowed SAP sessions for a connection
+
+    ' --- Local Variables for StartExtract ---
+    Dim SapGuiAuto As Object           ' For GetObject("SAPGUI")
+    Dim W_conn As Object               ' Temp Connection object in loop (GuiConnection)
+    Dim W_Sess As Object               ' Temp Session object in loop (GuiSession)
+    Dim W_Ret As Boolean               ' Flag indicating if a suitable session was found/validated
+    Dim Session_Nr As Long             ' Stores the session index found (-1 if not found)
+    Dim Session_Nr_All As Long         ' Stores the number of sessions in the relevant connection
+    Dim i As Long                      ' Loop counter for Connections
+    Dim j As Long                      ' Loop counter for Sessions
+    Dim MsgResult As VbMsgBoxResult    ' To store result from MsgBox calls
+    Dim currentTransaction As String   ' To check if existing session is alive
+
+    On Error GoTo ErrorHandler ' Enable basic error handling for setup phase
+
+    ' Optimize Excel performance during script execution
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    ' Initialize state variables
+    W_Ret = False
+    Session_Nr = -1
+    Session_Nr_All = 0
+
+    ' Basic check: Ensure target system constant is set
+    If Trim$(cTARGET_SYSTEM) = "" Then
+        MsgBox "Target SAP system constant (cTARGET_SYSTEM) is not defined in the VBA code.", vbCritical + vbOKOnly, "Configuration Error"
+        GoTo Cleanup ' Exit gracefully
+    End If
+
+    ' --- Check 1: Use Existing Global Session? ---
+    If Not objSess Is Nothing Then
+        On Error Resume Next ' Check if session object is still valid
+        If objSess.Info.SystemName & objSess.Info.Client = cTARGET_SYSTEM Then
+            currentTransaction = objSess.Info.Transaction ' Check if session responds
+            If Err.Number = 0 Then
+                ' Session is valid and for the correct system
+                On Error GoTo ErrorHandler ' Restore normal error handling
+                If objSBar Is Nothing Then Set objSBar = objSess.FindById("wnd[0]/sbar") ' Ensure status bar object is set
+                W_Ret = True
+                GoTo RunScript ' Proceed with the existing session
+            Else
+                ' Session object exists but is not responding or invalid
+                Err.Clear
+                On Error GoTo ErrorHandler ' Restore normal error handling
+                Debug.Print "Existing objSess for " & cTARGET_SYSTEM & " is invalid. Clearing global objects."
+                Set objSess = Nothing ' Clear invalid objects
+                Set objConn = Nothing
+                Set objSBar = Nothing
+            End If
+        Else
+            ' Session exists but is for a different system
+             Debug.Print "Existing objSess is for system " & objSess.Info.SystemName & objSess.Info.Client & ", not " & cTARGET_SYSTEM & ". Clearing global objects."
+             Set objSess = Nothing ' Clear objects for wrong system
+             Set objConn = Nothing
+             Set objSBar = Nothing
+        End If
+        On Error GoTo ErrorHandler ' Restore normal error handling from Resume Next
+    End If
+
+    ' --- Check 2: Find a New Session ---
+    If objGui Is Nothing Then
+        On Error Resume Next ' In case SAP GUI is not running
+        Set SapGuiAuto = GetObject("SAPGUI")
+        If Err.Number <> 0 Then GoTo SapError ' SAP GUI process not found
+        On Error GoTo ErrorHandler ' Restore normal error handling
+        Set objGui = SapGuiAuto.GetScriptingEngine
+        If objGui Is Nothing Then GoTo SapError ' Scripting engine couldn't be accessed
+    End If
+
+    ' Loop through connections and sessions to find a suitable idle one
+    For i = 0 To objGui.Children.Count - 1
+        Set W_conn = objGui.Children(CLng(i)) ' Use CLng for safety
+        If Not W_conn Is Nothing Then
+            Session_Nr_All = W_conn.Children.Count ' Count sessions in this connection
+            For j = 0 To W_conn.Children.Count - 1
+                Set W_Sess = W_conn.Children(CLng(j))
+                If Not W_Sess Is Nothing Then
+                    If W_Sess.Info.SystemName & W_Sess.Info.Client = cTARGET_SYSTEM Then
+                        ' Found a session for the target system, check if it's idle
+                        Select Case W_Sess.Info.Transaction
+                            Case "SESSION_MANAGER", "SMEN", "S000" ' Common idle transaction codes
+                                Session_Nr = W_Sess.Info.SessionNumber - 1 ' Store index (0-based)
+                                Set objConn = W_conn ' Set global connection
+                                Set objSess = W_Sess ' Set global session
+                                Set objSBar = objSess.FindById("wnd[0]/sbar") ' Set global status bar
+                                W_Ret = True
+                                Debug.Print "Found suitable idle session #" & (Session_Nr + 1) & " for " & cTARGET_SYSTEM
+                                GoTo RunScript ' Found one, exit loops
+                        End Select
+                    End If
+                End If
+            Next j
+        End If
+
+        ' --- Check 3: Max Session Limit Reached for this connection? ---
+        ' Only show error if max sessions reached AND at least one session belongs to the target system
+        If Not W_Ret And Session_Nr_All >= cMAX_SESSIONS Then
+             Dim systemMatchFoundOnConn As Boolean: systemMatchFoundOnConn = False
+             For j = 0 To W_conn.Children.Count - 1 ' Re-check sessions on this connection
+                 Set W_Sess = W_conn.Children(CLng(j))
+                 If Not W_Sess Is Nothing Then
+                     If W_Sess.Info.SystemName & W_Sess.Info.Client = cTARGET_SYSTEM Then
+                         systemMatchFoundOnConn = True: Exit For ' Found a match
+                     End If
+                 End If
+             Next j
+             If systemMatchFoundOnConn Then
+                 MsgResult = MsgBox("Maximum number of sessions (" & cMAX_SESSIONS & ") already open for the connection associated with system " & cTARGET_SYSTEM & ". Cannot create or use a new session on this connection.", vbCritical + vbOKOnly, "Session Limit Reached")
+                 GoTo Cleanup ' Cannot proceed
+             End If
+        End If
+    Next i
+
+    ' --- Check 4: No Suitable Session Found after checking all connections/sessions ---
+    If Not W_Ret Then
+        MsgResult = MsgBox("Could not find a suitable idle session for system " & cTARGET_SYSTEM & "." & vbCrLf & vbCrLf & _
+                           "Please ensure:" & vbCrLf & _
+                           " - You are logged into SAP system " & cTARGET_SYSTEM & "." & vbCrLf & _
+                           " - SAP GUI Scripting is enabled." & vbCrLf & _
+                           " - At least one session is at the main menu (TCode: SESSION_MANAGER, SMEN, or S000).", _
+                           vbCritical + vbOKOnly, "Session Not Found")
+        GoTo Cleanup
+    End If
+
+RunScript:
+    ' If we reached here via GoTo, W_Ret should be True
+    If W_Ret Then
+        Debug.Print "Proceeding to run GUI script..."
+        RunGUIScript ' Call the Private subroutine
+    Else
+        ' This case should ideally not be reached if logic above is correct
+        MsgBox "Could not proceed to run the GUI script. Session was not successfully prepared (Internal Logic Error).", vbCritical, "Internal Error"
+    End If
+
+Cleanup:
+    ' Restore Excel settings
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    ' *** ADDED: Explicitly release global SAP objects to potentially fix status bar issue ***
+    On Error Resume Next ' Ignore errors if objects are already nothing or invalid
+    Debug.Print "Releasing global SAP objects..."
+    Set objSBar = Nothing
+    Set objSess = Nothing
+    Set objConn = Nothing
+    Set objGui = Nothing
+    Set SapGuiAuto = Nothing ' Release the initial GetObject handle if it was used
+    Debug.Print "Global SAP objects released."
+    On Error GoTo 0 ' Restore error handling
+
+    ' Release temporary objects
+    Set W_conn = Nothing
+    Set W_Sess = Nothing
+    Debug.Print "StartExtract finished. Excel state restored."
+    Exit Sub
+
+ErrorHandler:
+    ' General error handler for setup phase
+    MsgBox "An error occurred during SAP session setup:" & vbCrLf & vbCrLf & _
+           "Error Number: " & Err.Number & vbCrLf & _
+           "Description: " & Err.Description & vbCrLf & vbCrLf & _
+           "Possible causes:" & vbCrLf & _
+           "- SAP GUI is not running." & vbCrLf & _
+           "- Scripting is disabled in SAP GUI options or by the server." & vbCrLf & _
+           "- The SAP system (" & cTARGET_SYSTEM & ") is unavailable or connection failed.", _
+           vbCritical, "SAP Scripting Error"
+    Resume Cleanup ' Go to cleanup section after error
+
+SapError:
+    ' Specific error if GetObject("SAPGUI") or GetScriptingEngine fails
+     MsgBox "Could not connect to the SAP GUI Scripting Engine." & vbCrLf & vbCrLf & _
+            "Please ensure:" & vbCrLf & _
+            " - The SAP GUI Logon application is running." & vbCrLf & _
+            " - Scripting is enabled in SAP GUI Options (Alt+F12 -> Options... -> Accessibility & Scripting -> Scripting)." & vbCrLf & _
+            " - Scripting is enabled on the server (check with Basis team - RZ11 parameter: sapgui/user_scripting should be TRUE).", _
+            vbCritical, "SAP Scripting Error"
+     Resume Cleanup ' Go to cleanup section after error
+
+End Sub
+
+
+' //========================================================================
+' // Sub: RunGUIScript
+' // Purpose: Executes MB51 steps, including status bar monitoring,
+' //          OLE popup suppression, and export.
+' //          Called only by StartExtract within this module.
+' //========================================================================
+Private Sub RunGUIScript() ' <-- Changed from Public to Private
+    ' --- Constants specific to RunGUIScript ---
+     Const cTRANSACTION As String = "mb51"
+     Const cPLANT As String = "1534"                                          ' <<< ADJUST: Your Plant Code
+     Const cDATE_LOW As String = "01.03.2025"                                  ' <<< ADJUST: Start Date (DD.MM.YYYY format expected by code)
+     Const cDATE_HIGH As String = "31.03.2025"                                 ' <<< ADJUST: End Date (DD.MM.YYYY format expected by code)
+     Const cLAYOUT As String = "AYUSH_TRY"                                     ' <<< ADJUST: Your ALV Layout Variant (leave "" for default/no layout)
+     Const cDOWNLOAD_PATH As String = "Z:\Demand\Demand Review\2025\03 Mar 25\SAP H2H Report" ' <<< ADJUST: Ensure this folder exists and is writable
+     Const cFILENAME_PREFIX As String = "MB51 Report"
+     Const cFILENAME_EXTENSION As String = ".XLSX"                             ' Ensure extension matches download format (&XXL -> XLSX typically)
+     Const cREPORT_EXEC_TIMEOUT_SECONDS As Long = 900                          ' <<< ADJUST IF NEEDED: Timeout for main report execution check (e.g., 900s = 15 min) - KEEP THIS
+     Const cGRID_WAIT_TIMEOUT_SECONDS As Long = 180                            ' <<< ADJUST IF NEEDED: Timeout for waiting for result grid after execution (e.g., 180s = 3 min) - KEEP THIS
+     Const cGRID_ID As String = "wnd[0]/usr/cntlGRID1/shellcont/shell" ' Standard ID of the ALV grid control in MB51 results
+
+    ' --- Status Bar Messages Updated Based on User Input ---
+     Const cSTATUS_MSG_COMPLETE_1 As String = "Prepare List Output"  ' <<< Updated: Final message before list appears
+     Const cSTATUS_MSG_COMPLETE_2 As String = ""                     ' <<< Cleared: No second message needed currently
+     Const cSTATUS_MSG_COMPLETE_3 As String = ""                     ' <<< Cleared: No third message needed currently
+
+    ' --- Local Variables for RunGUIScript ---
+    Dim formattedDateLow As String
+    Dim formattedDateHigh As String
+    Dim formattedTimestamp As String
+    Dim dynamicFilename As String
+    Dim startTime As Single
+    Dim success As Boolean
+    Dim gridObject As Object
+    Dim currentStatus As String
+
+    ' --- Variables for OLE Message Filter ---
+    Dim lMsgFilter As LongPtr      ' Holds the pointer to our dummy filter (0)
+    Dim lPreviousFilter As LongPtr ' Holds the pointer to the original Excel filter
+    Dim hResult As Long            ' To check the result of CoRegisterMessageFilter
+
+    ' --- Enable Central Error Handling for this Sub ---
+    On Error GoTo RestoreFilterAndErrorHandler ' Jumps to cleanup/restore code on error
+
+    ' --- Pre-checks: Ensure global objects are valid ---
+    If objSess Is Nothing Then Err.Raise vbObjectError + 510, "RunGUIScript", "SAP Session object (objSess) is not valid."
+    If objSBar Is Nothing Then
+       On Error Resume Next ' Try to get status bar if it wasn't set
+       Set objSBar = objSess.FindById("wnd[0]/sbar")
+       On Error GoTo RestoreFilterAndErrorHandler ' Restore main handler
+       If objSBar Is Nothing Then Err.Raise vbObjectError + 511, "RunGUIScript", "SAP Status Bar object (objSBar) could not be found/set."
+    End If
+    Debug.Print Format(Now, "hh:nn:ss") & " - RunGUIScript started. Session and Statusbar objects validated."
+
+    ' --- Step 1: Prepare Dynamic Filename ---
+     On Error Resume Next ' Allow errors during date parsing
+     formattedDateLow = Right$(cDATE_LOW, 4) & Mid$(cDATE_LOW, 4, 2) & Left$(cDATE_LOW, 2)
+     formattedDateHigh = Right$(cDATE_HIGH, 4) & Mid$(cDATE_HIGH, 4, 2) & Left$(cDATE_HIGH, 2)
+     If Err.Number <> 0 Then
+         MsgBox "Could not parse dates (" & cDATE_LOW & ", " & cDATE_HIGH & ") for filename. Please ensure they are in DD.MM.YYYY format. Using placeholder dates in filename.", vbExclamation, "Filename Warning"
+         Err.Clear
+         formattedDateLow = "DateFrom"
+         formattedDateHigh = "DateTo"
+     End If
+     On Error GoTo RestoreFilterAndErrorHandler ' Restore main handler
+     formattedTimestamp = Format$(Now, "yyyymmdd_hhmmss")
+     dynamicFilename = cFILENAME_PREFIX & "_" & formattedDateLow & "-" & formattedDateHigh & "_" & formattedTimestamp & cFILENAME_EXTENSION
+     Debug.Print Format(Now, "hh:nn:ss") & " - Dynamic filename created: " & dynamicFilename
+
+    ' --- Step 2: Navigate to Transaction ---
+    objSess.FindById("wnd[0]/tbar[0]/okcd").Text = cTRANSACTION
+    objSess.FindById("wnd[0]").sendVKey 0
+    Sleep 250 ' *** REDUCED Sleep, but kept short pause for screen update ***
+
+    ' --- Step 3 & 4: Clear Fields & Set Report Criteria ---
+    On Error Resume Next ' In case fields don't exist depending on prior state
+    objSess.FindById("wnd[0]/usr/ctxtMATNR-LOW").Text = ""
+    objSess.FindById("wnd[0]/usr/ctxtMATNR-HIGH").Text = ""
+    On Error GoTo RestoreFilterAndErrorHandler ' Turn robust error handling back on
+
+    objSess.FindById("wnd[0]/usr/ctxtWERKS-LOW").Text = cPLANT
+    objSess.FindById("wnd[0]/usr/ctxtBUDAT-LOW").Text = cDATE_LOW
+    objSess.FindById("wnd[0]/usr/ctxtBUDAT-HIGH").Text = cDATE_HIGH
+    objSess.FindById("wnd[0]/usr/radRFLAT_L").Select ' Select "Flat List" radio button
+    If Trim$(cLAYOUT) <> "" Then
+      objSess.FindById("wnd[0]/usr/ctxtALV_DEF").Text = cLAYOUT ' Set ALV Layout
+    End If
+    Debug.Print Format(Now, "hh:nn:ss") & " - Transaction " & cTRANSACTION & " opened and criteria set."
+
+    ' --- *** Start OLE Message Filter Suppression *** ---
+    ' Registering a null message filter (0) tells OLE to handle busy/retry messages automatically
+    lMsgFilter = 0&
+    hResult = CoRegisterMessageFilter(lMsgFilter, lPreviousFilter) ' Store the previous filter pointer
+    If hResult <> 0 Then
+        ' S_OK = 0. Any other value indicates an issue.
+        Debug.Print Format(Now, "hh:nn:ss") & " - Warning: CoRegisterMessageFilter failed to register. HRESULT: " & Hex$(hResult) & ". Proceeding without suppression."
+        lPreviousFilter = 0 ' Ensure we don't try to restore a filter that wasn't set
+    Else
+        Debug.Print Format(Now, "hh:nn:ss") & " - OLE Message Filter registered (suppressing Excel popups)."
+    End If
+    ' --- *** End OLE Message Filter Suppression *** ---
+
+    ' --- Step 5: Execute Report ---
+    objSess.FindById("wnd[0]/tbar[1]/btn[8]").press ' Press Execute (F8) button
+    Debug.Print Format(Now, "hh:nn:ss") & " - Execute button pressed."
+
+    ' --- Step 6: Wait for Report Execution (Primary Wait - checks Busy & Status Bar) ---
+    Debug.Print Format(Now, "hh:nn:ss") & " - Waiting for report execution (Timeout: " & cREPORT_EXEC_TIMEOUT_SECONDS & "s)..."
+    startTime = Timer
+    Do
+        ' --- Check Status Bar First (often updates before Busy flag clears) ---
+        currentStatus = Trim$(objSBar.Text)
+        If (Len(cSTATUS_MSG_COMPLETE_1) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_1, vbTextCompare) > 0) Or _
+           (Len(cSTATUS_MSG_COMPLETE_2) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_2, vbTextCompare) > 0) Or _
+           (Len(cSTATUS_MSG_COMPLETE_3) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_3, vbTextCompare) > 0) Then
+           Debug.Print Format(Now, "hh:nn:ss") & " - Completion status detected: '" & currentStatus & "'"
+           Exit Do ' Exit loop if completion message found
+        End If
+
+        ' --- Fallback Check: Busy flag ---
+        If Not objSess.Busy Then
+             ' Session is not busy, re-check status immediately in case it just updated
+             currentStatus = Trim$(objSBar.Text)
+             If (Len(cSTATUS_MSG_COMPLETE_1) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_1, vbTextCompare) > 0) Or _
+                (Len(cSTATUS_MSG_COMPLETE_2) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_2, vbTextCompare) > 0) Or _
+                (Len(cSTATUS_MSG_COMPLETE_3) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_3, vbTextCompare) > 0) Then
+                 Debug.Print Format(Now, "hh:nn:ss") & " - Completion status detected after Busy=False: '" & currentStatus & "'"
+                 Exit Do ' Exit loop if completion message found
+             Else
+                ' Busy is false, but status message not seen. Could be brief intermediate state or finished without expected message.
+                Debug.Print Format(Now, "hh:nn:ss") & " - Busy=False, but completion status not seen. Exiting primary wait loop."
+                Exit Do ' Proceed to check grid anyway
+             End If
+        End If
+
+        ' --- Handle potential SAP popups (e.g., "Large data volume") ---
+        Call HandleSAPPopups(objSess) ' Call helper function
+
+        ' --- Wait and Check Timeout ---
+        DoEvents ' Yield to Excel briefly to keep it responsive
+        Sleep 250 ' *** REDUCED Sleep duration (0.25 seconds) for faster polling ***
+        If Timer - startTime > cREPORT_EXEC_TIMEOUT_SECONDS Then
+            Err.Raise vbObjectError + 513, "RunGUIScript", "Timeout (" & cREPORT_EXEC_TIMEOUT_SECONDS & "s) waiting for primary report execution (Busy flag / Status Bar)."
+        End If
+    Loop
+    Debug.Print Format(Now, "hh:nn:ss") & " - Primary wait loop exited."
+    Sleep 250 ' *** REDUCED Short pause after primary wait before checking grid ***
+
+
+    ' --- Step 7: Wait for Grid Control (Secondary Wait - checks Grid Object) ---
+    Debug.Print Format(Now, "hh:nn:ss") & " - Waiting for Grid Control (" & cGRID_ID & ") (Timeout: " & cGRID_WAIT_TIMEOUT_SECONDS & "s)..."
+    startTime = Timer
+    Set gridObject = Nothing ' Ensure it's Nothing before the loop
+    Do
+        ' --- Check if grid object exists ---
+        On Error Resume Next ' Temporarily ignore errors for FindById if grid not ready
+        Set gridObject = objSess.FindById(cGRID_ID)
+        On Error GoTo RestoreFilterAndErrorHandler ' Restore main error handling immediately
+        If Not gridObject Is Nothing Then
+            Debug.Print Format(Now, "hh:nn:ss") & " - Grid object found."
+            Exit Do ' Grid is ready, exit wait
+        End If
+
+       ' --- Handle potential SAP popups again ---
+       Call HandleSAPPopups(objSess)
+
+       ' --- Check for Unexpected Windows (Good practice) ---
+       If objSess.ActiveWindow.Name <> "wnd[0]" Then
+            Err.Raise vbObjectError + 514, "RunGUIScript", "SAP Active Window changed unexpectedly to '" & objSess.ActiveWindow.Name & "' during grid wait."
+       End If
+
+        ' --- Wait and Check Timeout ---
+        DoEvents
+        Sleep 250 ' *** REDUCED Sleep duration (0.25 seconds) for faster polling ***
+        If Timer - startTime > cGRID_WAIT_TIMEOUT_SECONDS Then
+             Err.Raise vbObjectError + 515, "RunGUIScript", "Timeout (" & cGRID_WAIT_TIMEOUT_SECONDS & "s) waiting for results grid control (" & cGRID_ID & ")."
+        End If
+    Loop
+    Debug.Print Format(Now, "hh:nn:ss") & " - Grid wait loop exited."
+    Sleep 100 ' *** REDUCED Small pause before interacting with grid ***
+
+    ' --- Step 8: Export Results to Excel ---
+    Debug.Print Format(Now, "hh:nn:ss") & " - Proceeding with export..."
+    success = False
+
+    ' --- Double-check grid object ---
+    If gridObject Is Nothing Then
+         ' Try one last time to get the grid object, maybe it appeared just now
+         On Error Resume Next
+         Set gridObject = objSess.FindById(cGRID_ID)
+         On Error GoTo RestoreFilterAndErrorHandler
+         If gridObject Is Nothing Then
+              Err.Raise vbObjectError + 516, "RunGUIScript", "Export failed: Grid object could not be obtained before export step (" & cGRID_ID & ")."
+         End If
+         Debug.Print Format(Now, "hh:nn:ss") & " - Grid object obtained on second attempt before export."
+    End If
+
+    ' --- Perform the export actions using specific error handling for the sequence ---
+    On Error Resume Next ' Use Resume Next specifically for the sequence of export steps
+    gridObject.ContextMenu ' Open context menu
+    If Err.Number <> 0 Then Debug.Print "Error during ContextMenu: " & Err.Description: Err.Clear: GoTo ExportSequenceErrorCheck
+
+    gridObject.SelectContextMenuItem "&XXL" ' Select Spreadsheet option
+    If Err.Number <> 0 Then Debug.Print "Error during SelectContextMenuItem '&XXL': " & Err.Description: Err.Clear: GoTo ExportSequenceErrorCheck
+
+    Sleep 250 ' *** REDUCED Wait for format dialog (wnd[1]) ***
+    objSess.FindById("wnd[1]/tbar[0]/btn[0]").press ' Press Continue/Enter on format dialog (usually btn[0])
+    If Err.Number <> 0 Then Debug.Print "Error pressing Continue on format dialog (wnd[1]/btn[0]): " & Err.Description: Err.Clear: GoTo ExportSequenceErrorCheck
+
+    Sleep 250 ' *** REDUCED Wait for save dialog (wnd[1] again, usually) ***
+    objSess.FindById("wnd[1]/usr/ctxtDY_PATH").Text = cDOWNLOAD_PATH ' Set download folder path
+    If Err.Number <> 0 Then Debug.Print "Error setting download path (wnd[1]/ctxtDY_PATH): " & Err.Description: Err.Clear: GoTo ExportSequenceErrorCheck
+
+    objSess.FindById("wnd[1]/usr/ctxtDY_FILENAME").Text = dynamicFilename ' Set filename
+    If Err.Number <> 0 Then Debug.Print "Error setting download filename (wnd[1]/ctxtDY_FILENAME): " & Err.Description: Err.Clear: GoTo ExportSequenceErrorCheck
+
+    objSess.FindById("wnd[1]/tbar[0]/btn[11]").press ' Press Generate/Save button (CHECK THIS ID - often btn[11] or btn[0])
+    If Err.Number <> 0 Then Debug.Print "Error pressing Save/Generate button (wnd[1]/btn[11]): " & Err.Description: Err.Clear: GoTo ExportSequenceErrorCheck
+
+    ' If we reached here without jumping to ExportSequenceErrorCheck, assume success
+    success = True
+    Debug.Print Format(Now, "hh:nn:ss") & " - Export commands sent successfully."
+    Sleep 1000 ' *** REDUCED Basic wait for file system to potentially save the file ***
+
+ExportSequenceErrorCheck:
+    On Error GoTo RestoreFilterAndErrorHandler ' Restore standard error handling immediately after the sequence
+    If Not success Then
+        ' If any step in the sequence failed and jumped here via GoTo
+        Err.Raise vbObjectError + 517, "RunGUIScript", "Export sequence failed. Check Debug.Print messages above. Ensure path '" & cDOWNLOAD_PATH & "' exists and is writable, and SAP GUI permissions allow export."
+    End If
+
+    ' --- If script reaches here, export sequence commands were sent successfully ---
+    ' (Optional: Add a loop here to check objSbar for export completion message if available)
+
+
+    ' --- Normal Exit Point (after successful execution and export) ---
+    GoTo RestoreFilterAndExit ' Jump to cleanup and exit
+
+
+' //------------------------------------------------------------------------
+' // --- Error Handler and Cleanup Section ---
+' //------------------------------------------------------------------------
+RestoreFilterAndErrorHandler:
+    ' --- Capture Error Details ---
+    Dim errNum As Long: errNum = Err.Number
+    Dim errDesc As String: errDesc = Err.Description
+    Dim errSource As String: errSource = Err.Source
+
+    ' --- Log Error ---
+    Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    Debug.Print Format(Now, "hh:nn:ss") & " - ERROR ENCOUNTERED in RunGUIScript!"
+    Debug.Print "   Error #: " & errNum
+    Debug.Print "   Source: " & errSource
+    Debug.Print "   Desc:   " & errDesc
+    Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+
+    ' --- *** Restore OLE Message Filter (CRITICAL in error path) *** ---
+    ' This ensures Excel's normal OLE behavior is restored even if the script fails
+    If lPreviousFilter <> 0 Then ' Only restore if we successfully registered our filter
+        On Error Resume Next ' Prevent error during restoration itself from stopping cleanup
+        hResult = CoRegisterMessageFilter(lPreviousFilter, lMsgFilter) ' Restore original filter
+        If hResult <> 0 Then
+             Debug.Print Format(Now, "hh:nn:ss") & " - Warning: CoRegisterMessageFilter failed to RESTORE during error handling. HRESULT: " & Hex$(hResult)
+        Else
+             Debug.Print Format(Now, "hh:nn:ss") & " - OLE Message Filter restored during error handling."
+        End If
+        lPreviousFilter = 0 ' Mark as restored / no longer needing restoration
+        On Error GoTo 0 ' Re-enable error trapping if needed for further cleanup below
+    End If
+    ' --- *** End Restore OLE Message Filter *** ---
+
+    ' --- Display Error Message to User ---
+    MsgBox "A critical error occurred during SAP GUI script execution:" & vbCrLf & vbCrLf & _
+           "Error Number: " & errNum & vbCrLf & _
+           "Source: " & errSource & vbCrLf & _
+           "Description: " & errDesc & vbCrLf & vbCrLf & _
+           "The script will attempt to exit gracefully. Please check the SAP screen state and Debug messages (Ctrl+G in VBA editor).", _
+           vbCritical, "SAP Scripting Runtime Error"
+
+    ' --- Attempt Graceful SAP Cleanup (Optional but recommended) ---
+    On Error Resume Next ' Ignore errors during final cleanup attempt
+    If Not objSess Is Nothing Then
+        Debug.Print Format(Now, "hh:nn:ss") & " - Attempting SAP cleanup after error..."
+        If objSess.Busy Then
+            Debug.Print "   - SAP session is busy, waiting briefly..."
+            Sleep 500 ' Shorter wait during error cleanup
+        End If
+        ' Try to close any modal windows (wnd[1], wnd[2]) first using Cancel button
+        If objSess.ActiveWindow.Name = "wnd[1]" Or objSess.ActiveWindow.Name = "wnd[2]" Then
+             Debug.Print "   - Active window is " & objSess.ActiveWindow.Name & ". Trying Cancel (btn[12])."
+             objSess.FindById("wnd[0]/tbar[0]/btn[12]").press ' Try Cancel
+             Sleep 250
+        End If
+        ' Try to go back from main window if it's the active one
+        If objSess.ActiveWindow.Name = "wnd[0]" Then
+            Debug.Print "   - Active window is wnd[0]. Trying Back (btn[15])."
+            objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' Back
+        End If
+         Debug.Print Format(Now, "hh:nn:ss") & " - SAP cleanup attempt finished."
+    End If
+    GoTo FinalCleanup ' Jump to final Excel cleanup
+
+' //------------------------------------------------------------------------
+' // --- Normal Exit and Final Cleanup Section ---
+' //------------------------------------------------------------------------
+RestoreFilterAndExit:
+    ' --- *** Restore OLE Message Filter (Normal Exit Path) *** ---
+    If lPreviousFilter <> 0 Then ' Only restore if needed
+        On Error Resume Next ' Prevent error during restoration itself
+        hResult = CoRegisterMessageFilter(lPreviousFilter, lMsgFilter) ' Restore original
+        If hResult <> 0 Then
+             Debug.Print Format(Now, "hh:nn:ss") & " - Warning: CoRegisterMessageFilter failed to RESTORE during normal exit. HRESULT: " & Hex$(hResult)
+        Else
+             Debug.Print Format(Now, "hh:nn:ss") & " - OLE Message Filter restored during normal exit."
+        End If
+        lPreviousFilter = 0
+        On Error GoTo 0
+    End If
+    ' --- *** End Restore OLE Message Filter *** ---
+
+    ' --- Step 9: Navigate Back in SAP (Cleanup SAP Screen) ---
+    On Error Resume Next ' Ignore errors if already back or screen changed
+    Debug.Print Format(Now, "hh:nn:ss") & " - Navigating back in SAP..."
+    If Not objSess Is Nothing Then
+        If objSess.ActiveWindow.Name = "wnd[0]" Then ' Only press back if on main screen
+            objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' Back from results list (or current screen)
+            Sleep 100 ' Reduced pause
+            ' Check if still in MB51 initial screen before pressing back again
+            If objSess.Info.Transaction = "MB51" Then
+                 objSess.FindById("wnd[0]/tbar[0]/btn[3]").press  ' Back (F3) from MB51 initial screen
+            End If
+        ElseIf objSess.ActiveWindow.Name = "wnd[1]" Or objSess.ActiveWindow.Name = "wnd[2]" Then
+             objSess.FindById("wnd[0]/tbar[0]/btn[12]").press ' Cancel popups if any remain
+        End If
+    End If
+    Debug.Print Format(Now, "hh:nn:ss") & " - SAP navigation cleanup finished."
+
+    Debug.Print Format(Now, "hh:nn:ss") & " - RunGUIScript finished normally."
+    GoTo FinalCleanup ' Jump to final Excel cleanup
+
+FinalCleanup:
+    ' --- Restore Excel State ---
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    On Error GoTo 0 ' Disable error handling before exiting sub
+    Debug.Print Format(Now, "hh:nn:ss") & " - Excel state restored. Exiting RunGUIScript."
+    ' --- Script End ---
+End Sub
+
+
+' //========================================================================
+' // Sub: HandleSAPPopups (Helper Function)
+' // Purpose: Checks for and handles common SAP modal dialogs (wnd[1]/wnd[2])
+' //          that might appear during long operations.
+' // Arguments: currentSession - The active SAP GUI Session object.
+' //========================================================================
+Private Sub HandleSAPPopups(ByVal currentSession As Object) ' GuiSession
+    Dim popupWindow As Object
+    Dim popupID As String
+    Dim handledPopup As Boolean: handledPopup = False
+
+    On Error Resume Next ' Enable error resumption for this specific check
+
+    For Each popupID In Array("wnd[1]", "wnd[2]") ' Check common popup windows
+        Set popupWindow = Nothing ' Reset before check
+        Set popupWindow = currentSession.FindById(popupID, False) ' False = Don't error if not found
+
+        If Err.Number = 0 And Not popupWindow Is Nothing Then
+            ' Found a popup window
+            handledPopup = True ' Mark that we found something
+            Debug.Print Format(Now, "hh:nn:ss") & " - Detected SAP popup window: " & popupID & " (Type: " & popupWindow.Type & ", Text: '" & popupWindow.Text & "')"
+
+            ' --- Determine Action based on popup content (Customize as needed) ---
+            ' Example: Check text for specific messages
+            ' If InStr(1, popupWindow.Text, "large volume", vbTextCompare) > 0 Then ...
+
+            ' --- Default Action: Press Enter (VKey 0) ---
+            Debug.Print "   -> Attempting to send VKey 0 (Enter)..."
+            popupWindow.sendVKey 0 ' Try sending Enter
+            If Err.Number <> 0 Then
+                Debug.Print "   -> Failed to send VKey 0 to " & popupID & ". Error: " & Err.Description
+                Err.Clear
+                ' --- Fallback Action: Try pressing the first toolbar button (often OK/Continue) ---
+                 Debug.Print "   -> Attempting to press btn[0]..."
+                 popupWindow.FindById("tbar[0]/btn[0]").press
+                 If Err.Number <> 0 Then
+                     Debug.Print "   -> Failed to press btn[0] on " & popupID & ". Error: " & Err.Description
+                     Err.Clear
+                     ' --- Add more specific button IDs if needed (use Scripting Tracker) ---
+                     ' Debug.Print "   -> Attempting specific button..."
+                     ' popupWindow.FindById("usr/btnSPOP-OPTION1").press ' Example Yes
+                 Else
+                      Debug.Print "   -> Pressed btn[0] on " & popupID & "."
+                 End If
+            Else
+                 Debug.Print "   -> Sent VKey 0 (Enter) to " & popupID & " successfully."
+            End If
+            Sleep 500 ' *** REDUCED Wait after handling popup ***
+            Exit For ' Assume only one popup handled per call
+        End If
+        ' Clear error if FindById failed because window didn't exist
+        If Err.Number <> 0 Then Err.Clear
+    Next popupID
+
+    On Error GoTo 0 ' Restore default error handling behavior
+
+    ' Optional: Log if a popup was handled
+    ' If handledPopup Then Debug.Print Format(Now, "hh:nn:ss") & " - Finished handling SAP popup."
+
+End Sub
