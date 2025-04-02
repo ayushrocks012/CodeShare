@@ -389,7 +389,8 @@ Private Sub RunGUIScript() ' <-- Changed from Public to Private
      ' Ensure we are in the main window before changing transaction
     If objSess.ActiveWindow.Name <> "wnd[0]" Then objSess.ActiveWindow.Close ' Close unexpected windows first
     If objSess.Info.Transaction <> UCase(cTRANSACTION) Then
-        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/" & cTRANSACTION ' Use /n to ensure it works from any screen
+        ' *** CORRECTED LINE: Use /n before transaction code ***
+        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION ' Use /n to ensure it works from any screen
         objSess.FindById("wnd[0]").sendVKey 0
         Sleep 500 ' Increased sleep after /n
     Else
