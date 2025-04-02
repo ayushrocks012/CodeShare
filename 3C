@@ -1,0 +1,142 @@
+' Improved and Robust Version of SAP GUI Automation VBA Code
+' Key improvements:
+' 1. Structured clearly with descriptive comments.
+' 2. Enhanced error handling with meaningful messages.
+' 3. Efficient object and resource management.
+' 4. Optimized OLE handling and cleanup routines.
+
+Option Explicit
+
+#If VBA7 Then
+    Public Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+    Private Declare PtrSafe Function CoRegisterMessageFilter Lib "OLE32.DLL" (ByVal lpMessageFilter As LongPtr, ByRef lplpMessageFilter As LongPtr) As Long
+#Else
+    Public Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+    Private Declare Function CoRegisterMessageFilter Lib "OLE32.DLL" (ByVal lpMessageFilter As Long, ByRef lplpMessageFilter As Long) As Long
+#End If
+
+' Global SAP GUI Objects
+Public objGui As Object
+Public objConn As Object
+Public objSess As Object
+Public objSBar As Object
+
+Sub StartExtract()
+    Const TARGET_SYSTEM As String = "PEA100"
+    Const MAX_SESSIONS As Integer = 6
+
+    Dim SapGuiAuto As Object
+    Dim conn As Object, sess As Object
+    Dim sessionFound As Boolean
+    Dim i As Long, j As Long
+
+    On Error GoTo ErrorHandler
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    If objSess Is Nothing Or objSess.Info.SystemName & objSess.Info.Client <> TARGET_SYSTEM Then
+        Set SapGuiAuto = GetObject("SAPGUI")
+        Set objGui = SapGuiAuto.GetScriptingEngine
+        sessionFound = False
+
+        For i = 0 To objGui.Children.Count - 1
+            Set conn = objGui.Children(i)
+            For j = 0 To conn.Children.Count - 1
+                Set sess = conn.Children(j)
+                If sess.Info.SystemName & sess.Info.Client = TARGET_SYSTEM And _
+                   (sess.Info.Transaction = "SESSION_MANAGER" Or sess.Info.Transaction = "SMEN" Or sess.Info.Transaction = "S000") Then
+
+                    Set objConn = conn
+                    Set objSess = sess
+                    Set objSBar = sess.FindById("wnd[0]/sbar")
+                    sessionFound = True
+                    Exit For
+                End If
+            Next j
+            If sessionFound Then Exit For
+        Next i
+
+        If Not sessionFound Then Err.Raise vbObjectError + 1000, , "No idle session found for SAP system: " & TARGET_SYSTEM
+    End If
+
+    RunGUIScript
+
+Cleanup:
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "Error in StartExtract: " & Err.Description, vbCritical
+    Resume Cleanup
+End Sub
+
+Private Sub RunGUIScript()
+    Const TRANSACTION As String = "MB51"
+    Const PLANT As String = "1534"
+    Const DATE_LOW As String = "01.03.2025"
+    Const DATE_HIGH As String = "31.03.2025"
+    Const LAYOUT As String = "AYUSH_TRY"
+    Const DOWNLOAD_PATH As String = "Z:\Demand\Demand Review\2025\03 Mar 25\SAP H2H Report"
+
+    Dim dynamicFilename As String
+    dynamicFilename = "MB51 Report_" & Format(Now, "yyyymmdd_hhnnss") & ".xlsx"
+
+    Dim lPreviousFilter As LongPtr
+    CoRegisterMessageFilter 0&, lPreviousFilter
+
+    On Error GoTo RestoreOLE
+
+    ' Execute MB51 transaction
+    objSess.FindById("wnd[0]/tbar[0]/okcd").Text = TRANSACTION
+    objSess.FindById("wnd[0]").sendVKey 0
+    Sleep 500
+
+    ' Set report criteria
+    objSess.FindById("wnd[0]/usr/ctxtWERKS-LOW").Text = PLANT
+    objSess.FindById("wnd[0]/usr/ctxtBUDAT-LOW").Text = DATE_LOW
+    objSess.FindById("wnd[0]/usr/ctxtBUDAT-HIGH").Text = DATE_HIGH
+    objSess.FindById("wnd[0]/usr/radRFLAT_L").Select
+    If LAYOUT <> "" Then objSess.FindById("wnd[0]/usr/ctxtALV_DEF").Text = LAYOUT
+
+    ' Execute report
+    objSess.FindById("wnd[0]/tbar[1]/btn[8]").press
+    Sleep 2000
+
+    ' Wait until the grid is available
+    Do Until Not objSess.Busy
+        HandleSAPPopups objSess
+        DoEvents
+        Sleep 1000
+    Loop
+
+    ' Export the grid data
+    With objSess.FindById("wnd[0]/usr/cntlGRID1/shellcont/shell")
+        .ContextMenu
+        .SelectContextMenuItem "&XXL"
+    End With
+    Sleep 1000
+
+    objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
+    Sleep 500
+    objSess.FindById("wnd[1]/usr/ctxtDY_PATH").Text = DOWNLOAD_PATH
+    objSess.FindById("wnd[1]/usr/ctxtDY_FILENAME").Text = dynamicFilename
+    objSess.FindById("wnd[1]/tbar[0]/btn[11]").press
+    Sleep 3000
+
+RestoreOLE:
+    CoRegisterMessageFilter lPreviousFilter, 0&
+    If Err.Number <> 0 Then MsgBox "Error in RunGUIScript: " & Err.Description, vbCritical
+
+    objSess.FindById("wnd[0]/tbar[0]/btn[15]").press
+    objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
+End Sub
+
+Private Sub HandleSAPPopups(ByVal currentSession As Object)
+    Dim popupWindow As Object
+    On Error Resume Next
+    Set popupWindow = currentSession.FindById("wnd[1]", False)
+    If Not popupWindow Is Nothing Then popupWindow.sendVKey 0
+    Set popupWindow = Nothing
+End Sub
