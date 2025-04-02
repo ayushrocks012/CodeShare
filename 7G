@@ -201,9 +201,8 @@ Public Sub StartExtract() ' <-- Marked Public so it appears in Macro list
             Loop
 
             Debug.Print "Session overview popup (wnd[1]) found."
-            ' *** IMPORTANT: Verify this button ID using Scripting Tracker ***
-            ' Common IDs: "wnd[1]/tbar[0]/btn[8]", "wnd[1]/usr/btnGENER", "wnd[1]/tbar[0]/btn[0]"
-            Const GENERATE_BUTTON_ID As String = "wnd[1]/tbar[0]/btn[8]" ' <<< VERIFY THIS ID!
+            ' *** UPDATED Button ID based on user recording ***
+            Const GENERATE_BUTTON_ID As String = "wnd[1]/tbar[0]/btn[5]" ' <<< CORRECT ID based on user recording
             Debug.Print "Attempting to press Generate button: " & GENERATE_BUTTON_ID
             popupWnd.FindById(GENERATE_BUTTON_ID).press
             Debug.Print "Generate button pressed. Waiting for new session to appear..."
