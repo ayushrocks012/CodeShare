@@ -1,7 +1,7 @@
 ' //========================================================================
-' // Sub: RunGUIScript (DEBUG VERSION - Refined Polling Loop)
-' // Purpose: Executes MB51 steps, using a polling loop with error handling
-' //          immediately after sending the execute command.
+' // Sub: RunGUIScript (DEBUG VERSION - Polling Loop uses Status Bar & .Busy)
+' // Purpose: Executes MB51 steps, using a polling loop that checks both
+' //          status bar (with error handling) and objSess.Busy.
 ' //========================================================================
 Private Sub RunGUIScript() ' <-- Still Private
     ' --- Constants specific to RunGUIScript ---
@@ -34,10 +34,11 @@ Private Sub RunGUIScript() ' <-- Still Private
     Dim currentStatus As String
     Dim loopCounter As Long ' To prevent infinite loops in edge cases
     Dim oleErrorOccurred As Boolean ' Flag if OLE error happened during status read
+    Dim busyCounter As Integer ' Count consecutive times .Busy is false
 
     On Error GoTo GuiScriptError
     Debug.Print "--------------------------------------------------"
-    Debug.Print Format(Now, "hh:nn:ss") & " - RunGUIScript Started (Polling Version)."
+    Debug.Print Format(Now, "hh:nn:ss") & " - RunGUIScript Started (Polling+Busy Version)."
 
     ' --- Pre-checks ---
     If objSess Is Nothing Then Debug.Print Format(Now, "hh:nn:ss") & " - ERROR: objSess is Nothing.": MsgBox "SAP Session object (objSess) is not valid.", vbCritical, "Script Error": Exit Sub
@@ -88,29 +89,30 @@ Private Sub RunGUIScript() ' <-- Still Private
     Debug.Print Format(Now, "hh:nn:ss") & " - Sending Execute command (sendVKey 8)..."
     objSess.FindById("wnd[0]").sendVKey 8 ' 8 corresponds to F8 (Execute)
     Debug.Print Format(Now, "hh:nn:ss") & " - Execute command sent. Immediately starting polling loop."
-    Sleep 500 ' Short pause to allow status bar to potentially update initially
+    Sleep 500 ' Short pause
 
-    ' --- Step 6: REVISED - Polling Loop for Status Bar with Error Handling ---
-    Debug.Print Format(Now, "hh:nn:ss") & " - Entering REVISED Step 6 Polling Loop..."
+    ' --- Step 6: REVISED - Polling Loop for Status Bar AND Busy Flag ---
+    Debug.Print Format(Now, "hh:nn:ss") & " - Entering REVISED Step 6 Polling Loop (Status Bar & Busy Flag)..."
     startTime = Timer
     loopCounter = 0
+    busyCounter = 0 ' Initialize busy counter
     Do
         loopCounter = loopCounter + 1
-        oleErrorOccurred = False ' Reset flag for this iteration
+        oleErrorOccurred = False ' Reset flag
 
         ' --- Attempt to Read Status Bar ---
         Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Attempting to read Status Bar..."
-        On Error Resume Next ' *** Temporarily ignore errors during status bar read ***
+        On Error Resume Next ' Temporarily ignore errors
         currentStatus = Trim$(objSBar.Text)
         If Err.Number <> 0 Then
-            oleErrorOccurred = True ' Mark that an error occurred
+            oleErrorOccurred = True
             Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") OLE Error reading status bar! Error: " & Err.Description & " (" & Err.Number & ")"
-            Err.Clear ' Clear the error
+            Err.Clear
         End If
-        On Error GoTo GuiScriptError ' *** Restore main error handling ***
+        On Error GoTo GuiScriptError ' Restore main error handling
         Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Status Bar Read Attempt Finished. Text: '" & currentStatus & "'"
 
-        ' --- Check for Completion Message (only if read was successful) ---
+        ' --- Primary Exit Condition: Check for Completion Message ---
         If Not oleErrorOccurred Then
             If (Len(cSTATUS_MSG_COMPLETE_1) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_1, vbTextCompare) > 0) Or _
                (Len(cSTATUS_MSG_COMPLETE_2) > 0 And InStr(1, currentStatus, cSTATUS_MSG_COMPLETE_2, vbTextCompare) > 0) Or _
@@ -119,51 +121,78 @@ Private Sub RunGUIScript() ' <-- Still Private
                 Exit Do ' Exit loop, proceed to grid check
             Else
                  Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Status bar read OK, but not completion message."
-                 ' Optional: Check for known intermediate messages
-                 If InStr(1, currentStatus, cSTATUS_MSG_PROCESSING, vbTextCompare) > 0 Then
-                     Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Status: Still processing ('" & cSTATUS_MSG_PROCESSING & "')."
-                 End If
+                 ' Reset busy counter if status read was successful but not complete
+                 busyCounter = 0
             End If
+        Else
+             ' OLE Error occurred reading status bar, reset busy counter as we don't have reliable info
+             busyCounter = 0
         End If
 
+        ' --- Secondary Exit Condition: Check Busy Flag (if status bar fails/is empty) ---
+        Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Checking objSess.Busy..."
+        On Error Resume Next ' Also protect the .Busy check
+        Dim isBusy As Boolean
+        isBusy = objSess.Busy
+        If Err.Number <> 0 Then
+            Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") OLE Error reading objSess.Busy! Error: " & Err.Description & " (" & Err.Number & ")"
+            Err.Clear
+            busyCounter = 0 ' Reset counter on error
+            oleErrorOccurred = True ' Mark error occurred in this iteration for sleep logic
+        Else
+            On Error GoTo GuiScriptError ' Restore if successful
+            If Not isBusy Then
+                busyCounter = busyCounter + 1 ' Increment counter when .Busy is false
+                Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") objSess.Busy is False (Consecutive: " & busyCounter & ")."
+                ' Exit if .Busy has been false for a few consecutive checks (e.g., 3 times)
+                ' This acts as a fallback if status bar reading remains unreliable
+                If busyCounter >= 3 Then
+                    Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Exiting loop based on consecutive .Busy = False checks."
+                    Exit Do
+                End If
+            Else
+                Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") objSess.Busy is True."
+                busyCounter = 0 ' Reset counter if .Busy is true
+            End If
+        End If
+        On Error GoTo GuiScriptError ' Ensure error handling is restored
+
         ' --- Wait Logic ---
-        DoEvents ' Keep Excel responsive
+        DoEvents
         If oleErrorOccurred Then
             Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") OLE Error occurred, sleeping longer (5 seconds)..."
-            Sleep 5000 ' Wait longer if reading status bar failed, SAP might be very busy
+            Sleep 5000 ' Wait longer if reading status bar or busy flag failed
         Else
             Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Sleeping shorter (1 second)..."
-            Sleep 1000 ' Wait shorter if read was successful but not complete yet
+            Sleep 1000 ' Wait shorter if reads were successful but not complete yet
         End If
 
         ' --- Check Overall Timeout ---
         If Timer - startTime > cOVERALL_TIMEOUT_SECONDS Then
             Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6) OVERALL TIMEOUT REACHED!"
             MsgBox "The report generation timed out after " & cOVERALL_TIMEOUT_SECONDS & " seconds (Polling Loop).", vbCritical, "Timeout Error"
-            On Error Resume Next
-            objSess.FindById("wnd[0]/tbar[0]/btn[15]").press
-            Exit Sub
+            On Error Resume Next: objSess.FindById("wnd[0]/tbar[0]/btn[15]").press: Exit Sub
         End If
         Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 6 - Iter " & loopCounter & ") Looping..."
 
-    Loop ' Loop until completion message is found or timeout
+    Loop ' Loop until completion message is found, .Busy is false consecutively, or timeout
     Debug.Print Format(Now, "hh:nn:ss") & " - Exited Step 6 Polling Loop."
-    Sleep 500 ' Pause after loop before checking grid
+    Sleep 500
 
 
     ' --- Step 7: Wait for Grid Control (Final Confirmation) ---
-    ' Now that status bar indicated completion, double-check grid exists
+    ' Now that Step 6 loop exited, double-check grid exists before export
     Debug.Print Format(Now, "hh:nn:ss") & " - Entering Step 7 Grid Confirmation Loop (" & cGRID_ID & ")..."
     startTime = Timer
     Do
         Set gridObject = Nothing
-        On Error Resume Next ' Ignore error if grid not ready
+        On Error Resume Next
         Set gridObject = objSess.FindById(cGRID_ID)
-        On Error GoTo GuiScriptError ' Restore error handling
+        On Error GoTo GuiScriptError
 
         If Not gridObject Is Nothing Then
              Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 7) Grid object found. Proceeding."
-             Exit Do ' Grid found, proceed to export
+             Exit Do
         Else
              Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 7) Grid object not found yet."
         End If
@@ -179,7 +208,7 @@ Private Sub RunGUIScript() ' <-- Still Private
         Sleep 250
         If Timer - startTime > cGRID_WAIT_TIMEOUT_SECONDS Then
              Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 7) TIMEOUT waiting for grid object!"
-             MsgBox "Timeout (" & cGRID_WAIT_TIMEOUT_SECONDS & "s) waiting specifically for results grid object (" & cGRID_ID & ") after status bar indicated completion.", vbCritical, "Timeout Error"
+             MsgBox "Timeout (" & cGRID_WAIT_TIMEOUT_SECONDS & "s) waiting specifically for results grid object (" & cGRID_ID & ") after polling loop indicated completion.", vbCritical, "Timeout Error"
              On Error Resume Next: objSess.FindById("wnd[0]/tbar[0]/btn[15]").press: Exit Sub
         End If
         Debug.Print Format(Now, "hh:nn:ss") & "   (Loop 7) Looping..."
@@ -188,7 +217,7 @@ Private Sub RunGUIScript() ' <-- Still Private
 
 
     ' --- Step 8: Export Results to Excel ---
-    ' (Code remains the same as previous debug version)
+    ' (Code remains the same)
     Debug.Print Format(Now, "hh:nn:ss") & " - Proceeding with export..."
     success = False
     On Error Resume Next
