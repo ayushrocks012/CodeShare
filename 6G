@@ -735,7 +735,25 @@ RestoreFilterAndExit:
      Debug.Print "STEP 10: Normal Exit Cleanup..."
      If lPreviousFilter <> 0 Then On Error Resume Next: hResult = CoRegisterMessageFilter(lPreviousFilter, lMsgFilter): If hResult <> 0 Then Debug.Print "Warning: Failed RESTORE OLE Filter (Normal)." Else Debug.Print "OLE Filter restored (Normal).": lPreviousFilter = 0: On Error GoTo 0
      On Error Resume Next: Debug.Print "  - Navigating back in SAP..."
-     If Not objSess Is Nothing Then If objSess.ActiveWindow.Name = "wnd[0]" Then objSess.FindById("wnd[0]/tbar[0]/btn[15]").press: Sleep 100: If objSess.Info.TRANSACTION = UCase(cTRANSACTION) Then objSess.FindById("wnd[0]/tbar[0]/btn[3]").press ElseIf objSess.ActiveWindow.Name <> "wnd[0]" Then objSess.ActiveWindow.Close
+     ' --- CORRECTED Block If Structure for SAP Navigation ---
+     If Not objSess Is Nothing Then
+         If objSess.ActiveWindow.Name = "wnd[0]" Then
+             ' If in main window, try Exit (btn[15]) first
+             Debug.Print "    - Active window is wnd[0]. Pressing Exit (btn[15])..."
+             objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' Exit btn[15]
+             Sleep 100
+             ' If still in MB51 after Exit (e.g., if Exit just closed results), try Back (btn[3])
+             If objSess.Info.TRANSACTION = UCase(cTRANSACTION) Then
+                 Debug.Print "    - Still in " & cTRANSACTION & ". Pressing Back (btn[3])..."
+                 objSess.FindById("wnd[0]/tbar[0]/btn[3]").press ' Back btn[3]
+             End If
+         ElseIf objSess.ActiveWindow.Name <> "wnd[0]" Then ' Check if it's some other window (e.g., wnd[1])
+              ' If a popup or other window is somehow still active, try closing it
+              Debug.Print "    - Active window is not wnd[0] (" & objSess.ActiveWindow.Name & "). Attempting ActiveWindow.Close..."
+              objSess.ActiveWindow.Close
+         End If
+     End If
+     ' --- End CORRECTED Block If Structure ---
      Debug.Print "  - SAP navigation cleanup finished."
      On Error GoTo 0
      Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - RunGUIScript finished normally."
