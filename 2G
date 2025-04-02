@@ -23,7 +23,7 @@ Public objSess      As GuiSession     ' SAP GUI Session object (represents a spe
 Public objSBar      As GuiStatusbar   ' SAP GUI Statusbar object (for reading messages)
 
 ' //========================================================================
-' // Sub: StartMB51Extract
+' // Sub: StartExtract
 ' // Purpose: Main entry point for the user. This sub orchestrates the process:
 ' //          1. Checks for an existing usable session.
 ' //          2. If none, finds an existing connection to the target system.
@@ -31,7 +31,7 @@ Public objSBar      As GuiStatusbar   ' SAP GUI Statusbar object (for reading me
 ' //          4. If NO connection found, attempts SSO login.
 ' //          5. If session obtained, calls RunGUIScript to extract MB51.
 ' //========================================================================
-Public Sub StartMB51Extract() ' <-- This is the macro you run from Excel (Alt+F8)
+Public Sub StartExtract() ' <-- Renamed back, This is the macro you run from Excel (Alt+F8)
 
     ' --- CONFIGURATION CONSTANTS ---
     ' *** VITAL: Set ALL of these correctly for your environment ***
@@ -91,7 +91,7 @@ Public Sub StartMB51Extract() ' <-- This is the macro you run from Excel (Alt+F8
         GoTo Cleanup ' Exit gracefully
     End If
     Debug.Print "====================================================="
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Starting MB51 Extract Process..."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Starting Extract Process..." ' Updated comment
     Debug.Print "Target System (ID+Client for Find): " & cTARGET_SYSTEM_ID_CLIENT
     Debug.Print "Target System (Description for SSO Login): " & cTARGET_SYSTEM_DESCRIPTION
     Debug.Print "-----------------------------------------------------"
@@ -321,7 +321,7 @@ Public Sub StartMB51Extract() ' <-- This is the macro you run from Excel (Alt+F8
                  Next j
 
                  If NewSess Is Nothing Then
-                     Err.Raise vbObjectError + 521, "StartMB51Extract", "Could not identify the newly created session after using /o. Check SAP state."
+                     Err.Raise vbObjectError + 521, "StartExtract", "Could not identify the newly created session after using /o. Check SAP state." ' Updated source
                  End If
 
                  ' Successfully found the new session, set global objects
@@ -407,7 +407,7 @@ RunReportScript:
 Cleanup:
     ' Restore Excel settings and release local objects
     Debug.Print "-----------------------------------------------------"
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for StartMB51Extract..."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for StartExtract..." ' Updated comment
 
     ' Restore Excel environment
     Application.Calculation = xlCalculationAutomatic
@@ -436,13 +436,13 @@ Cleanup:
 '    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Global SAP objects released."
     ' --------------------------------------------------
 
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - StartMB51Extract finished."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - StartExtract finished." ' Updated comment
     Debug.Print "====================================================="
     Exit Sub ' Ensure normal exit
 
 ErrorHandler:
-    ' General error handler for session setup/creation/login phase in StartMB51Extract
-    MsgBox "An error occurred during SAP session setup, creation, or login (in StartMB51Extract):" & vbCrLf & vbCrLf & _
+    ' General error handler for session setup/creation/login phase in StartExtract
+    MsgBox "An error occurred during SAP session setup, creation, or login (in StartExtract):" & vbCrLf & vbCrLf & _
            "Error Number: " & Err.Number & vbCrLf & _
            "Description: " & Err.Description & vbCrLf & _
            "Source: " & Err.Source & vbCrLf & vbCrLf & _
@@ -676,7 +676,7 @@ SsoCleanup:
     Set TargetSess = Nothing
     Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting EstablishSsoConnection function (Result: " & EstablishSsoConnection & ")."
     ' Note: Global objects (objGui, objConn, objSess, objSBar) are intentionally *not* cleared here.
-    ' They are set by the function on success and needed by the calling procedure (StartMB51Extract).
+    ' They are set by the function on success and needed by the calling procedure (StartExtract).
 End Function
 
 
@@ -686,7 +686,7 @@ End Function
 ' //          executes, waits for results, handles popups, exports data.
 ' //          Relies on global objSess and objSBar being set correctly before being called.
 ' //========================================================================
-Private Sub RunGUIScript() ' <-- Remains Private, called only by StartMB51Extract
+Private Sub RunGUIScript() ' <-- Remains Private, called only by StartExtract
 
     ' --- Constants specific to MB51 Execution ---
      Const cTRANSACTION As String = "mb51"                                    ' Target Transaction Code
@@ -728,7 +728,7 @@ Private Sub RunGUIScript() ' <-- Remains Private, called only by StartMB51Extrac
 
     ' --- Pre-checks: Ensure global SAP objects are valid ---
     If objSess Is Nothing Then
-        ' This should not happen if StartMB51Extract worked correctly
+        ' This should not happen if StartExtract worked correctly
         Err.Raise vbObjectError + 510, "RunGUIScript", "SAP Session object (objSess) is not valid at the start of RunGUIScript."
     End If
     ' Try to ensure status bar object is available
@@ -1104,7 +1104,7 @@ FinalCleanup:
     Application.ScreenUpdating = True
     On Error GoTo 0 ' Ensure error handling is off
     Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript."
-    ' Return control to StartMB51Extract
+    ' Return control to StartExtract
 End Sub
 
 
