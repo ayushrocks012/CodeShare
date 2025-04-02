@@ -71,7 +71,7 @@ Public Sub StartExtract() ' <-- Marked Public so it appears in Macro list
     If Not objSess Is Nothing Then
         On Error Resume Next ' Check if session object is still valid
         If objSess.Info.SystemName & objSess.Info.Client = cTARGET_SYSTEM Then
-            currentTransaction = objSess.Info.Transaction ' Check if session responds
+            currentTransaction = objSess.Info.TRANSACTION ' Check if session responds
             If Err.Number = 0 Then
                 ' Session is valid and for the correct system
                 On Error GoTo ErrorHandler ' Restore normal error handling
@@ -145,7 +145,7 @@ Public Sub StartExtract() ' <-- Marked Public so it appears in Macro list
             If FirstFoundSess Is Nothing Then Set FirstFoundSess = W_Sess
 
             ' Check if the session is idle (at main menu)
-             Select Case W_Sess.Info.Transaction
+             Select Case W_Sess.Info.TRANSACTION
                 Case "SESSION_MANAGER", "SMEN", "S000" ' Common idle transaction codes
                     Set objSess = W_Sess ' Set global session
                     Set objSBar = objSess.FindById("wnd[0]/sbar") ' Set global status bar
@@ -328,7 +328,7 @@ Private Sub RunGUIScript() ' <-- Changed from Public to Private
      Const cDATE_LOW As String = "01.03.2025"                                  ' <<< ADJUST: Start Date (DD.MM.YYYY format expected by code)
      Const cDATE_HIGH As String = "31.03.2025"                                 ' <<< ADJUST: End Date (DD.MM.YYYY format expected by code)
      Const cLAYOUT As String = "AYUSH_TRY"                                     ' <<< ADJUST: Your ALV Layout Variant (leave "" for default/no layout)
-     Const cDOWNLOAD_PATH As String = "Z:\Demand\Demand Review\2025\03 Mar 25\SAP H2H Report" ' <<< ADJUST: Ensure this folder exists and is writable
+     Const cDOWNLOAD_PATH As String = "Z:\Demand\Demand Review\SAP H2H Report" ' <<< ADJUST: Ensure this folder exists and is writable
      Const cFILENAME_PREFIX As String = "MB51 Report"
      Const cFILENAME_EXTENSION As String = ".XLSX"                             ' Ensure extension matches download format (&XXL -> XLSX typically)
      Const cREPORT_EXEC_TIMEOUT_SECONDS As Long = 900                          ' <<< ADJUST IF NEEDED: Timeout for main report execution check (e.g., 900s = 15 min) - KEEP THIS
@@ -388,7 +388,7 @@ Private Sub RunGUIScript() ' <-- Changed from Public to Private
     ' Check if already in transaction (e.g., if reusing an idle session, or if /o left us somewhere else)
      ' Ensure we are in the main window before changing transaction
     If objSess.ActiveWindow.Name <> "wnd[0]" Then objSess.ActiveWindow.Close ' Close unexpected windows first
-    If objSess.Info.Transaction <> UCase(cTRANSACTION) Then
+    If objSess.Info.TRANSACTION <> UCase(cTRANSACTION) Then
         ' *** CORRECTED LINE: Use /n before transaction code ***
         objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION ' Use /n to ensure it works from any screen
         objSess.FindById("wnd[0]").sendVKey 0
@@ -608,7 +608,7 @@ RestoreFilterAndExit:
         If objSess.ActiveWindow.Name = "wnd[0]" Then
             objSess.FindById("wnd[0]/tbar[0]/btn[15]").press
             Sleep 100
-            If objSess.Info.Transaction = "MB51" Then objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
+            If objSess.Info.TRANSACTION = "MB51" Then objSess.FindById("wnd[0]/tbar[0]/btn[3]").press
         ElseIf objSess.ActiveWindow.Name = "wnd[1]" Or objSess.ActiveWindow.Name = "wnd[2]" Then
              objSess.FindById("wnd[0]/tbar[0]/btn[12]").press
         End If
