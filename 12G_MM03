@@ -811,7 +811,7 @@ Private Sub RunGUIScript()
     Dim userArea As Object ' User area within the info popup (GuiUserArea)
     Dim objExcelApp As Object ' Excel Application object
     Dim dataOutputArray() As Variant ' Array to hold results for faster writing
-    Dim materialInputArray() As Variant ' *** NEW: Array to hold input materials ***
+    Dim materialInputArray() As Variant ' Array to hold input materials
     Dim outputRow As Long ' Row index for the output array (same as input array index)
     Dim totalMaterials As Long ' Total number of materials to process
     Dim currentMaterialNum As Long ' Counter for status bar
@@ -824,6 +824,7 @@ Private Sub RunGUIScript()
     Dim infoAreaErr As Long ' Error code when accessing Info popup user area
     Dim dataFieldErr As Long ' Error code when reading data fields
     Dim busyChecks As Integer ' Counter for busy check loop
+    Dim sessionReady As Boolean ' Flag to track if session became ready after busy check
 
     On Error GoTo MM03ErrorHandler ' Set error handler for this subroutine
 
@@ -886,8 +887,29 @@ Private Sub RunGUIScript()
     Debug.Print "  - Navigating to transaction '" & cTRANSACTION & "'..."
     Application.StatusBar = "Navigating to MM03..." ' Update status
 
-    ' Check if session is busy before interacting
-    If WaitForSessionReady(objSess, cMAX_BUSY_CHECKS, cBUSY_WAIT_MS) = False Then GoTo MM03Cleanup
+    ' --- Inlined Busy Check ---
+    sessionReady = True ' Assume ready
+    busyChecks = 0
+    On Error Resume Next ' Ignore error if session object is invalid during check
+    Do While objSess.Busy
+        busyChecks = busyChecks + 1
+        If busyChecks > cMAX_BUSY_CHECKS Then
+            Debug.Print "  - TIMEOUT: Session remained busy before navigating to " & cTRANSACTION & "."
+            MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
+            sessionReady = False ' Indicate timeout
+            Exit Do
+        End If
+        Sleep cBUSY_WAIT_MS
+        DoEvents ' Allow other processes
+    Loop
+    If Err.Number <> 0 Then
+         Debug.Print "  - ERROR: Error checking session busy status before navigating to " & cTRANSACTION & " (Err: " & Err.Number & "). Assuming not ready."
+         sessionReady = False ' Indicate error
+         Err.Clear
+    End If
+    On Error GoTo MM03ErrorHandler ' Restore default error handling
+    If Not sessionReady Then GoTo MM03Cleanup ' Exit if session wasn't ready
+    ' --- End Inlined Busy Check ---
 
     If objSess.Info.Transaction <> UCase(cTRANSACTION) Then
         objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION
@@ -904,7 +926,30 @@ Private Sub RunGUIScript()
     End If
 
     ' --- Verify Navigation to MM03 Initial Screen ---
-    If WaitForSessionReady(objSess, cMAX_BUSY_CHECKS, cBUSY_WAIT_MS) = False Then GoTo MM03Cleanup
+    ' --- Inlined Busy Check ---
+    sessionReady = True ' Assume ready
+    busyChecks = 0
+    On Error Resume Next ' Ignore error if session object is invalid during check
+    Do While objSess.Busy
+        busyChecks = busyChecks + 1
+        If busyChecks > cMAX_BUSY_CHECKS Then
+            Debug.Print "  - TIMEOUT: Session remained busy after navigating to " & cTRANSACTION & "."
+            MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
+            sessionReady = False ' Indicate timeout
+            Exit Do
+        End If
+        Sleep cBUSY_WAIT_MS
+        DoEvents ' Allow other processes
+    Loop
+    If Err.Number <> 0 Then
+         Debug.Print "  - ERROR: Error checking session busy status after navigating to " & cTRANSACTION & " (Err: " & Err.Number & "). Assuming not ready."
+         sessionReady = False ' Indicate error
+         Err.Clear
+    End If
+    On Error GoTo MM03ErrorHandler ' Restore default error handling
+    If Not sessionReady Then GoTo MM03Cleanup ' Exit if session wasn't ready
+    ' --- End Inlined Busy Check ---
+
     On Error Resume Next
     Set mm03FieldCheck = objSess.FindById(cMATNR_FIELD_ID)
     If Err.Number <> 0 Or mm03FieldCheck Is Nothing Then
@@ -959,13 +1004,59 @@ Private Sub RunGUIScript()
 
         ' --- Step 2: Enter Material and Press Enter ---
         Debug.Print "  - Entering Material Number and pressing Enter..."
-        If WaitForSessionReady(objSess, cMAX_BUSY_CHECKS, cBUSY_WAIT_MS) = False Then GoTo MM03Cleanup
+        ' --- Inlined Busy Check ---
+        sessionReady = True ' Assume ready
+        busyChecks = 0
+        On Error Resume Next ' Ignore error if session object is invalid during check
+        Do While objSess.Busy
+            busyChecks = busyChecks + 1
+            If busyChecks > cMAX_BUSY_CHECKS Then
+                Debug.Print "  - TIMEOUT: Session remained busy before entering material " & materialNumber & "."
+                MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
+                sessionReady = False ' Indicate timeout
+                Exit Do
+            End If
+            Sleep cBUSY_WAIT_MS
+            DoEvents ' Allow other processes
+        Loop
+         If Err.Number <> 0 Then
+             Debug.Print "  - ERROR: Error checking session busy status before entering material " & materialNumber & " (Err: " & Err.Number & "). Assuming not ready."
+             sessionReady = False ' Indicate error
+             Err.Clear
+        End If
+        On Error GoTo MM03ErrorHandler ' Restore default error handling
+        If Not sessionReady Then GoTo MM03Cleanup ' Exit if session wasn't ready
+        ' --- End Inlined Busy Check ---
+
         objSess.FindById(cMATNR_FIELD_ID).Text = materialNumber
         objSess.FindById("wnd[0]").sendVKey 0
         Sleep cSAP_MEDIUM_WAIT_MS ' Wait for potential popup or status message
 
         ' --- Step 3: Check for Status Bar Message (e.g., Material Not Found) ---
-        If WaitForSessionReady(objSess, cMAX_BUSY_CHECKS, cBUSY_WAIT_MS) = False Then GoTo MM03Cleanup
+        ' --- Inlined Busy Check ---
+        sessionReady = True ' Assume ready
+        busyChecks = 0
+        On Error Resume Next ' Ignore error if session object is invalid during check
+        Do While objSess.Busy
+            busyChecks = busyChecks + 1
+            If busyChecks > cMAX_BUSY_CHECKS Then
+                Debug.Print "  - TIMEOUT: Session remained busy after entering material " & materialNumber & "."
+                MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
+                sessionReady = False ' Indicate timeout
+                Exit Do
+            End If
+            Sleep cBUSY_WAIT_MS
+            DoEvents ' Allow other processes
+        Loop
+         If Err.Number <> 0 Then
+             Debug.Print "  - ERROR: Error checking session busy status after entering material " & materialNumber & " (Err: " & Err.Number & "). Assuming not ready."
+             sessionReady = False ' Indicate error
+             Err.Clear
+        End If
+        On Error GoTo MM03ErrorHandler ' Restore default error handling
+        If Not sessionReady Then GoTo MM03Cleanup ' Exit if session wasn't ready
+        ' --- End Inlined Busy Check ---
+
         If Not objSBar Is Nothing Then
             statusMessage = Trim$(objSBar.Text)
             If statusMessage <> "" Then
@@ -1065,7 +1156,29 @@ Private Sub RunGUIScript()
 
         ' --- Step 5: Extract Data from Basic Data 1 View ---
         Debug.Print "  - Attempting to extract data from Basic Data 1 view..."
-        If WaitForSessionReady(objSess, cMAX_BUSY_CHECKS, cBUSY_WAIT_MS) = False Then GoTo MM03Cleanup
+        ' --- Inlined Busy Check ---
+        sessionReady = True ' Assume ready
+        busyChecks = 0
+        On Error Resume Next ' Ignore error if session object is invalid during check
+        Do While objSess.Busy
+            busyChecks = busyChecks + 1
+            If busyChecks > cMAX_BUSY_CHECKS Then
+                Debug.Print "  - TIMEOUT: Session remained busy before extracting data for " & materialNumber & "."
+                MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
+                sessionReady = False ' Indicate timeout
+                Exit Do
+            End If
+            Sleep cBUSY_WAIT_MS
+            DoEvents ' Allow other processes
+        Loop
+         If Err.Number <> 0 Then
+             Debug.Print "  - ERROR: Error checking session busy status before extracting data for " & materialNumber & " (Err: " & Err.Number & "). Assuming not ready."
+             sessionReady = False ' Indicate error
+             Err.Clear
+        End If
+        On Error GoTo MM03ErrorHandler ' Restore default error handling
+        If Not sessionReady Then GoTo MM03Cleanup ' Exit if session wasn't ready
+        ' --- End Inlined Busy Check ---
 
         ' Extract Product Hierarchy
         On Error Resume Next ' Handle error specifically for this field
@@ -1183,7 +1296,30 @@ StoreDataInArray:
 
         ' --- Step 8: Navigate Back for Next Material ---
         Debug.Print "  - Pressing Back to return to initial MM03 screen..."
-        If WaitForSessionReady(objSess, cMAX_BUSY_CHECKS, cBUSY_WAIT_MS) = False Then GoTo MM03Cleanup
+        ' --- Inlined Busy Check ---
+        sessionReady = True ' Assume ready
+        busyChecks = 0
+        On Error Resume Next ' Ignore error if session object is invalid during check
+        Do While objSess.Busy
+            busyChecks = busyChecks + 1
+            If busyChecks > cMAX_BUSY_CHECKS Then
+                Debug.Print "  - TIMEOUT: Session remained busy before navigating back from " & materialNumber & "."
+                MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
+                sessionReady = False ' Indicate timeout
+                Exit Do
+            End If
+            Sleep cBUSY_WAIT_MS
+            DoEvents ' Allow other processes
+        Loop
+         If Err.Number <> 0 Then
+             Debug.Print "  - ERROR: Error checking session busy status before navigating back from " & materialNumber & " (Err: " & Err.Number & "). Assuming not ready."
+             sessionReady = False ' Indicate error
+             Err.Clear
+        End If
+        On Error GoTo MM03ErrorHandler ' Restore default error handling
+        If Not sessionReady Then GoTo MM03Cleanup ' Exit if session wasn't ready
+        ' --- End Inlined Busy Check ---
+
         On Error Resume Next ' Ignore error if already back or button not found
         objSess.FindById(cMAIN_BACK_BTN_ID).press
         If Err.Number <> 0 Then Debug.Print "    - Info: Could not press main Back button (already back?).": Err.Clear
@@ -1213,7 +1349,30 @@ NextIteration: ' Label to jump to for skipping a material
     ' --- Final Navigation Back (Optional) ---
     ' Go back one more time from the initial MM03 screen if desired
     Debug.Print "  - Pressing Back one last time from MM03 initial screen..."
-    If WaitForSessionReady(objSess, cMAX_BUSY_CHECKS, cBUSY_WAIT_MS) = False Then GoTo MM03Cleanup
+    ' --- Inlined Busy Check ---
+    sessionReady = True ' Assume ready
+    busyChecks = 0
+    On Error Resume Next ' Ignore error if session object is invalid during check
+    Do While objSess.Busy
+        busyChecks = busyChecks + 1
+        If busyChecks > cMAX_BUSY_CHECKS Then
+            Debug.Print "  - TIMEOUT: Session remained busy before final Back press."
+            MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
+            sessionReady = False ' Indicate timeout
+            Exit Do
+        End If
+        Sleep cBUSY_WAIT_MS
+        DoEvents ' Allow other processes
+    Loop
+     If Err.Number <> 0 Then
+         Debug.Print "  - ERROR: Error checking session busy status before final Back press (Err: " & Err.Number & "). Assuming not ready."
+         sessionReady = False ' Indicate error
+         Err.Clear
+    End If
+    On Error GoTo MM03ErrorHandler ' Restore default error handling
+    If Not sessionReady Then GoTo MM03Cleanup ' Exit if session wasn't ready
+    ' --- End Inlined Busy Check ---
+
     On Error Resume Next ' Ignore error if already back at main menu
     objSess.FindById(cMAIN_BACK_BTN_ID).press
     If Err.Number <> 0 Then Debug.Print "    - Info: Could not press final Back button (already back?).": Err.Clear
@@ -1281,35 +1440,3 @@ MM03ErrorHandler:
     Resume MM03Cleanup ' Go to cleanup section after handling error
 
 End Sub
-
-
-' //========================================================================
-' // Function: WaitForSessionReady (Helper Function - Private to this Module)
-' // Purpose: Waits briefly if the SAP session is busy.
-' // Returns: True if session became ready, False if timeout reached.
-' //========================================================================
-Private Function WaitForSessionReady(ByVal session As GuiSession, ByVal MaxChecks As Integer, ByVal WaitMs As Long) As Boolean
-    Dim checks As Integer
-    WaitForSessionReady = True ' Assume ready initially
-    On Error Resume Next ' Ignore error if session object is invalid
-
-    Do While session.Busy
-        checks = checks + 1
-        If checks > MaxChecks Then
-            Debug.Print "  - TIMEOUT: Session remained busy after " & MaxChecks * WaitMs & "ms."
-            MsgBox "SAP session remained busy. Please check the SAP GUI.", vbExclamation
-            WaitForSessionReady = False ' Indicate timeout
-            Exit Do
-        End If
-        Sleep WaitMs
-        DoEvents ' Allow other processes
-    Loop
-
-    If Err.Number <> 0 Then
-         Debug.Print "  - ERROR: Error checking session busy status (Err: " & Err.Number & "). Assuming not ready."
-         WaitForSessionReady = False ' Indicate error
-         Err.Clear
-    End If
-    On Error GoTo 0 ' Restore default error handling
-
-End Function
