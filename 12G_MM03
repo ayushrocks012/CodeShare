@@ -680,7 +680,7 @@ NextAttemptWait:
             If Not objSess.Busy Then
                 If checkTCodeFlag Then
                     On Error Resume Next ' Ignore error if Info not ready yet
-                    currentTransaction = objSess.Info.Transaction
+                    currentTransaction = objSess.Info.Transaction ' Assign to local variable
                     If Err.Number = 0 And currentTransaction <> "" And UCase(currentTransaction) <> "SAPMSYST" Then
                         waitReady = True ' Session not busy AND transaction is valid
                     Else
@@ -700,7 +700,7 @@ NextAttemptWait:
             MsgBox "Timeout or error waiting for SAP main menu after SSO login.", vbCritical
             GoTo Cleanup
         End If
-        Debug.Print "        - Session active. TCode: '" & objSess.Info.Transaction & "'"
+        Debug.Print "        - Session active. TCode: '" & objSess.Info.Transaction & "'" ' Read TCode again after loop for debug msg
         ' End Inline Wait
 
         ' Step 4.3.5: Get Status Bar for the new session
@@ -930,6 +930,7 @@ Private Sub RunGUIScript()
     Dim popup As GuiModalWindow     ' Reusable variable for popup checks
     Dim popupFound As Boolean       ' Reusable flag for popup checks
     Dim tempErrorMsg As String      ' Temp variable for popup message handling
+    Dim currentTransaction As String ' *** ADDED: Variable for checking transaction code ***
 
     On Error GoTo MM03ErrorHandler ' Set error handler
 
@@ -1000,7 +1001,7 @@ Private Sub RunGUIScript()
             If Not objSess.Busy Then
                 If checkTCodeFlag Then
                     On Error Resume Next
-                    currentTransaction = objSess.Info.Transaction
+                    currentTransaction = objSess.Info.Transaction ' *** Assign to locally declared var ***
                     If Err.Number = 0 And currentTransaction <> "" And UCase(currentTransaction) <> "SAPMSYST" Then waitReady = True Else Err.Clear
                     On Error GoTo MM03WaitError
                 Else waitReady = True
