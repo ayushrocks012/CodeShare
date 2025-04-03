@@ -17,11 +17,11 @@ Public objSess      As GuiSession
 Public objSBar      As GuiStatusbar ' Optional: To read status bar messages
 
 ' //========================================================================
-' // Sub: StartExtract_MM03
+' // Sub: StartExtract
 ' // Purpose: Main entry point. Handles all SAP connection/session logic.
-' //          Calls RunGUIScript_MM03 to perform the actual MM03 task.
+' //          Calls RunGUIScript to perform the actual MM03 task.
 ' //========================================================================
-Public Sub StartExtract_MM03()
+Public Sub StartExtract()
 
     ' --- CONFIGURATION CONSTANTS (Same as MB51 script) ---
     ' Adjust these values for your specific SAP system
@@ -60,7 +60,7 @@ Public Sub StartExtract_MM03()
 
     ' --- Mark Start of Execution & Initialize ---
     Debug.Print vbCrLf & "====================================================="
-    Debug.Print "   *** NEW RUN START: StartExtract_MM03 *** (" & Format(Now, "yyyy-mm-dd hh:nn:ss") & ")"
+    Debug.Print "   *** NEW RUN START: StartExtract *** (" & Format(Now, "yyyy-mm-dd hh:nn:ss") & ")"
     Debug.Print "====================================================="
 
     On Error GoTo ErrorHandler ' Set main error handler
@@ -99,7 +99,7 @@ Public Sub StartExtract_MM03()
         Dim tempSysName As String, tempClient As String, tempTCode As String
         tempSysName = objSess.Info.SystemName
         tempClient = objSess.Info.Client
-        tempTCode = objSess.Info.TRANSACTION ' Check if session responds by getting T-code
+        tempTCode = objSess.Info.Transaction ' Check if session responds by getting T-code
         Dim sessInfoErr As Long: sessInfoErr = Err.Number ' Capture potential error
         Err.Clear ' Clear error flag
         On Error GoTo ErrorHandler ' Restore main error handler
@@ -270,7 +270,7 @@ NextConnection: ' Label for GoTo from error handling within loop
                 Debug.Print "      - Checking Session Index " & j & " (ID: " & W_Sess.Info.SessionNumber & ")"
                 If FirstFoundSess Is Nothing Then Set FirstFoundSess = W_Sess ' Store first valid one found, just in case we need it for /o
                 On Error Resume Next ' Check transaction code, ignore error if session is busy/closing
-                Dim idleCheckTCode As String: idleCheckTCode = W_Sess.Info.TRANSACTION
+                Dim idleCheckTCode As String: idleCheckTCode = W_Sess.Info.Transaction
                 Dim idleErr As Long: idleErr = Err.Number
                 Err.Clear
                 On Error GoTo ErrorHandler
@@ -410,7 +410,7 @@ NextIdleCheck: ' Label for GoTo within loop
                  Do ' Start loop to check for session count increase
                     attempts = attempts + 1
                     ' Re-evaluate connection children count
-                    If objConn Is Nothing Then Err.Raise vbObjectError + 520, "StartExtract_MM03", "Connection object lost before finding new session."
+                    If objConn Is Nothing Then Err.Raise vbObjectError + 520, "StartExtract", "Connection object lost before finding new session."
 
                     On Error Resume Next ' Handle potential errors refreshing count (e.g., connection dropped)
                     Session_Nr_All_After = objConn.Children.Count
@@ -469,7 +469,7 @@ NextFindLoopSess: ' Label for GoTo within inner loop
 
                     ' Check if timeout reached
                     If attempts >= cSESSION_CHECK_ATTEMPTS Then
-                        Err.Raise vbObjectError + 521, "StartExtract_MM03", "Timeout (" & cSESSION_CHECK_ATTEMPTS * cSESSION_CHECK_INTERVAL_MS & "ms) waiting for session count to increase after /o command."
+                        Err.Raise vbObjectError + 521, "StartExtract", "Timeout (" & cSESSION_CHECK_ATTEMPTS * cSESSION_CHECK_INTERVAL_MS & "ms) waiting for session count to increase after /o command."
                     End If
 NextAttemptWait: ' Label for GoTo from error handling within loop
                     Sleep cSESSION_CHECK_INTERVAL_MS ' Wait before next check
@@ -478,7 +478,7 @@ NextAttemptWait: ' Label for GoTo from error handling within loop
                  ' Final check after loop exit
                  If NewSess Is Nothing Then
                      ' Should not happen if loop timed out correctly, but check defensively
-                     Err.Raise vbObjectError + 522, "StartExtract_MM03", "Could not identify new session object after /o, even after session count check loop."
+                     Err.Raise vbObjectError + 522, "StartExtract", "Could not identify new session object after /o, even after session count check loop."
                  End If
 
                  ' Successfully found the new session
@@ -575,7 +575,7 @@ NextAttemptWait: ' Label for GoTo from error handling within loop
         startTime = Timer
         Do
             On Error Resume Next ' Check transaction, ignore errors if session not fully ready
-            currentTransaction = objSess.Info.TRANSACTION
+            currentTransaction = objSess.Info.Transaction
             Dim sessReadyErr As Long: sessReadyErr = Err.Number: Err.Clear
             On Error GoTo SsoLoginErrorHandler
             If sessReadyErr = 0 Then
@@ -643,12 +643,12 @@ RunMM03Script:
     ' Proceed only if a session was successfully obtained
     If SessionObtained And Not objSess Is Nothing Then
         Debug.Print "-----------------------------------------------------"
-        Debug.Print "STEP 5: Session ready. Calling RunGUIScript_MM03..."
+        Debug.Print "STEP 5: Session ready. Calling RunGUIScript..."
         Debug.Print "  - Session ID: " & objSess.Info.SessionNumber
         Debug.Print "  - System/Client: " & objSess.Info.SystemName & "/" & objSess.Info.Client
         Debug.Print "  - User: " & objSess.Info.User
         Debug.Print "-----------------------------------------------------"
-        RunGUIScript_MM03 ' <<<<<< CALL THE MM03 SPECIFIC SUBROUTINE >>>>>>
+        RunGUIScript ' <<<<<< CALL THE MM03 SPECIFIC SUBROUTINE >>>>>>
     Else
         ' Should not happen if logic above is correct
         Debug.Print "INTERNAL ERROR: Reached RunMM03Script label but SessionObtained=" & SessionObtained & " or objSess is Nothing."
@@ -660,7 +660,7 @@ Cleanup:
     ' --- Cleanup Section ---
     ' Restore Excel settings, release object variables
     Debug.Print "-----------------------------------------------------"
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for StartExtract_MM03..."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for StartExtract..."
 
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
@@ -688,7 +688,7 @@ Cleanup:
      On Error GoTo 0 ' Restore default error handling
      Debug.Print "  - Global SAP objects released."
 
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - StartExtract_MM03 finished."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - StartExtract finished."
     Debug.Print "=====================================================" & vbCrLf
     Exit Sub ' End of the Sub
 
@@ -698,7 +698,7 @@ ErrorHandler: ' General error handler
     Dim errDesc As String: errDesc = Err.Description
     Dim errSource As String: errSource = Err.Source
     Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - ERROR ENCOUNTERED in StartExtract_MM03 (General Handler)!"
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - ERROR ENCOUNTERED in StartExtract (General Handler)!"
     Debug.Print "    Error #: " & errNum: Debug.Print "    Source:  " & errSource: Debug.Print "    Desc:    " & errDesc
     Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     MsgBox "Error during SAP session setup/creation:" & vbCrLf & vbCrLf & _
@@ -724,11 +724,11 @@ End Sub
 
 
 ' //========================================================================
-' // Sub: RunGUIScript_MM03
+' // Sub: RunGUIScript
 ' // Purpose: Executes MM03 steps to extract material data.
-' //          Called only by StartExtract_MM03. Declared Private.
+' //          Called only by StartExtract. Declared Private.
 ' //========================================================================
-Private Sub RunGUIScript_MM03()
+Private Sub RunGUIScript()
 
     ' --- Constants specific to MM03 Execution ---
     Const cTRANSACTION As String = "mm03" ' Transaction code
@@ -786,8 +786,8 @@ Private Sub RunGUIScript_MM03()
     On Error GoTo MM03ErrorHandler ' Set error handler for this subroutine
 
     ' --- Pre-checks ---
-    Debug.Print "Entering RunGUIScript_MM03..."
-    If objSess Is Nothing Then Err.Raise vbObjectError + 510, "RunGUIScript_MM03", "objSess is not valid."
+    Debug.Print "Entering RunGUIScript..."
+    If objSess Is Nothing Then Err.Raise vbObjectError + 510, "RunGUIScript", "objSess is not valid."
     ' Try to get status bar if not already set
     If objSBar Is Nothing Then
         On Error Resume Next
@@ -848,7 +848,7 @@ Private Sub RunGUIScript_MM03()
     If Err.Number <> 0 Or mm03FieldCheck Is Nothing Then
         Err.Clear
         On Error GoTo MM03ErrorHandler
-        Err.Raise vbObjectError + 511, "RunGUIScript_MM03", "Failed to navigate to " & cTRANSACTION & " initial screen. Expected field '" & cMATNR_FIELD_ID & "' not found."
+        Err.Raise vbObjectError + 511, "RunGUIScript", "Failed to navigate to " & cTRANSACTION & " initial screen. Expected field '" & cMATNR_FIELD_ID & "' not found."
     Else
         Debug.Print "  - Successfully navigated to MM03 initial screen."
     End If
@@ -1102,7 +1102,7 @@ NextIteration: ' Label to jump to for skipping a row
     ' Define the top-left cell of the output range (Status column, starting row)
     Set outputRange = ws.Range(cSTATUS_MSG_COL & cSTART_ROW)
     ' Resize the range to match the array dimensions and write the data
-    outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).Value = dataOutputArray
+    outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).value = dataOutputArray
     Debug.Print "  - Data array written to worksheet starting at cell " & outputRange.Address & "."
     Set outputRange = Nothing
 
@@ -1116,7 +1116,7 @@ NextIteration: ' Label to jump to for skipping a row
 
 MM03Cleanup:
     ' --- Cleanup for this Subroutine ---
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for RunGUIScript_MM03..."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for RunGUIScript..."
     Application.StatusBar = False ' *** Reset status bar on exit ***
     ' Release local objects
     Set ws = Nothing
@@ -1128,7 +1128,7 @@ MM03Cleanup:
     Set userArea = Nothing
     Set child = Nothing
     Erase dataOutputArray ' Clear the array memory
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript_MM03."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript."
     Exit Sub ' Normal exit
 
 MM03ErrorHandler:
@@ -1136,7 +1136,7 @@ MM03ErrorHandler:
     Dim errNumRun As Long: errNumRun = Err.Number
     Dim errDescRun As String: errDescRun = Err.Description
     Dim errSourceRun As String: errSourceRun = Err.Source
-    Debug.Print "!!!!!!!!!!!!!!!!!!! ERROR in RunGUIScript_MM03 !!!!!!!!!!!!!!!!!!!"
+    Debug.Print "!!!!!!!!!!!!!!!!!!! ERROR in RunGUIScript !!!!!!!!!!!!!!!!!!!"
     Debug.Print "  Err #: " & errNumRun: Debug.Print "  Source: " & errSourceRun: Debug.Print "  Desc: " & errDescRun
     If i > 0 Then Debug.Print "  Processing Row: " & i & ", Material: '" & materialNumber & "'" ' Add context
     Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
