@@ -418,13 +418,18 @@ NextIdleCheck:
                         Debug.Print "        - Attempting to press Generate button (" & GENERATE_BUTTON_ID & ")..."
                         On Error Resume Next
                         popupWnd.FindById(GENERATE_BUTTON_ID).press
-                        If Err.Number <> 0 Then
+                        If Err.Number <> 0 Then ' Check if FindById/press failed
                             Debug.Print "          - Generate button press failed (Error: " & Err.Description & "). Trying Enter (VKey 0)...": Err.Clear
                             popupWnd.sendVKey 0
-                            If Err.Number <> 0 Then Debug.Print "          - Enter (VKey 0) also failed (Error: " & Err.Description & ").": Err.Clear
-                            Else Debug.Print "          - Enter (VKey 0) sent successfully."
-                        Else Debug.Print "          - Generate button pressed successfully."
-                        On Error GoTo ErrorHandler
+                            If Err.Number <> 0 Then ' Check if sendVKey failed
+                                Debug.Print "          - Enter (VKey 0) also failed (Error: " & Err.Description & ").": Err.Clear
+                            Else ' Corresponds to INNER If
+                                Debug.Print "          - Enter (VKey 0) sent successfully."
+                            End If ' *** CORRECTED: Added End If for INNER If ***
+                        Else ' Corresponds to OUTER If
+                            Debug.Print "          - Generate button pressed successfully."
+                        End If ' *** CORRECTED: Added End If for OUTER If ***
+                        On Error GoTo ErrorHandler ' Restore handler AFTER the If block
                         Debug.Print "        - Waiting after handling popup for session to initialize..."
                         ' Inline WaitForSessionReady(objSess, cDEFAULT_TIMEOUT_SEC)
                         waitTimeout = cDEFAULT_TIMEOUT_SEC: waitStartTime = Timer: waitReady = False
