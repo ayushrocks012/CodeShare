@@ -1032,7 +1032,8 @@ Private Sub RunGUIScript_MM03()
         Sleep cSAP_MEDIUM_WAIT_MS ' Wait before processing next material
 
 NextIteration: ' Label to jump to for skipping a row
-    Loop ' End of the main For loop processing rows
+    ' *** CORRECTED: Changed 'Loop' to 'Next i' ***
+    Next i ' End of the main For loop processing rows
 
     Debug.Print "-----------------------------------------------------"
     Debug.Print "STEP 9: Finished processing all rows."
