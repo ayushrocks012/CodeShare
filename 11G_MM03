@@ -68,6 +68,7 @@ Public Sub StartExtract_MM03()
     ' --- Prepare Excel Environment ---
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
+    Application.StatusBar = "Connecting to SAP..." ' Initial status
 
     ' --- Initialize Flags and Objects ---
     SessionObtained = False
@@ -663,6 +664,7 @@ Cleanup:
 
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
+    Application.StatusBar = False ' *** Reset status bar on exit ***
 
     ' Release local object variables
     Set TargetConn = Nothing: Debug.Print "  - Released TargetConn"
@@ -701,6 +703,7 @@ ErrorHandler: ' General error handler
     Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     MsgBox "Error during SAP session setup/creation:" & vbCrLf & vbCrLf & _
            "Err #: " & errNum & vbCrLf & "Desc: " & errDesc, vbCritical, "SAP Connection Error"
+    Application.StatusBar = False ' *** Reset status bar on error ***
     Resume Cleanup ' Go to cleanup on error
 
 SsoLoginErrorHandler: ' Specific handler for SSO login errors
@@ -714,6 +717,7 @@ SsoLoginErrorHandler: ' Specific handler for SSO login errors
      MsgBox "Error during SAP SSO Logon attempt:" & vbCrLf & vbCrLf & _
            "Err #: " & ssoErrNum & vbCrLf & "Desc: " & ssoErrDesc, vbCritical, "SSO Login Error"
      SessionObtained = False ' Ensure flag is false
+     Application.StatusBar = False ' *** Reset status bar on error ***
      Resume Cleanup ' Go to main cleanup
 
 End Sub
@@ -773,6 +777,11 @@ Private Sub RunGUIScript_MM03()
     Dim infoPopup As GuiModalWindow ' Object for Info popup
     Dim errorPopup As GuiModalWindow ' Object for potential error popup
     Dim objExcelApp As Object ' Excel Application object
+    ' *** NEW: Variables for Optimization and Status Bar ***
+    Dim dataOutputArray() As Variant ' Array to hold results for faster writing
+    Dim outputRow As Long ' Row index for the output array
+    Dim totalMaterials As Long ' Total number of materials to process
+    Dim currentMaterialNum As Long ' Counter for status bar
 
     On Error GoTo MM03ErrorHandler ' Set error handler for this subroutine
 
@@ -804,16 +813,22 @@ Private Sub RunGUIScript_MM03()
     On Error GoTo MM03ErrorHandler ' Restore main error handler
     Debug.Print "  - Connected to Excel Worksheet: '" & ws.Name & "'"
 
-    ' --- Get Last Row ---
+    ' --- Get Last Row and Calculate Total ---
     lastRow = ws.Cells(ws.Rows.Count, cMATERIAL_COL).End(xlUp).row
     If lastRow < cSTART_ROW Then
         MsgBox "No data found in Excel sheet '" & ws.Name & "' starting from row " & cSTART_ROW & ", column " & cMATERIAL_COL & ".", vbInformation, "No Input Data"
         GoTo MM03Cleanup ' Exit if no data
     End If
-    Debug.Print "  - Last row with data in column " & cMATERIAL_COL & ": " & lastRow
+    totalMaterials = lastRow - cSTART_ROW + 1
+    Debug.Print "  - Last row with data in column " & cMATERIAL_COL & ": " & lastRow & " (Total: " & totalMaterials & ")"
+
+    ' --- *** OPTIMIZATION: Size the output array *** ---
+    ' Array columns: Status, ProdHier, OldMat, CreatedBy, LastChangedBy
+    ReDim dataOutputArray(1 To totalMaterials, 1 To 5)
 
     ' --- Navigate to MM03 ---
     Debug.Print "  - Navigating to transaction '" & cTRANSACTION & "'..."
+    Application.StatusBar = "Navigating to MM03..." ' Update status
     If objSess.Info.Transaction <> UCase(cTRANSACTION) Then
         objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION
         objSess.FindById("wnd[0]").sendVKey 0
@@ -841,9 +856,13 @@ Private Sub RunGUIScript_MM03()
     On Error GoTo MM03ErrorHandler ' Ensure main handler is active
 
     ' --- Loop through each row in Excel ---
+    outputRow = 0 ' Initialize output array row counter
     For i = cSTART_ROW To lastRow
+        outputRow = outputRow + 1 ' Increment array row index
+        currentMaterialNum = outputRow ' Counter for status bar
+
         Debug.Print "-----------------------------------------------------"
-        Debug.Print "Processing row: " & i
+        Debug.Print "Processing row: " & i & " (" & currentMaterialNum & "/" & totalMaterials & ")"
 
         ' --- Reset variables for this row ---
         materialNumber = ""
@@ -856,11 +875,20 @@ Private Sub RunGUIScript_MM03()
         Set infoPopup = Nothing
         Set errorPopup = Nothing
 
+        ' --- Update Status Bar ---
+        materialNumber = Trim$(CStr(ws.Range(cMATERIAL_COL & i).value)) ' Read material early for status bar
+        Application.StatusBar = "Processing " & currentMaterialNum & " of " & totalMaterials & ": '" & materialNumber & "'..."
+
         ' --- Step 1: Read Material Number from Excel ---
-        materialNumber = Trim$(CStr(ws.Range(cMATERIAL_COL & i).value))
         If materialNumber = "" Then
             Debug.Print "  - WARNING: Skipping row " & i & " due to missing Material Number."
-            ws.Range(cSTATUS_MSG_COL & i).value = "Skipped - Missing Material"
+            statusMessage = "Skipped - Missing Material"
+            ' Store status in array and skip SAP interaction
+            dataOutputArray(outputRow, 1) = statusMessage ' Corresponds to STATUS_MSG_COL
+            dataOutputArray(outputRow, 2) = "" ' Prod Hier
+            dataOutputArray(outputRow, 3) = "" ' Old Mat
+            dataOutputArray(outputRow, 4) = "" ' Created By
+            dataOutputArray(outputRow, 5) = "" ' Last Changed
             GoTo NextIteration ' Skip to the next row
         End If
         Debug.Print "  - Material Number from Excel: '" & materialNumber & "'"
@@ -881,17 +909,23 @@ Private Sub RunGUIScript_MM03()
                     InStr(1, statusMessage, "Material locked", vbTextCompare) > 0 Or _
                     InStr(1, statusMessage, "No data", vbTextCompare) > 0 Or _
                     InStr(1, statusMessage, "not maintained", vbTextCompare) > 0 Then
-                    ' Write status message to Excel and skip to next material
-                    ws.Range(cSTATUS_MSG_COL & i).value = statusMessage
+                    ' Store status message in array and skip to next material
                     Debug.Print "  - Skipping data extraction for this material due to status message."
-                    ' No need to press Back here, as we should still be on the initial screen
+                    dataOutputArray(outputRow, 1) = statusMessage ' Status
+                    dataOutputArray(outputRow, 2) = "" ' Prod Hier
+                    dataOutputArray(outputRow, 3) = "" ' Old Mat
+                    dataOutputArray(outputRow, 4) = "" ' Created By
+                    dataOutputArray(outputRow, 5) = "" ' Last Changed
                     GoTo NextIteration
                  End If
                  ' Clear status message if it wasn't a blocking error
-                 statusMessage = ""
+                 statusMessage = "OK" ' Default to OK if status bar had non-blocking message
+            Else
+                 statusMessage = "OK" ' Default to OK if status bar is empty
             End If
         Else
              Debug.Print "  - Status Bar object not available to check messages."
+             statusMessage = "OK (No SBar)" ' Indicate status bar wasn't checked
         End If
 
         ' --- Step 4: Handle "Select View(s)" Popup (wnd[1]) ---
@@ -917,34 +951,31 @@ Private Sub RunGUIScript_MM03()
             selectViewsPopup.FindById(cVIEWS_CONTINUE_BTN_ID).press
             If Err.Number <> 0 Then
                 Debug.Print "    - Error interacting with Select Views popup: " & Err.Description
-                ws.Range(cSTATUS_MSG_COL & i).value = "Error handling Select Views popup"
+                statusMessage = "Error handling Select Views popup"
                 Err.Clear
                 ' Try to close the popup and go back
                 On Error Resume Next
                 selectViewsPopup.Close
                 objSess.FindById(cMAIN_BACK_BTN_ID).press
                 On Error GoTo MM03ErrorHandler
+                ' Store error and skip rest of processing for this row
+                dataOutputArray(outputRow, 1) = statusMessage
                 GoTo NextIteration
             End If
             On Error GoTo MM03ErrorHandler ' Restore error handler
             Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling popup
         Else
             Debug.Print "  - 'Select View(s)' popup (wnd[1]) not detected. Proceeding..."
-            ' If the popup didn't appear, but we didn't get a blocking status bar message,
-            ' it might mean the material exists but only has one view (Basic Data?)
-            ' or the system default views were automatically selected.
         End If
         Set selectViewsPopup = Nothing ' Release popup object
 
         ' --- Step 4a: Check for potential secondary error popup (wnd[2]) ---
-        ' (Based on Try1.txt logic)
         Set errorPopup = Nothing
         On Error Resume Next
         Set errorPopup = objSess.FindById(cERROR_POPUP_ID, False)
         If Err.Number = 0 And Not errorPopup Is Nothing Then
              statusMessage = Trim$(errorPopup.Text) ' Capture text from wnd[2]
              Debug.Print "  - Secondary Popup (wnd[2]) detected. Text: '" & statusMessage & "'"
-             ws.Range(cSTATUS_MSG_COL & i).value = statusMessage
              errorPopup.FindById("tbar[0]/btn[0]").press ' Press OK/Continue
              Set errorPopup = Nothing
              Sleep cSAP_SHORT_WAIT_MS
@@ -952,6 +983,8 @@ Private Sub RunGUIScript_MM03()
              Debug.Print "  - Skipping data extraction due to secondary popup."
              objSess.FindById(cMAIN_BACK_BTN_ID).press ' Go back to initial screen
              Sleep cSAP_MEDIUM_WAIT_MS
+             ' Store error and skip
+             dataOutputArray(outputRow, 1) = statusMessage
              GoTo NextIteration
         End If
         Err.Clear
@@ -959,7 +992,6 @@ Private Sub RunGUIScript_MM03()
 
 
         ' --- Step 5: Extract Data from Basic Data 1 View ---
-        ' Assuming we are now in the Basic Data 1 view after handling popups
         Debug.Print "  - Attempting to extract data from Basic Data 1 view..."
         On Error Resume Next ' Use Resume Next for data extraction fields
 
@@ -985,14 +1017,16 @@ Private Sub RunGUIScript_MM03()
         If Err.Number <> 0 Then
             Debug.Print "    - Warning: Could not press Info button (" & cINFO_BTN_ID & "): " & Err.Description
             Err.Clear
-            GoTo WriteData ' Skip info extraction if button fails
+            createdByText = "Info Btn Error" ' Indicate button error
+            lastChangedByText = "Info Btn Error"
+            GoTo StoreDataInArray ' Skip info extraction if button fails
         End If
         Sleep cSAP_MEDIUM_WAIT_MS ' Wait for Info popup
 
         Set infoPopup = objSess.FindById(cINFO_POPUP_ID, False) ' Check if Info popup appeared
         If Err.Number = 0 And Not infoPopup Is Nothing Then
             Debug.Print "  - Info popup (wnd[1]) detected. Iterating labels..."
-            ' *** UPDATED: Iterate through labels and capture full text ***
+            ' *** Iterate through labels and capture full text ***
             Dim userArea As Object ' GuiUserArea
             Set userArea = infoPopup.FindById(cINFO_POPUP_USER_AREA_ID) ' Get the user area container
             If Err.Number = 0 And Not userArea Is Nothing Then
@@ -1023,6 +1057,8 @@ Private Sub RunGUIScript_MM03()
             Else
                  Debug.Print "    - Warning: Could not find user area (" & cINFO_POPUP_USER_AREA_ID & ") in Info popup: " & Err.Description
                  Err.Clear
+                 createdByText = "Info Area Error"
+                 lastChangedByText = "Info Area Error"
             End If
             ' *** End UPDATED ***
 
@@ -1032,21 +1068,22 @@ Private Sub RunGUIScript_MM03()
         Else
             Debug.Print "  - Info popup (wnd[1]) did not appear or error occurred (" & Err.Number & "). Skipping creation/change info."
             Err.Clear ' Clear any error from FindById failing
+            createdByText = "Info Popup Error"
+            lastChangedByText = "Info Popup Error"
         End If
         Set infoPopup = Nothing ' Release object
         Set userArea = Nothing
         Set child = Nothing
         On Error GoTo MM03ErrorHandler ' Restore main handler
 
-WriteData:
-        ' --- Step 7: Write Extracted Data to Excel ---
-        Debug.Print "  - Writing data to Excel row " & i & "..."
-        ws.Range(cSTATUS_MSG_COL & i).value = IIf(statusMessage = "", "OK", statusMessage) ' Write OK or earlier status message
-        ws.Range(cPROD_HIER_COL & i).value = prodHier
-        ws.Range(cOLD_MAT_COL & i).value = oldMatNum
-        ' *** UPDATED: Write full label text ***
-        ws.Range(cCREATED_BY_COL & i).value = createdByText
-        ws.Range(cLAST_CHANGED_COL & i).value = lastChangedByText
+StoreDataInArray:
+        ' --- Step 7: Store Extracted Data in Array ---
+        Debug.Print "  - Storing data in array for row " & i & "..."
+        dataOutputArray(outputRow, 1) = statusMessage ' Col C
+        dataOutputArray(outputRow, 2) = prodHier      ' Col D
+        dataOutputArray(outputRow, 3) = oldMatNum     ' Col E
+        dataOutputArray(outputRow, 4) = createdByText ' Col F
+        dataOutputArray(outputRow, 5) = lastChangedByText ' Col G
 
         ' --- Step 8: Navigate Back for Next Material ---
         Debug.Print "  - Pressing Back to return to initial MM03 screen..."
@@ -1058,6 +1095,16 @@ NextIteration: ' Label to jump to for skipping a row
 
     Debug.Print "-----------------------------------------------------"
     Debug.Print "STEP 9: Finished processing all rows."
+    Application.StatusBar = "Writing data to Excel..." ' Update status
+
+    ' --- *** OPTIMIZATION: Write the entire array to Excel *** ---
+    Dim outputRange As Range
+    ' Define the top-left cell of the output range (Status column, starting row)
+    Set outputRange = ws.Range(cSTATUS_MSG_COL & cSTART_ROW)
+    ' Resize the range to match the array dimensions and write the data
+    outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).Value = dataOutputArray
+    Debug.Print "  - Data array written to worksheet starting at cell " & outputRange.Address & "."
+    Set outputRange = Nothing
 
     ' --- Final Navigation Back (Optional) ---
     ' Go back one more time from the initial MM03 screen if desired
@@ -1070,6 +1117,7 @@ NextIteration: ' Label to jump to for skipping a row
 MM03Cleanup:
     ' --- Cleanup for this Subroutine ---
     Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for RunGUIScript_MM03..."
+    Application.StatusBar = False ' *** Reset status bar on exit ***
     ' Release local objects
     Set ws = Nothing
     Set objExcelApp = Nothing
@@ -1079,6 +1127,7 @@ MM03Cleanup:
     Set errorPopup = Nothing
     Set userArea = Nothing
     Set child = Nothing
+    Erase dataOutputArray ' Clear the array memory
     Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript_MM03."
     Exit Sub ' Normal exit
 
@@ -1095,7 +1144,12 @@ MM03ErrorHandler:
     ' Write error message to current row in Excel if possible
     If Not ws Is Nothing And i >= cSTART_ROW Then
         On Error Resume Next ' Avoid error loop if writing to Excel fails
-        ws.Range(cSTATUS_MSG_COL & i).value = "Error: " & errDescRun & " (#" & errNumRun & ")"
+        ' Try writing to array first if it exists and i is within bounds
+        If outputRow > 0 And outputRow <= UBound(dataOutputArray, 1) Then
+             dataOutputArray(outputRow, 1) = "Error: " & errDescRun ' Status column
+        Else ' Fallback to writing directly to cell if array isn't ready/valid
+             ws.Range(cSTATUS_MSG_COL & i).value = "Error: " & errDescRun & " (#" & errNumRun & ")"
+        End If
         On Error GoTo 0 ' Turn off Resume Next
     End If
 
