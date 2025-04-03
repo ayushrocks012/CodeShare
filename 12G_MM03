@@ -146,7 +146,7 @@ Public Sub StartExtract()
                 End If
                 SessionObtained = True
                 Debug.Print "  - Proceeding with existing global session #" & objSess.Info.SessionNumber
-                GoTo RunMM03Script
+                GoTo RunMM03Script ' Jump directly to execution
             Else
                  Debug.Print "  - Global objSess is for wrong system ('" & tempSysName & tempClient & "'). Clearing globals."
                  Set objSess = Nothing: Set objConn = Nothing: Set objSBar = Nothing: Set objGui = Nothing
@@ -186,7 +186,7 @@ Public Sub StartExtract()
             Debug.Print "  - SUCCESS: Obtained SAP GUI Scripting Engine via GetObject."
         Else
             Debug.Print "  - GetObject(""SAPGUI"") failed (Error: " & getObjectErrNum & "). SAP Logon may not be running."
-            Set SapGuiAuto = Nothing
+            Set SapGuiAuto = Nothing ' Ensure it's clear for Path B logic
         End If
     Else
         Debug.Print "  - Using existing global objGui object."
@@ -249,8 +249,8 @@ Public Sub StartExtract()
                                  Set TargetConn = W_conn ' Store this connection object
                                  foundConnection = True
                                  Debug.Print "      - MATCH FOUND! Storing this connection."
-                                 Set W_Sess = Nothing
-                                 Exit For
+                                 Set W_Sess = Nothing ' Release loop session object
+                                 Exit For ' Stop searching for connections
                             End If
                          Else
                             Debug.Print "      - Error reading Info for first session (Error: " & infoErr & "). Cannot verify system."
@@ -270,23 +270,22 @@ NextConnection:
     End If
     Set objToCheck = Nothing ' Clear reusable variable
 
-    ' --- STEP 4: Handle Based on Connection Found Status ---
+    ' --- STEP 4: Determine Session Strategy ---
     Debug.Print "-----------------------------------------------------"
     Debug.Print "STEP 4: Determining session strategy..."
 
-    ' Inline CheckObject (TargetConn, "Found Target Connection", True) - combined with foundConnection check
-    Set objToCheck = TargetConn: objName = "Found Target Connection": raiseErrorFlag = True
-    If foundConnection And Not (objToCheck Is Nothing) Then
+    ' Check if a valid connection to the target system was found
+    If foundConnection And Not TargetConn Is Nothing Then
         ' --- PATH A: Connection Found ---
-        Debug.Print "  - PATH A: Existing connection found. Checking for usable session..."
+        Debug.Print "  - PATH A: Existing connection found. Proceeding to find/create session..."
         Set objConn = TargetConn ' Set global connection object
         Session_Nr_All_Before = objConn.Children.Count
         Debug.Print "    - Connection has " & Session_Nr_All_Before & " session(s)."
 
-        ' A1: Check for an IDLE session
-        Debug.Print "    - Checking for an IDLE session (SESSION_MANAGER, SMEN, S000)..."
-        Set FirstFoundSess = Nothing
-        SessionObtained = False
+        ' --- STEP 4.1: Check for IDLE Session ---
+        Debug.Print "    - STEP 4.1: Checking for an IDLE session (SESSION_MANAGER, SMEN, S000)..."
+        Set FirstFoundSess = Nothing ' Track the first valid session encountered
+        SessionObtained = False ' Reset flag
         For j = 0 To objConn.Children.Count - 1
             Set W_Sess = Nothing: On Error Resume Next
             Set W_Sess = objConn.Children(CLng(j))
@@ -304,25 +303,28 @@ NextConnection:
             Else
                 ' W_Sess is valid
                 Debug.Print "      - Checking Session Index " & j & " (ID: " & W_Sess.Info.SessionNumber & ")"
-                If FirstFoundSess Is Nothing Then Set FirstFoundSess = W_Sess
-                On Error Resume Next
+                If FirstFoundSess Is Nothing Then Set FirstFoundSess = W_Sess ' Store first valid one found
+                On Error Resume Next ' Check transaction code, ignore error if session is busy/closing
                 Dim idleCheckTCode As String: idleCheckTCode = W_Sess.Info.Transaction
                 Dim idleErr As Long: idleErr = Err.Number: Err.Clear
                 On Error GoTo ErrorHandler
                 If idleErr = 0 Then
                     Debug.Print "        - Transaction Code: '" & idleCheckTCode & "'"
+                    ' Check if session is at the main menu (idle)
                     Select Case UCase(idleCheckTCode)
                         Case "SESSION_MANAGER", "SMEN", "S000"
-                            Set objSess = W_Sess
-                            On Error Resume Next
+                            ' Found a suitable idle session!
+                            Set objSess = W_Sess ' Set global session object
+                            On Error Resume Next ' Try to get status bar
                             Set objSBar = objSess.FindById("wnd[0]/sbar")
                             On Error GoTo ErrorHandler
                             If objSBar Is Nothing Then Debug.Print "        - Warning: Could not get status bar for idle session."
                             SessionObtained = True
                             Debug.Print "        - SUCCESS: Found suitable idle session #" & objSess.Info.SessionNumber
-                            GoTo RunMM03Script
+                            GoTo RunMM03Script ' Found one, proceed to run the script
                     End Select
                 Else
+                    ' Error getting transaction code (session might be busy or closing)
                     Debug.Print "        - Error getting transaction code (Error: " & idleErr & "). Skipping idle check for this session."
                 End If
             End If
@@ -330,29 +332,34 @@ NextConnection:
 NextIdleCheck:
             Set W_Sess = Nothing ' Release loop variable
         Next j
+        ' --- End STEP 4.1 ---
 
-        ' A2: No idle session found - Try to CREATE a new one using /o
+        ' --- STEP 4.2: Try to CREATE New Session via /o (if no idle session found) ---
         If Not SessionObtained Then
-            Debug.Print "    - No idle session found."
+            Debug.Print "    - STEP 4.2: No idle session found. Attempting to create new session via /o..."
             ' Inline CheckObject (FirstFoundSess, "First Found Session for /o", True)
             Set objToCheck = FirstFoundSess: objName = "First Found Session for /o": raiseErrorFlag = True
             If objToCheck Is Nothing Then
                 Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
                 If raiseErrorFlag Then Err.Raise vbObjectError + 999, "CheckObject", "Required object '" & objName & "' was not found or is invalid."
+                ' If FirstFoundSess is Nothing here, it means no valid sessions were found on the connection at all.
+                MsgBox "Error: No valid sessions could be accessed on the found connection. Cannot create new session.", vbCritical
                 GoTo Cleanup
             End If
             ' End Inline CheckObject
 
+            ' Check if maximum sessions limit is reached
             If Session_Nr_All_Before < cMAX_SESSIONS Then
-                 Debug.Print "    - Session limit not reached (" & Session_Nr_All_Before & "/" & cMAX_SESSIONS & "). Attempting /o in session #" & FirstFoundSess.Info.SessionNumber & "..."
+                 Debug.Print "      - Session limit not reached (" & Session_Nr_All_Before & "/" & cMAX_SESSIONS & "). Attempting /o in session #" & FirstFoundSess.Info.SessionNumber & "..."
                  On Error GoTo ErrorHandler
 
-                 Set objSess = FirstFoundSess ' Temporarily set objSess
-                 Debug.Print "      - Checking if wnd[0] of session #" & objSess.Info.SessionNumber & " is accessible..."
+                 Set objSess = FirstFoundSess ' Temporarily set objSess to the session where /o will be executed
+                 Debug.Print "        - Checking if wnd[0] of session #" & objSess.Info.SessionNumber & " is accessible..."
+                 ' If the session isn't at the main screen (wnd[0]), try navigating back first
                  If objSess.ActiveWindow.Name <> "wnd[0]" Then
-                     Debug.Print "      - Active window is not wnd[0] (" & objSess.ActiveWindow.Name & "). Attempting /n..."
+                     Debug.Print "        - Active window is not wnd[0] (" & objSess.ActiveWindow.Name & "). Attempting /n..."
                      On Error Resume Next
-                     objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n"
+                     objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" ' Navigate back to main menu
                      objSess.FindById("wnd[0]").sendVKey 0
                      Dim navErr As Long: navErr = Err.Number: Err.Clear
                      On Error GoTo ErrorHandler
@@ -365,34 +372,36 @@ NextIdleCheck:
                      Loop While True
                      If navErr <> 0 Or Not waitReady Then
                         MsgBox "Error: Could not execute /n or session not ready in #" & objSess.Info.SessionNumber & " before /o.", vbExclamation
-                        Set objSess = Nothing: GoTo Cleanup
+                        Set objSess = Nothing: GoTo Cleanup ' Abort if navigation failed
                      End If
                      ' End Inline Wait
                      If objSess.ActiveWindow.Name <> "wnd[0]" Then
                         MsgBox "Error: Still not in main window (wnd[0]) after /n in session #" & objSess.Info.SessionNumber & ".", vbExclamation
-                        Set objSess = Nothing: GoTo Cleanup
+                        Set objSess = Nothing: GoTo Cleanup ' Abort if still not on main screen
                      End If
-                     Debug.Print "      - Successfully navigated back using /n."
+                     Debug.Print "        - Successfully navigated back using /n."
                  End If
 
-                 Debug.Print "      - Executing /o command in session #" & objSess.Info.SessionNumber & "..."
+                 ' Now execute /o command
+                 Debug.Print "        - Executing /o command in session #" & objSess.Info.SessionNumber & "..."
                  objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/o"
                  objSess.FindById("wnd[0]").sendVKey 0
+                 ' Keep objSess pointing to FirstFoundSess for the popup check below
 
-                 Debug.Print "      - Waiting for potential popup (wnd[1]) or session creation..."
-                 ' Inline WaitForSessionReady(objSess, 3)
+                 Debug.Print "        - Waiting for potential popup (wnd[1]) or session creation..."
+                 ' Inline WaitForSessionReady(objSess, 3) ' Initial wait, shorter timeout
                  waitTimeout = 3: waitStartTime = Timer: waitReady = False
                  Do
                      If Not objSess.Busy Then waitReady = True: Exit Do
                      If Timer - waitStartTime > waitTimeout Then Debug.Print "WaitForSessionReady TIMEOUT after " & waitTimeout & "s. Session Busy: " & objSess.Busy: Exit Do
                      Sleep cSHORT_WAIT_MS: DoEvents
                  Loop While True
-                 If Not waitReady Then Debug.Print "      - Session busy after /o, might be popup..."
+                 If Not waitReady Then Debug.Print "        - Session busy after /o, might be popup..."
                  ' End Inline Wait
 
                  ' Handle Potential 'Generate New Session' Popup
                  Set popupWnd = Nothing: On Error Resume Next
-                 Set popupWnd = objSess.FindById("wnd[1]", False)
+                 Set popupWnd = objSess.FindById("wnd[1]", False) ' Check for popup on the session where /o was sent
                  Dim popupErr As Long: popupErr = Err.Number: Err.Clear
                  On Error GoTo ErrorHandler
 
@@ -400,22 +409,23 @@ NextIdleCheck:
                  Set objToCheck = popupWnd: objName = "Popup after /o": raiseErrorFlag = False
                  If popupErr = 0 And Not (objToCheck Is Nothing) Then
                     ' popupWnd is valid
-                    Debug.Print "      - Popup (wnd[1]) detected on session #" & objSess.Info.SessionNumber & ". Text: '" & popupWnd.Text & "'"
+                    Debug.Print "        - Popup (wnd[1]) detected on session #" & objSess.Info.SessionNumber & ". Text: '" & popupWnd.Text & "'"
+                    ' Check if it's the expected "Generate session" or "Back-End Sessions" popup
                     If InStr(1, popupWnd.Text, "Generate", vbTextCompare) > 0 Or _
                        InStr(1, popupWnd.Text, "session", vbTextCompare) > 0 Or _
                        InStr(1, popupWnd.Text, "Back-End", vbTextCompare) > 0 Then
                         Const GENERATE_BUTTON_ID As String = "wnd[1]/tbar[0]/btn[5]" ' Local constant ok here
-                        Debug.Print "      - Attempting to press Generate button (" & GENERATE_BUTTON_ID & ")..."
+                        Debug.Print "        - Attempting to press Generate button (" & GENERATE_BUTTON_ID & ")..."
                         On Error Resume Next
                         popupWnd.FindById(GENERATE_BUTTON_ID).press
                         If Err.Number <> 0 Then
-                            Debug.Print "        - Generate button press failed (Error: " & Err.Description & "). Trying Enter (VKey 0)...": Err.Clear
+                            Debug.Print "          - Generate button press failed (Error: " & Err.Description & "). Trying Enter (VKey 0)...": Err.Clear
                             popupWnd.sendVKey 0
-                            If Err.Number <> 0 Then Debug.Print "        - Enter (VKey 0) also failed (Error: " & Err.Description & ").": Err.Clear
-                            Else Debug.Print "        - Enter (VKey 0) sent successfully."
-                        Else Debug.Print "        - Generate button pressed successfully."
+                            If Err.Number <> 0 Then Debug.Print "          - Enter (VKey 0) also failed (Error: " & Err.Description & ").": Err.Clear
+                            Else Debug.Print "          - Enter (VKey 0) sent successfully."
+                        Else Debug.Print "          - Generate button pressed successfully."
                         On Error GoTo ErrorHandler
-                        Debug.Print "      - Waiting after handling popup for session to initialize..."
+                        Debug.Print "        - Waiting after handling popup for session to initialize..."
                         ' Inline WaitForSessionReady(objSess, cDEFAULT_TIMEOUT_SEC)
                         waitTimeout = cDEFAULT_TIMEOUT_SEC: waitStartTime = Timer: waitReady = False
                         Do
@@ -423,10 +433,11 @@ NextIdleCheck:
                             If Timer - waitStartTime > waitTimeout Then Debug.Print "WaitForSessionReady TIMEOUT after " & waitTimeout & "s. Session Busy: " & objSess.Busy: Exit Do
                             Sleep cSHORT_WAIT_MS: DoEvents
                         Loop While True
-                        If Not waitReady Then Debug.Print "      - Warning: Session still busy after popup interaction."
+                        If Not waitReady Then Debug.Print "        - Warning: Session still busy after popup interaction."
                         ' End Inline Wait
                     Else
-                        Debug.Print "      - Unexpected Popup (wnd[1]) detected. Ignoring."
+                        ' Popup appeared but wasn't the expected one
+                        Debug.Print "        - Unexpected Popup (wnd[1]) detected. Ignoring."
                         On Error Resume Next: popupWnd.Close: On Error GoTo ErrorHandler
                         Sleep cSHORT_WAIT_MS ' Keep short fixed sleep here after close attempt
                     End If
@@ -434,19 +445,19 @@ NextIdleCheck:
                     If popupErr <> 0 Then Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & popupErr
                     Else Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
                     End If
-                    Debug.Print "      - Popup (wnd[1]) not detected or error finding it. Assuming direct session creation."
+                    Debug.Print "        - Popup (wnd[1]) not detected or error finding it. Assuming direct session creation."
                     Sleep cSHORT_WAIT_MS ' Keep short fixed sleep if no popup
                  End If
                  Set objToCheck = Nothing ' Clear reusable variable
                  Set popupWnd = Nothing ' Release popup object
-                 Set objSess = Nothing ' Release temporary handle
+                 Set objSess = Nothing ' Release temporary handle used for /o and popup check (will find the new one below)
 
                  ' Verify session count increase and find the NEW session
-                 Debug.Print "      - Verifying session count increase and finding new session (Timeout: " & cSESSION_CHECK_ATTEMPTS * cSESSION_CHECK_INTERVAL_MS & "ms)..."
+                 Debug.Print "        - Verifying session count increase and finding new session (Timeout: " & cSESSION_CHECK_ATTEMPTS * cSESSION_CHECK_INTERVAL_MS & "ms)..."
                  highestSessNum = 0
-                 Set NewSess = Nothing
-                 attempts = 0
-                 Do
+                 Set NewSess = Nothing ' Reset NewSess object
+                 attempts = 0 ' Reset attempt counter
+                 Do ' Start loop to check for session count increase
                     attempts = attempts + 1
                     ' Inline CheckObject (objConn, "Connection object for session count check", True)
                     Set objToCheck = objConn: objName = "Connection object for session count check": raiseErrorFlag = True
@@ -457,38 +468,41 @@ NextIdleCheck:
                     End If
                     ' End Inline CheckObject
 
-                    On Error Resume Next
+                    On Error Resume Next ' Handle potential errors refreshing count (e.g., connection dropped)
                     Session_Nr_All_After = objConn.Children.Count
-                    Dim countErr As Long: countErr = Err.Number: Err.Clear
+                    Dim countErr As Long: countErr = Err.Number
+                    Err.Clear
                     On Error GoTo ErrorHandler
                     If countErr <> 0 Then
-                        Debug.Print "        - Attempt " & attempts & ": Error getting session count (" & countErr & "). Retrying..."
+                        Debug.Print "          - Attempt " & attempts & ": Error getting session count (" & countErr & "). Retrying..."
                         GoTo NextAttemptWait
                     End If
 
-                    Debug.Print "        - Attempt " & attempts & "/" & cSESSION_CHECK_ATTEMPTS & ": Current session count = " & Session_Nr_All_After
+                    Debug.Print "          - Attempt " & attempts & "/" & cSESSION_CHECK_ATTEMPTS & ": Current session count = " & Session_Nr_All_After
 
+                    ' Check if session count has increased
                     If Session_Nr_All_After > Session_Nr_All_Before Then
-                        Debug.Print "        - Session count increased from " & Session_Nr_All_Before & " to " & Session_Nr_All_After & ". Searching for highest session number..."
+                        Debug.Print "          - Session count increased from " & Session_Nr_All_Before & " to " & Session_Nr_All_After & ". Searching for highest session number..."
+                        ' Find the session with the highest number (assumed to be the new one)
                         For j = 0 To Session_Nr_All_After - 1
                             Set W_Sess = Nothing: On Error Resume Next
                             Set W_Sess = objConn.Children(CLng(j))
-                            If Err.Number <> 0 Then Debug.Print "          - Warning: Error accessing session object at index " & j & ".": Err.Clear: GoTo NextFindLoopSess
+                            If Err.Number <> 0 Then Debug.Print "            - Warning: Error accessing session object at index " & j & ".": Err.Clear: GoTo NextFindLoopSess
                             On Error GoTo ErrorHandler
 
                             ' Inline CheckObject (W_Sess, "Session Index " & j & " in find loop", False)
                             Set objToCheck = W_Sess: objName = "Session Index " & j & " in find loop": raiseErrorFlag = False
                             If Not (objToCheck Is Nothing) Then
                                 ' W_Sess is valid
-                                On Error Resume Next
+                                On Error Resume Next ' Get session number, ignore error if session is closing
                                 currentSessNum = W_Sess.Info.SessionNumber
                                 If Err.Number = 0 Then
                                     If currentSessNum > highestSessNum Then
                                         highestSessNum = currentSessNum
-                                        Set NewSess = W_Sess
-                                        Debug.Print "            - Found new highest session: #" & highestSessNum
+                                        Set NewSess = W_Sess ' Store the session object with the highest number
+                                        Debug.Print "              - Found new highest session: #" & highestSessNum
                                     End If
-                                Else Debug.Print "          - Warning: Error reading session number for index " & j & ".": Err.Clear
+                                Else Debug.Print "            - Warning: Error reading session number for index " & j & ".": Err.Clear
                                 On Error GoTo ErrorHandler
                             Else
                                 Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
@@ -502,91 +516,96 @@ NextFindLoopSess:
                         Set objToCheck = NewSess: objName = "New Session Object": raiseErrorFlag = False
                         If Not (objToCheck Is Nothing) Then
                             ' NewSess found
-                            Debug.Print "        - Identified session with highest number: #" & NewSess.Info.SessionNumber
-                            Exit Do
+                            Debug.Print "          - Identified session with highest number: #" & NewSess.Info.SessionNumber
+                            Exit Do ' Found the new session, exit the wait loop
                         Else
                             Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
-                            Debug.Print "        - Session count increased, but couldn't identify highest session number object yet. Retrying..."
+                            Debug.Print "          - Session count increased, but couldn't identify highest session number object yet. Retrying..."
                         End If
                         ' End Inline CheckObject
-                    Else Debug.Print "        - Session count (" & Session_Nr_All_After & ") has not increased yet from original (" & Session_Nr_All_Before & ")."
+                    Else
+                        ' Session count hasn't increased yet
+                        Debug.Print "          - Session count (" & Session_Nr_All_After & ") has not increased yet from original (" & Session_Nr_All_Before & ")."
                     End If
 
+                    ' Check if timeout reached
                     If attempts >= cSESSION_CHECK_ATTEMPTS Then
-                        Err.Raise vbObjectError + 521, "StartExtract", "Timeout waiting for session count increase after /o."
+                        Err.Raise vbObjectError + 521, "StartExtract", "Timeout (" & cSESSION_CHECK_ATTEMPTS * cSESSION_CHECK_INTERVAL_MS & "ms) waiting for session count to increase after /o command."
                     End If
 NextAttemptWait:
-                    Sleep cSESSION_CHECK_INTERVAL_MS ' Keep fixed sleep for this check interval
-                 Loop
+                    Sleep cSESSION_CHECK_INTERVAL_MS ' Wait before next check
+                 Loop ' End session count check loop
 
                  ' Inline CheckObject (NewSess, "Final New Session Object", True)
                  Set objToCheck = NewSess: objName = "Final New Session Object": raiseErrorFlag = True
                  If objToCheck Is Nothing Then
                      Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
                      If raiseErrorFlag Then Err.Raise vbObjectError + 999, "CheckObject", "Required object '" & objName & "' was not found or is invalid."
+                     ' If loop timed out, NewSess would be Nothing
+                     MsgBox "Error: Could not identify new session object after /o command.", vbCritical
                      GoTo Cleanup
                  End If
                  ' End Inline CheckObject
 
-                 Set objSess = NewSess ' Set GLOBAL session
+                 ' Successfully found the new session
+                 Set objSess = NewSess ' Set GLOBAL session to the new one
                  Debug.Print "      - SUCCESS: Identified new session #" & objSess.Info.SessionNumber & " created via /o."
-                 On Error Resume Next
+                 On Error Resume Next ' Try to get status bar for the new session
                  Set objSBar = objSess.FindById("wnd[0]/sbar")
                  On Error GoTo ErrorHandler
                  If objSBar Is Nothing Then Debug.Print "      - Warning: Could not get status bar for new session #" & objSess.Info.SessionNumber & "."
                  SessionObtained = True
                  Debug.Print "    - Proceeding with newly created session #" & objSess.Info.SessionNumber & "."
-                 GoTo RunMM03Script
+                 GoTo RunMM03Script ' Proceed to run the script
 
             Else
-                 Debug.Print "    - Session limit reached (" & Session_Nr_All_Before & "/" & cMAX_SESSIONS & "). Cannot create new session via /o."
-                 MsgResult = MsgBox("Maximum SAP sessions (" & cMAX_SESSIONS & ") reached." & vbCrLf & _
-                                    "No idle session found. Please close an existing SAP session.", vbCritical + vbOKOnly, "SAP Session Limit")
-                 GoTo Cleanup
+                 ' Max sessions reached
+                 Debug.Print "      - Session limit reached (" & Session_Nr_All_Before & "/" & cMAX_SESSIONS & "). Cannot create new session via /o."
+                 MsgResult = MsgBox("Maximum SAP sessions (" & cMAX_SESSIONS & ") reached for this connection." & vbCrLf & _
+                                    "No idle session found. Please close an existing SAP session.", vbCritical + vbOKOnly, "SAP Session Limit Reached")
+                 GoTo Cleanup ' Abort
             End If
-        End If ' End /o logic
-
-    ElseIf foundConnection And (TargetConn Is Nothing) Then
-        ' Error case from combined check above
-        Debug.Print "CheckObject WARNING: Object 'Found Target Connection' is Nothing."
-        Err.Raise vbObjectError + 999, "CheckObject", "Required object 'Found Target Connection' was not found or is invalid."
-        GoTo Cleanup
+        End If ' End /o logic (if not SessionObtained from idle check)
+        ' --- End STEP 4.2 ---
 
     Else
-        ' --- PATH B: No Connection Found or objGui invalid - Attempt SSO Logon ---
-        Debug.Print "  - PATH B: No existing connection found or SAP GUI invalid. Attempting SSO login..."
-        Debug.Print "    - Using Description: '" & cTARGET_SYSTEM_DESCRIPTION & "'"
+        ' --- PATH B: No Connection Found or Connection Object Invalid ---
+        Debug.Print "  - PATH B: No existing valid connection found for target system '" & cTARGET_SYSTEM_ID_CLIENT & "'."
+        Debug.Print "    Attempting SSO login using description: '" & cTARGET_SYSTEM_DESCRIPTION & "'"
 
-        On Error GoTo SsoLoginErrorHandler ' Use specific handler
+        ' --- STEP 4.3: Perform SSO Login ---
+        On Error GoTo SsoLoginErrorHandler ' Use specific handler for SSO errors
 
+        ' Reset global objects for new login attempt
         Set objConn = Nothing: Set objSess = Nothing: Set objSBar = Nothing
 
-        ' Step 1: Get/Ensure SAP GUI Scripting Engine
+        ' Step 4.3.1: Get/Ensure SAP GUI Scripting Engine (might need to start SAP Logon)
+        Debug.Print "      - STEP 4.3.1: Ensuring SAP GUI Scripting Engine is available..."
         ' Inline CheckObject (objGui, "Global objGui for SSO", False)
         Set objToCheck = objGui: objName = "Global objGui for SSO": raiseErrorFlag = False
         If objToCheck Is Nothing Then
             Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
-            Debug.Print "    - SSO Step 1: objGui is Nothing. Attempting GetObject/Start Logon..."
+            Debug.Print "        - objGui is Nothing. Attempting GetObject/Start Logon..."
             On Error Resume Next
             Set SapGuiAuto = GetObject("SAPGUI")
             Dim getObjErrSso As Long: getObjErrSso = Err.Number: Err.Clear
             On Error GoTo SsoLoginErrorHandler
             If getObjErrSso <> 0 Or SapGuiAuto Is Nothing Then
-                 Debug.Print "      - GetObject failed. Starting SAP Logon: '" & cSAP_LOGON_PATH & "'"
+                 Debug.Print "          - GetObject failed. Starting SAP Logon: '" & cSAP_LOGON_PATH & "'"
                  Dim shellResult As Variant: On Error Resume Next
-                 shellResult = Shell(cSAP_LOGON_PATH, vbNormalFocus)
+                 shellResult = Shell(cSAP_LOGON_PATH, vbNormalFocus) ' Start SAP Logon
                  Dim shellErr As Long: shellErr = Err.Number: Dim shellDesc As String: shellDesc = Err.Description: Err.Clear
                  On Error GoTo SsoLoginErrorHandler
-                 If shellErr <> 0 Then MsgBox "Shell Error (" & shellErr & ") starting SAP Logon: " & shellDesc, vbCritical: GoTo Cleanup
-                 Debug.Print "      - Shell executed. Waiting for SAP Logon process..."
+                 If shellErr <> 0 Then MsgBox "Shell Error (" & shellErr & ") trying to start SAP Logon: " & shellDesc, vbCritical: GoTo Cleanup
+                 Debug.Print "          - Shell executed. Waiting for SAP Logon process..."
                  startTime = Timer ' Use local startTime here
                  Do ' Wait for GetObject to succeed
                     Sleep cSHORT_WAIT_MS ' Use global constant
                     On Error Resume Next: Set SapGuiAuto = GetObject("SAPGUI"): If Err.Number = 0 And Not SapGuiAuto Is Nothing Then Exit Do: Err.Clear
                     If Timer - startTime > 15 Then MsgBox "Timeout waiting for GetObject after starting SAP Logon.", vbCritical: GoTo Cleanup
                  Loop While True
-                 Debug.Print "      - GetObject successful after starting Logon."
-            Else Debug.Print "      - GetObject successful."
+                 Debug.Print "          - GetObject successful after starting Logon."
+            Else Debug.Print "        - GetObject successful."
             End If
             Set objGui = SapGuiAuto.GetScriptingEngine
             ' Inline CheckObject (objGui, "Scripting Engine after GetObject/Start", True)
@@ -594,22 +613,22 @@ NextAttemptWait:
             If objToCheck Is Nothing Then
                 Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
                 If raiseErrorFlag Then Err.Raise vbObjectError + 999, "CheckObject", "Required object '" & objName & "' was not found or is invalid."
-                GoTo Cleanup
+                MsgBox "Could not get Scripting Engine after GetObject/Start Logon.", vbCritical: GoTo Cleanup ' Added MsgBox for clarity
             End If
             ' End Inline CheckObject
-            Debug.Print "      - Scripting Engine obtained."
-        Else Debug.Print "    - SSO Step 1: Using existing objGui."
+            Debug.Print "        - Scripting Engine obtained."
+        Else Debug.Print "      - STEP 4.3.1: Using existing objGui."
         End If
         Set objToCheck = Nothing ' Clear reusable variable
 
-        ' Step 2: Open Connection
-        Debug.Print "    - SSO Step 2: Opening Connection '" & cTARGET_SYSTEM_DESCRIPTION & "'..."
+        ' Step 4.3.2: Open Connection using the Description
+        Debug.Print "      - STEP 4.3.2: Opening Connection '" & cTARGET_SYSTEM_DESCRIPTION & "'..."
         On Error Resume Next
-        Set TargetConn = objGui.OpenConnection(cTARGET_SYSTEM_DESCRIPTION, True) ' Async
+        Set TargetConn = objGui.OpenConnection(cTARGET_SYSTEM_DESCRIPTION, True) ' True for asynchronous connection
         Dim openConnErr As Long: openConnErr = Err.Number: Dim openConnDesc As String: openConnDesc = Err.Description: Err.Clear
         On Error GoTo SsoLoginErrorHandler
-        ' Inline CheckObject (TargetConn, "Opened Connection Object", True)
-        Set objToCheck = TargetConn: objName = "Opened Connection Object": raiseErrorFlag = True
+        ' Inline CheckObject (TargetConn, "Opened Connection Object via SSO", True)
+        Set objToCheck = TargetConn: objName = "Opened Connection Object via SSO": raiseErrorFlag = True
         If openConnErr <> 0 Or objToCheck Is Nothing Then
              If objToCheck Is Nothing Then Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
              If raiseErrorFlag Or openConnErr <> 0 Then
@@ -618,31 +637,32 @@ NextAttemptWait:
              End If
         End If
         ' End Inline CheckObject
-        Set objConn = TargetConn
-        Debug.Print "      - OpenConnection successful. Connection: '" & objConn.Description & "'"
+        Set objConn = TargetConn ' Set global connection object
+        Debug.Print "        - OpenConnection successful. Connection: '" & objConn.Description & "'"
 
-        ' Step 3: Get Session object
-        Debug.Print "    - SSO Step 3: Waiting for session object..."
+        ' Step 4.3.3: Get Session object from the new connection
+        Debug.Print "      - STEP 4.3.3: Waiting for session object..."
         startTime = Timer ' Use local startTime
-        Do
+        Do ' Wait for the connection to produce a session
             If objConn.Children.Count > 0 Then Exit Do
             Sleep cSHORT_WAIT_MS: DoEvents
             If Timer - startTime > 15 Then MsgBox "Timeout waiting for session object after OpenConnection.", vbCritical: GoTo Cleanup
         Loop
-        Set TargetSessSSO = objConn.Children(0)
+        Set TargetSessSSO = objConn.Children(0) ' Get the first (and likely only) session
         ' Inline CheckObject (TargetSessSSO, "Session Object from SSO Connection", True)
         Set objToCheck = TargetSessSSO: objName = "Session Object from SSO Connection": raiseErrorFlag = True
         If objToCheck Is Nothing Then
             Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
             If raiseErrorFlag Then Err.Raise vbObjectError + 999, "CheckObject", "Required object '" & objName & "' was not found or is invalid."
-            GoTo Cleanup
+            MsgBox "Could not get session object from new connection.", vbCritical: GoTo Cleanup ' Added MsgBox
         End If
         ' End Inline CheckObject
-        Set objSess = TargetSessSSO
-        Debug.Print "      - Session object obtained (ID: " & objSess.Info.SessionNumber & ")."
+        Set objSess = TargetSessSSO ' Set global session object
+        Debug.Print "        - Session object obtained (ID: " & objSess.Info.SessionNumber & ")."
 
-        ' Step 4: Wait for Session to be Ready (Inline WaitForSessionReady with TCode Check)
-        Debug.Print "    - SSO Step 4: Waiting for session ready (Timeout: " & cLOGON_TIMEOUT_SECONDS & "s)..."
+        ' Step 4.3.4: Wait for Session to be Ready (i.e., past initial logon screens)
+        Debug.Print "      - STEP 4.3.4: Waiting for session ready (Timeout: " & cLOGON_TIMEOUT_SECONDS & "s)..."
+        ' Inline WaitForSessionReady(objSess, cLOGON_TIMEOUT_SECONDS, True)
         waitTimeout = cLOGON_TIMEOUT_SECONDS: waitStartTime = Timer: waitReady = False: checkTCodeFlag = True
         On Error GoTo SsoLoginWaitError ' Specific handler for this wait
         Do
@@ -669,21 +689,21 @@ NextAttemptWait:
             MsgBox "Timeout or error waiting for SAP main menu after SSO login.", vbCritical
             GoTo Cleanup
         End If
-        Debug.Print "      - Session active. TCode: '" & objSess.Info.Transaction & "'"
+        Debug.Print "        - Session active. TCode: '" & objSess.Info.Transaction & "'"
         ' End Inline Wait
 
-        ' Step 5: Get Status Bar
-        Debug.Print "    - SSO Step 5: Getting status bar..."
+        ' Step 4.3.5: Get Status Bar for the new session
+        Debug.Print "      - STEP 4.3.5: Getting status bar..."
         On Error Resume Next
         Set objSBar = objSess.FindById("wnd[0]/sbar")
         On Error GoTo ErrorHandler ' Restore MAIN error handler
-        If objSBar Is Nothing Then Debug.Print "      - Warning: Could not get status bar." Else Debug.Print "      - Status bar obtained."
+        If objSBar Is Nothing Then Debug.Print "        - Warning: Could not get status bar." Else Debug.Print "        - Status bar obtained."
 
-        ' Step 6: SSO Success
+        ' Step 4.3.6: SSO Success
         SessionObtained = True
-        Debug.Print "    - SSO Step 6: SSO login process successful."
+        Debug.Print "      - STEP 4.3.6: SSO login process successful."
 
-        ' Optional: Verify system match
+        ' Optional: Verify system match after login
         ' Inline CheckObject (objSess, "Session for System Verify", False)
         Set objToCheck = objSess: objName = "Session for System Verify": raiseErrorFlag = False
         If Not (objToCheck Is Nothing) Then
@@ -696,21 +716,23 @@ NextAttemptWait:
                     MsgBox "Warning: SSO login successful but connected to wrong system/client!" & vbCrLf & _
                            "Expected: '" & cTARGET_SYSTEM_ID_CLIENT & "'" & vbCrLf & _
                            "Connected: '" & loggedInSys & "'", vbExclamation
-               Else Debug.Print "      - System match verified ('" & loggedInSys & "')."
+               Else Debug.Print "        - System match verified ('" & loggedInSys & "')."
                End If
-           Else Debug.Print "      - Warning: Could not verify system match after SSO login (Error: " & sysCheckErr & ")."
+           Else Debug.Print "        - Warning: Could not verify system match after SSO login (Error: " & sysCheckErr & ")."
            End If
         Else
             Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
         End If
         Set objToCheck = Nothing ' Clear reusable variable
 
-        If SessionObtained Then GoTo RunMM03Script Else GoTo Cleanup
+        ' --- End STEP 4.3 ---
+        If SessionObtained Then GoTo RunMM03Script Else GoTo Cleanup ' Should always be true here unless error occurred
 
     End If ' End Path A vs Path B Check
 
 
     ' --- Fallback Check ---
+    ' If code reaches here, something went wrong, and no session was obtained.
     If Not SessionObtained Then
         Debug.Print "ERROR: Fallback reached - session not obtained after all attempts."
         MsgBox "Could not get a usable SAP session after all attempts (existing, /o, SSO).", vbCritical
@@ -719,7 +741,7 @@ NextAttemptWait:
 
 
 RunMM03Script:
-    ' --- Call the MM03 Scripting Logic ---
+    ' --- STEP 5: Call the MM03 Scripting Logic ---
     ' Inline CheckObject (objSess, "Session for RunGUIScript", True)
     Set objToCheck = objSess: objName = "Session for RunGUIScript": raiseErrorFlag = True
     If objToCheck Is Nothing Then
@@ -745,10 +767,12 @@ RunMM03Script:
     Set objToCheck = Nothing ' Clear reusable variable
 
 Cleanup:
-    ' --- Cleanup Section ---
+    ' --- STEP 6: Cleanup ---
     Debug.Print "-----------------------------------------------------"
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for StartExtract..."
+    Debug.Print "STEP 6: Running Cleanup for StartExtract..."
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Entering Cleanup..."
 
+    ' Restore Excel settings
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
     ' Reset Status Bar (Inline)
@@ -769,12 +793,12 @@ Cleanup:
 
     ' Explicitly release GLOBAL SAP objects (Optional: Comment out if needed across multiple runs)
      Debug.Print "  - Releasing global SAP objects..."
-     On Error Resume Next ' Ignore errors
+     On Error Resume Next ' Ignore errors if objects were never set or already Nothing
      Set objSBar = Nothing: Debug.Print "    - Released objSBar"
      Set objSess = Nothing: Debug.Print "    - Released objSess"
      Set objConn = Nothing: Debug.Print "    - Released objConn"
      Set objGui = Nothing: Debug.Print "    - Released objGui"
-     On Error GoTo 0
+     On Error GoTo 0 ' Restore default error handling
      Debug.Print "  - Global SAP objects released."
 
     Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - StartExtract finished."
