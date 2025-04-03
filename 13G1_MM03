@@ -5,6 +5,7 @@
 ' //          *** UPDATED to handle specific Warning & Information popups (wnd[1]) ***
 ' //          *** UPDATED Error Handler to prevent Subscript out of range ***
 ' //          *** UPDATED wnd[2] handling to capture message and NOT skip ***
+' //          *** UPDATED Excel write to be cell-by-cell to avoid subscript error ***
 ' //========================================================================
 Private Sub RunGUIScript()
 
@@ -71,6 +72,10 @@ Private Sub RunGUIScript()
     Dim totalMaterials As Long ' Total number of materials to process
     Dim currentMaterialNum As Long ' Counter for status bar
     Dim popupHandled As Boolean ' Flag to track if a popup was dealt with this cycle
+    ' *** New variables for cell-by-cell writing ***
+    Dim r As Long ' Row index for array/output range
+    Dim c As Long ' Column index for array/output range
+    Dim startCol As Long ' Starting column number for output
 
     On Error GoTo MM03ErrorHandler ' Set error handler for this subroutine
 
@@ -362,7 +367,7 @@ Private Sub RunGUIScript()
         End If
         Set popupWnd1 = Nothing ' Release popup object
 
-        ' --- *** MODIFIED: Check for wnd[2] AFTER wnd[1] handling (if any) *** ---
+        ' --- Check for wnd[2] AFTER wnd[1] handling (if any) ---
         Set popupWnd2 = Nothing
         On Error Resume Next
         Set popupWnd2 = objSess.FindById(cPOPUP_WND2_ID, False)
@@ -409,7 +414,6 @@ Private Sub RunGUIScript()
              Set popupWnd2 = Nothing
              Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling wnd[2]
 
-             ' --- *** REMOVED GoTo GoBackAndNext *** ---
              ' Allow script to proceed and attempt data extraction after handling wnd[2] warning/info
              Debug.Print "    - Secondary popup (wnd[2]) handled. Proceeding..."
 
@@ -572,27 +576,34 @@ NextIteration: ' Label to jump to for skipping a row completely (e.g., missing m
     Debug.Print "STEP 9: Finished processing all rows."
 
 
-    ' --- *** OPTIMIZATION: Write the entire array to Excel *** ---
+    ' --- *** MODIFIED: Write data cell-by-cell *** ---
     ' Check if array was dimensioned before attempting to write
     If totalMaterials > 0 Then
         Application.StatusBar = "Writing data to Excel..." ' Update status
-        Dim outputRange As Range
-        ' Define the top-left cell of the output range (Status column, starting row)
-        Set outputRange = ws.Range(cSTATUS_MSG_COL & cSTART_ROW)
-        ' Resize the range to match the array dimensions and write the data
-        On Error Resume Next ' Handle error if sheet is protected etc.
-        outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).value = dataOutputArray
+        Debug.Print "  - Writing data to Excel cell-by-cell..."
+        startCol = ws.Range(cSTATUS_MSG_COL & cSTART_ROW).Column ' Get starting column number
+
+        On Error Resume Next ' Use error handling for the write loop
+        For r = 1 To UBound(dataOutputArray, 1) ' Loop through rows (1 to totalMaterials)
+            For c = 1 To UBound(dataOutputArray, 2) ' Loop through columns (1 to 5)
+                ws.Cells(cSTART_ROW + r - 1, startCol + c - 1).value = dataOutputArray(r, c)
+            Next c
+            ' Optional: Add DoEvents occasionally for large datasets to keep Excel responsive
+            ' If r Mod 50 = 0 Then DoEvents
+        Next r
+
         If Err.Number <> 0 Then
-            MsgBox "Error writing data to Excel range " & outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).Address & ":" & vbCrLf & Err.Description, vbExclamation, "Excel Write Error"
+            MsgBox "Error during cell-by-cell write to Excel:" & vbCrLf & Err.Description, vbExclamation, "Excel Write Error"
             Err.Clear
         Else
-            Debug.Print "  - Data array written to worksheet starting at cell " & outputRange.Address & "."
+            Debug.Print "  - Data written cell-by-cell to worksheet starting at " & ws.Cells(cSTART_ROW, startCol).Address & "."
         End If
-        On Error GoTo MM03ErrorHandler ' Restore handler
-        Set outputRange = Nothing
+        On Error GoTo MM03ErrorHandler ' Restore main handler
+
     Else
         Debug.Print "  - No data processed or array not dimensioned. Skipping Excel write."
     End If
+    ' --- *** END MODIFIED SECTION *** ---
 
 
     ' --- Final Navigation Back (Optional) ---
