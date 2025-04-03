@@ -733,8 +733,9 @@ Private Sub RunGUIScript_MM03()
     Const cSTATUS_MSG_COL As String = "C" ' Column to write Status/Error messages
     Const cPROD_HIER_COL As String = "D" ' Column for Product Hierarchy
     Const cOLD_MAT_COL As String = "E" ' Column for Old Material Number
-    Const cCREATED_BY_COL As String = "F" ' Column for Created By
-    Const cCREATED_ON_COL As String = "G" ' Column for Created On
+    ' *** UPDATED: Columns for full label text ***
+    Const cCREATED_BY_COL As String = "F" ' Column for Full "Created by" text
+    Const cLAST_CHANGED_COL As String = "G" ' Column for Full "Last changed by" text
     Const cSTART_ROW As Long = 2 ' Starting row for data in Excel (assumes header in row 1)
     Const cSAP_SHORT_WAIT_MS As Long = 250 ' Short wait after simple actions (ms)
     Const cSAP_MEDIUM_WAIT_MS As Long = 750 ' Medium wait after navigation/popups (ms)
@@ -761,14 +762,12 @@ Private Sub RunGUIScript_MM03()
     Dim statusMessage As String ' Status/Error message from SAP
     Dim prodHier As String ' Extracted Product Hierarchy
     Dim oldMatNum As String ' Extracted Old Material Number
-    Dim createdBy As String ' Extracted Created By user
-    Dim createdOn As String ' Extracted Created On date
-    ' *** NEW: Variables for robust label reading ***
-    Dim tempCreatedBy As String
-    Dim tempCreatedOn As String
-    Dim labelText As String
+    ' *** UPDATED: Variables to hold full label text ***
+    Dim createdByText As String ' Full "Created by..." text
+    Dim lastChangedByText As String ' Full "Last changed by..." text
+    Dim labelText As String ' Temp variable for label text
     Dim child As Object ' Loop variable for popup children
-    ' *** End NEW ***
+    ' *** End UPDATED ***
     Dim mm03FieldCheck As Object ' To verify navigation
     Dim selectViewsPopup As GuiModalWindow ' Object for Select View(s) popup
     Dim infoPopup As GuiModalWindow ' Object for Info popup
@@ -851,10 +850,8 @@ Private Sub RunGUIScript_MM03()
         statusMessage = ""
         prodHier = ""
         oldMatNum = ""
-        createdBy = ""
-        createdOn = ""
-        tempCreatedBy = "" ' Reset temp variables
-        tempCreatedOn = ""
+        createdByText = "" ' Reset full text variables
+        lastChangedByText = ""
         Set selectViewsPopup = Nothing
         Set infoPopup = Nothing
         Set errorPopup = Nothing
@@ -977,11 +974,11 @@ Private Sub RunGUIScript_MM03()
         Debug.Print "    - Product Hierarchy: '" & prodHier & "'"
         Debug.Print "    - Old Material Num: '" & oldMatNum & "'"
 
-        ' --- Step 6: Extract Creation Info ---
-        Debug.Print "  - Attempting to extract creation info..."
+        ' --- Step 6: Extract Creation / Last Changed Info ---
+        Debug.Print "  - Attempting to extract creation/change info..."
         Set infoPopup = Nothing ' Reset variable
-        tempCreatedBy = "Not Found" ' Initialize temp variables
-        tempCreatedOn = "Not Found"
+        createdByText = "Not Found" ' Initialize full text variables
+        lastChangedByText = "Not Found"
 
         On Error Resume Next ' Handle error if Info button doesn't exist or popup fails
         objSess.FindById(cINFO_BTN_ID).press ' Press the Info button
@@ -995,43 +992,45 @@ Private Sub RunGUIScript_MM03()
         Set infoPopup = objSess.FindById(cINFO_POPUP_ID, False) ' Check if Info popup appeared
         If Err.Number = 0 And Not infoPopup Is Nothing Then
             Debug.Print "  - Info popup (wnd[1]) detected. Iterating labels..."
-            ' *** NEW: Iterate through labels in the user area ***
+            ' *** UPDATED: Iterate through labels and capture full text ***
             Dim userArea As Object ' GuiUserArea
             Set userArea = infoPopup.FindById(cINFO_POPUP_USER_AREA_ID) ' Get the user area container
             If Err.Number = 0 And Not userArea Is Nothing Then
+                Const createdByKey As String = "Created by"
+                Const changedByKey As String = "Last changed by" ' Keyword for last changed
+
                 For Each child In userArea.Children
                     If child.Type = "GuiLabel" Then ' Check if it's a label
                         labelText = Trim$(child.Text)
-                        ' Debug.Print "    - Found Label: '" & labelText & "'" ' Uncomment for detailed debugging
-                        If InStr(1, labelText, "Created by", vbTextCompare) > 0 Then
-                            tempCreatedBy = Trim$(Replace(labelText, "Created by", "", , , vbTextCompare))
-                            ' Attempt to extract date if it's on the same line
-                            If InStr(1, tempCreatedBy, " on ", vbTextCompare) > 0 Then
-                                tempCreatedOn = Trim$(Mid$(tempCreatedBy, InStr(1, tempCreatedBy, " on ", vbTextCompare) + 4))
-                                tempCreatedBy = Trim$(Left$(tempCreatedBy, InStr(1, tempCreatedBy, " on ", vbTextCompare) - 1))
-                            End If
-                            Debug.Print "      - Found Created By: '" & tempCreatedBy & "'"
-                            If tempCreatedOn <> "Not Found" And tempCreatedOn <> "" Then Debug.Print "      - Found Created On (from Created By line): '" & tempCreatedOn & "'"
-                        ElseIf InStr(1, labelText, "Created on", vbTextCompare) > 0 And tempCreatedOn = "Not Found" Then
-                            ' Only capture if not already found on the "Created by" line
-                            tempCreatedOn = Trim$(Replace(labelText, "Created on", "", , , vbTextCompare))
-                            Debug.Print "      - Found Created On: '" & tempCreatedOn & "'"
-                        ' Optional: Add similar checks for "Last changed by" / "Last changed on" if needed
-                        ' ElseIf InStr(1, labelText, "Last changed by", vbTextCompare) > 0 Then ...
+                        ' Debug.Print "    - Checking Label: '" & labelText & "'" ' Uncomment for detailed debugging
+
+                        ' Check for "Created by" - Only capture the first time
+                        If InStr(1, labelText, createdByKey, vbTextCompare) > 0 And createdByText = "Not Found" Then
+                            createdByText = labelText ' Store the entire label text
+                            Debug.Print "      - Found Created By Text: '" & createdByText & "'"
                         End If
+
+                        ' Check for "Last changed by" - Only capture the first time
+                        If InStr(1, labelText, changedByKey, vbTextCompare) > 0 And lastChangedByText = "Not Found" Then
+                           lastChangedByText = labelText ' Store the entire label text
+                           Debug.Print "      - Found Last Changed By Text: '" & lastChangedByText & "'"
+                        End If
+
                     End If
+                    ' Optional optimization: Exit loop if both found
+                    If createdByText <> "Not Found" And lastChangedByText <> "Not Found" Then Exit For
                 Next child ' End loop through children
             Else
                  Debug.Print "    - Warning: Could not find user area (" & cINFO_POPUP_USER_AREA_ID & ") in Info popup: " & Err.Description
                  Err.Clear
             End If
-            ' *** End NEW ***
+            ' *** End UPDATED ***
 
             ' Close the Info popup
             infoPopup.FindById(cINFO_POPUP_BACK_BTN_ID).press ' Press Back button
             Sleep cSAP_SHORT_WAIT_MS
         Else
-            Debug.Print "  - Info popup (wnd[1]) did not appear or error occurred (" & Err.Number & "). Skipping creation info."
+            Debug.Print "  - Info popup (wnd[1]) did not appear or error occurred (" & Err.Number & "). Skipping creation/change info."
             Err.Clear ' Clear any error from FindById failing
         End If
         Set infoPopup = Nothing ' Release object
@@ -1039,18 +1038,15 @@ Private Sub RunGUIScript_MM03()
         Set child = Nothing
         On Error GoTo MM03ErrorHandler ' Restore main handler
 
-        ' Assign found values (or defaults)
-        createdBy = tempCreatedBy
-        createdOn = tempCreatedOn
-
 WriteData:
         ' --- Step 7: Write Extracted Data to Excel ---
         Debug.Print "  - Writing data to Excel row " & i & "..."
         ws.Range(cSTATUS_MSG_COL & i).value = IIf(statusMessage = "", "OK", statusMessage) ' Write OK or earlier status message
         ws.Range(cPROD_HIER_COL & i).value = prodHier
         ws.Range(cOLD_MAT_COL & i).value = oldMatNum
-        ws.Range(cCREATED_BY_COL & i).value = createdBy
-        ws.Range(cCREATED_ON_COL & i).value = createdOn
+        ' *** UPDATED: Write full label text ***
+        ws.Range(cCREATED_BY_COL & i).value = createdByText
+        ws.Range(cLAST_CHANGED_COL & i).value = lastChangedByText
 
         ' --- Step 8: Navigate Back for Next Material ---
         Debug.Print "  - Pressing Back to return to initial MM03 screen..."
@@ -1058,7 +1054,6 @@ WriteData:
         Sleep cSAP_MEDIUM_WAIT_MS ' Wait before processing next material
 
 NextIteration: ' Label to jump to for skipping a row
-    ' *** CORRECTED: Changed 'Loop' to 'Next i' ***
     Next i ' End of the main For loop processing rows
 
     Debug.Print "-----------------------------------------------------"
