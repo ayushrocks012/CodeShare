@@ -2,7 +2,9 @@
 ' // Sub: RunGUIScript
 ' // Purpose: Executes MM03 steps to extract material data.
 ' //          Called only by StartExtract. Declared Private.
-' //          *** UPDATED to handle specific Warning & Information popups ***
+' //          *** UPDATED to handle specific Warning & Information popups (wnd[1]) ***
+' //          *** UPDATED Error Handler to prevent Subscript out of range ***
+' //          *** UPDATED wnd[2] handling to capture message and NOT skip ***
 ' //========================================================================
 Private Sub RunGUIScript()
 
@@ -29,11 +31,13 @@ Private Sub RunGUIScript()
     Const cVIEWS_POPUP_TITLE_KEYWORD As String = "Select View(s)" ' Keyword in the title
     Const cVIEWS_SELECT_ALL_BTN_ID As String = "wnd[1]/tbar[0]/btn[20]" ' Select All button
     Const cVIEWS_CONTINUE_BTN_ID As String = "wnd[1]/tbar[0]/btn[0]" ' OK/Continue button
-    ' --- Warning / Information Popup Elements (wnd[1]) ---
+    ' --- Warning / Information Popup Elements (wnd[1] and wnd[2]) ---
     Const cWARNING_POPUP_TITLE_KEYWORD As String = "Warning" ' Keyword in the Warning title
     Const cINFO_POPUP_TITLE_KEYWORD As String = "Information" ' Keyword in the Information title
-    Const cPOPUP_OK_BTN_ID As String = "wnd[1]/tbar[0]/btn[0]" ' OK/Continue button (often btn[0] for Warning/Info)
-    Const cPOPUP_USER_AREA_ID As String = "wnd[1]/usr" ' User area containing labels
+    Const cPOPUP_OK_BTN_ID_WND1 As String = "wnd[1]/tbar[0]/btn[0]" ' OK/Continue button for wnd[1]
+    Const cPOPUP_OK_BTN_ID_WND2 As String = "wnd[2]/tbar[0]/btn[0]" ' OK/Continue button for wnd[2]
+    Const cPOPUP_USER_AREA_ID_WND1 As String = "wnd[1]/usr" ' User area containing labels for wnd[1]
+    Const cPOPUP_USER_AREA_ID_WND2 As String = "wnd[2]/usr" ' User area containing labels for wnd[2]
     ' --- Basic Data 1 View Elements (wnd[0]) ---
     Const cPROD_HIER_FIELD_ID As String = "wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA" ' Product Hierarchy field
     Const cOLD_MAT_FIELD_ID As String = "wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT" ' Old Material Number field
@@ -104,7 +108,16 @@ Private Sub RunGUIScript()
     Debug.Print "  - Connected to Excel Worksheet: '" & ws.Name & "'"
 
     ' --- Get Last Row and Calculate Total ---
+    lastRow = 0 ' Initialize lastRow
+    On Error Resume Next ' Handle potential error if sheet is empty or columns don't exist
     lastRow = ws.Cells(ws.Rows.Count, cMATERIAL_COL).End(xlUp).row
+    If Err.Number <> 0 Then
+        MsgBox "Error determining last row in column " & cMATERIAL_COL & ". Check sheet format.", vbCritical, "Excel Read Error"
+        Err.Clear
+        GoTo MM03Cleanup
+    End If
+    On Error GoTo MM03ErrorHandler ' Restore handler
+
     If lastRow < cSTART_ROW Then
         MsgBox "No data found in Excel sheet '" & ws.Name & "' starting from row " & cSTART_ROW & ", column " & cMATERIAL_COL & ".", vbInformation, "No Input Data"
         GoTo MM03Cleanup ' Exit if no data
@@ -113,8 +126,17 @@ Private Sub RunGUIScript()
     Debug.Print "  - Last row with data in column " & cMATERIAL_COL & ": " & lastRow & " (Total: " & totalMaterials & ")"
 
     ' --- *** OPTIMIZATION: Size the output array *** ---
-    ' Array columns: Status, ProdHier, OldMat, CreatedBy, LastChangedBy
-    ReDim dataOutputArray(1 To totalMaterials, 1 To 5)
+    ' Check if totalMaterials is positive before ReDim
+    If totalMaterials > 0 Then
+        ' Array columns: Status, ProdHier, OldMat, CreatedBy, LastChangedBy
+        ReDim dataOutputArray(1 To totalMaterials, 1 To 5)
+        Debug.Print "  - Output array dimensioned: (1 To " & totalMaterials & ", 1 To 5)"
+    Else
+        ' Should have been caught by lastRow check, but handle defensively
+        Debug.Print "  - Warning: totalMaterials is not positive (" & totalMaterials & "). Array not dimensioned."
+        ' Optionally exit here if needed, though the loop below won't run
+    End If
+
 
     ' --- Navigate to MM03 ---
     Debug.Print "  - Navigating to transaction '" & cTRANSACTION & "'..."
@@ -175,11 +197,16 @@ Private Sub RunGUIScript()
             Debug.Print "  - WARNING: Skipping row " & i & " due to missing Material Number."
             statusMessage = "Skipped - Missing Material"
             ' Store status in array and skip SAP interaction
-            dataOutputArray(outputRow, 1) = statusMessage ' Corresponds to STATUS_MSG_COL
-            dataOutputArray(outputRow, 2) = "" ' Prod Hier
-            dataOutputArray(outputRow, 3) = "" ' Old Mat
-            dataOutputArray(outputRow, 4) = "" ' Created By
-            dataOutputArray(outputRow, 5) = "" ' Last Changed
+            ' Check if array was dimensioned before writing
+            If totalMaterials > 0 Then
+                 dataOutputArray(outputRow, 1) = statusMessage ' Corresponds to STATUS_MSG_COL
+                 dataOutputArray(outputRow, 2) = "" ' Prod Hier
+                 dataOutputArray(outputRow, 3) = "" ' Old Mat
+                 dataOutputArray(outputRow, 4) = "" ' Created By
+                 dataOutputArray(outputRow, 5) = "" ' Last Changed
+            Else
+                 ws.Range(cSTATUS_MSG_COL & i).value = statusMessage ' Fallback to cell if array invalid
+            End If
             GoTo NextIteration ' Skip to the next row
         End If
         Debug.Print "  - Material Number from Excel: '" & materialNumber & "'"
@@ -219,19 +246,21 @@ Private Sub RunGUIScript()
                     statusMessage = "Error handling Select Views popup"
                     Err.Clear
                     On Error Resume Next: popupWnd1.Close: On Error GoTo MM03ErrorHandler ' Try to close
-                    dataOutputArray(outputRow, 1) = statusMessage
+                    If totalMaterials > 0 Then dataOutputArray(outputRow, 1) = statusMessage
                     GoTo GoBackAndNext ' Go back before next iteration
                 End If
                 On Error GoTo MM03ErrorHandler ' Restore error handler
                 Debug.Print "    - 'Select View(s)' handled. Waiting..."
                 Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling popup
+                ' *** After handling Select Views, reset popupHandled to allow check for wnd[2] ***
+                popupHandled = False
 
             ' --- Case 2: Warning Popup ---
             ElseIf InStr(1, popup1Title, cWARNING_POPUP_TITLE_KEYWORD, vbTextCompare) > 0 Then
-                Debug.Print "    - Handling 'Warning' popup..."
+                Debug.Print "    - Handling 'Warning' popup (wnd[1])..."
                 statusMessage = "" ' Clear default "OK" to capture warning
                 On Error Resume Next ' Handle errors getting user area or labels
-                Set userArea = popupWnd1.FindById(cPOPUP_USER_AREA_ID)
+                Set userArea = popupWnd1.FindById(cPOPUP_USER_AREA_ID_WND1)
                 If Err.Number = 0 And Not userArea Is Nothing Then
                     For Each child In userArea.Children
                         If child.Type = "GuiLabel" Then
@@ -245,14 +274,14 @@ Private Sub RunGUIScript()
                     Next child
                     Set child = Nothing: Set userArea = Nothing
                 Else
-                     Debug.Print "      - Warning: Could not find user area (" & cPOPUP_USER_AREA_ID & ") in Warning popup: " & Err.Description
-                     statusMessage = "Warning Popup - Text Read Error" ' Fallback message
+                     Debug.Print "      - Warning: Could not find user area (" & cPOPUP_USER_AREA_ID_WND1 & ") in Warning popup: " & Err.Description
+                     statusMessage = "Warning Popup (wnd1) - Text Read Error" ' Fallback message
                 End If
                 Err.Clear ' Clear any errors from reading labels
 
                 ' Press OK on the warning popup
-                Debug.Print "      - Pressing OK button (" & cPOPUP_OK_BTN_ID & ")..."
-                popupWnd1.FindById(cPOPUP_OK_BTN_ID).press
+                Debug.Print "      - Pressing OK button (" & cPOPUP_OK_BTN_ID_WND1 & ")..."
+                popupWnd1.FindById(cPOPUP_OK_BTN_ID_WND1).press
                 If Err.Number <> 0 Then
                     Debug.Print "      - Error pressing OK on Warning popup: " & Err.Description
                     statusMessage = statusMessage & " (Error closing)" ' Append error note
@@ -260,16 +289,16 @@ Private Sub RunGUIScript()
                     On Error Resume Next: popupWnd1.Close: On Error GoTo MM03ErrorHandler ' Try to close
                 End If
                 On Error GoTo MM03ErrorHandler ' Restore error handler
-                Debug.Print "    - 'Warning' popup handled. Proceeding to data extraction."
+                Debug.Print "    - 'Warning' popup (wnd[1]) handled. Proceeding to data extraction."
                 Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling popup
 
-            ' --- *** NEW Case: Information Popup (e.g., Material Does Not Exist) *** ---
+            ' --- Case 3: Information Popup (e.g., Material Does Not Exist) ---
             ElseIf InStr(1, popup1Title, cINFO_POPUP_TITLE_KEYWORD, vbTextCompare) > 0 Then
-                Debug.Print "    - Handling 'Information' popup..."
+                Debug.Print "    - Handling 'Information' popup (wnd[1])..."
                 statusMessage = "" ' Clear default "OK" to capture info message
                 Dim infoMsgFound As Boolean: infoMsgFound = False
                 On Error Resume Next ' Handle errors getting user area or labels
-                Set userArea = popupWnd1.FindById(cPOPUP_USER_AREA_ID)
+                Set userArea = popupWnd1.FindById(cPOPUP_USER_AREA_ID_WND1)
                 If Err.Number = 0 And Not userArea Is Nothing Then
                     For Each child In userArea.Children
                         If child.Type = "GuiLabel" Then
@@ -284,8 +313,8 @@ Private Sub RunGUIScript()
                     Next child
                     Set child = Nothing: Set userArea = Nothing
                 Else
-                     Debug.Print "      - Warning: Could not find user area (" & cPOPUP_USER_AREA_ID & ") in Information popup: " & Err.Description
-                     statusMessage = "Information Popup - Text Read Error" ' Fallback message
+                     Debug.Print "      - Warning: Could not find user area (" & cPOPUP_USER_AREA_ID_WND1 & ") in Information popup: " & Err.Description
+                     statusMessage = "Information Popup (wnd1) - Text Read Error" ' Fallback message
                 End If
                 Err.Clear ' Clear any errors from reading labels
 
@@ -293,8 +322,8 @@ Private Sub RunGUIScript()
                 If Not infoMsgFound Then statusMessage = popup1Title
 
                 ' Press OK on the Information popup
-                Debug.Print "      - Pressing OK button (" & cPOPUP_OK_BTN_ID & ")..."
-                popupWnd1.FindById(cPOPUP_OK_BTN_ID).press
+                Debug.Print "      - Pressing OK button (" & cPOPUP_OK_BTN_ID_WND1 & ")..."
+                popupWnd1.FindById(cPOPUP_OK_BTN_ID_WND1).press
                 If Err.Number <> 0 Then
                     Debug.Print "      - Error pressing OK on Information popup: " & Err.Description
                     statusMessage = statusMessage & " (Error closing)" ' Append error note
@@ -307,24 +336,24 @@ Private Sub RunGUIScript()
                 If InStr(1, statusMessage, "does not exist", vbTextCompare) > 0 Or _
                    InStr(1, statusMessage, "not activated", vbTextCompare) > 0 Then
                     Debug.Print "    - Information popup indicates material does not exist/not active. Skipping data extraction."
-                    dataOutputArray(outputRow, 1) = statusMessage ' Store the captured message
+                    If totalMaterials > 0 Then dataOutputArray(outputRow, 1) = statusMessage ' Store the captured message
                     GoTo GoBackAndNext ' Go back and skip to next iteration
                 Else
-                    Debug.Print "    - 'Information' popup handled. Proceeding to data extraction."
+                    Debug.Print "    - 'Information' popup (wnd[1]) handled. Proceeding to data extraction."
                     Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling popup
                 End If
 
              ' --- Case 4: Unexpected wnd[1] Popup ---
              Else
                 Debug.Print "    - Unexpected popup (wnd[1]) detected. Title: '" & popup1Title & "'"
-                statusMessage = "Unexpected Popup: " & popup1Title
+                statusMessage = "Unexpected Popup (wnd1): " & popup1Title
                 On Error Resume Next ' Try to close it
-                popupWnd1.FindById(cPOPUP_OK_BTN_ID).press ' Try OK button first
+                popupWnd1.FindById(cPOPUP_OK_BTN_ID_WND1).press ' Try OK button first
                 If Err.Number <> 0 Then popupWnd1.Close ' Try Close method if OK fails
                 Err.Clear
                 On Error GoTo MM03ErrorHandler
                 Debug.Print "    - Skipping data extraction due to unexpected popup."
-                dataOutputArray(outputRow, 1) = statusMessage
+                If totalMaterials > 0 Then dataOutputArray(outputRow, 1) = statusMessage
                 GoTo GoBackAndNext ' Go back before next iteration
              End If
         Else
@@ -333,27 +362,63 @@ Private Sub RunGUIScript()
         End If
         Set popupWnd1 = Nothing ' Release popup object
 
-        ' Check for wnd[2] ONLY if wnd[1] wasn't found or was handled without blocking
-        ' (Note: GoTo GoBackAndNext bypasses this check)
+        ' --- *** MODIFIED: Check for wnd[2] AFTER wnd[1] handling (if any) *** ---
         Set popupWnd2 = Nothing
         On Error Resume Next
         Set popupWnd2 = objSess.FindById(cPOPUP_WND2_ID, False)
         If Err.Number = 0 And Not popupWnd2 Is Nothing Then
-             statusMessage = Trim$(popupWnd2.Text) ' Capture text from wnd[2]
-             Debug.Print "  - Secondary Popup (wnd[2]) detected. Text: '" & statusMessage & "'"
-             popupWnd2.FindById("tbar[0]/btn[0]").press ' Press OK/Continue
+             Dim popup2Title As String: popup2Title = popupWnd2.Text
+             Debug.Print "  - Secondary Popup (wnd[2]) detected. Title: '" & popup2Title & "'"
+             statusMessage = "" ' Clear previous status to capture wnd[2] message
+
+             ' Capture the actual message text from wnd[2]
+             Dim msgFoundW2 As Boolean: msgFoundW2 = False
+             On Error Resume Next ' Handle errors getting user area or labels
+             Set userArea = popupWnd2.FindById(cPOPUP_USER_AREA_ID_WND2)
+             If Err.Number = 0 And Not userArea Is Nothing Then
+                 For Each child In userArea.Children
+                     If child.Type = "GuiLabel" Then
+                         labelText = Trim$(child.Text)
+                         ' Capture non-empty label text that isn't just the title (e.g., "Warning", "Information")
+                         If labelText <> "" And UCase(labelText) <> "WARNING" And UCase(labelText) <> "INFORMATION" Then
+                             statusMessage = labelText
+                             msgFoundW2 = True
+                             Debug.Print "      - Captured wnd[2] Message Text: '" & statusMessage & "'"
+                             Exit For ' Assume first relevant label is the message
+                         End If
+                     End If
+                 Next child
+                 Set child = Nothing: Set userArea = Nothing
+             Else
+                  Debug.Print "      - Warning: Could not find user area (" & cPOPUP_USER_AREA_ID_WND2 & ") in wnd[2] popup: " & Err.Description
+                  statusMessage = popup2Title & " (wnd2) - Text Read Error" ' Fallback message
+             End If
+             Err.Clear ' Clear any errors from reading labels
+             ' If no specific message found, use the title as fallback
+             If Not msgFoundW2 Then statusMessage = popup2Title & " (wnd2)"
+
+             ' Press OK/Continue on wnd[2]
+             Debug.Print "      - Pressing OK button (" & cPOPUP_OK_BTN_ID_WND2 & ")..."
+             popupWnd2.FindById(cPOPUP_OK_BTN_ID_WND2).press
+             If Err.Number <> 0 Then
+                 Debug.Print "      - Error pressing OK on wnd[2] popup: " & Err.Description
+                 statusMessage = statusMessage & " (Error closing)" ' Append error note
+                 Err.Clear
+                 On Error Resume Next: popupWnd2.Close: On Error GoTo MM03ErrorHandler ' Try to close
+             End If
              Set popupWnd2 = Nothing
-             Sleep cSAP_SHORT_WAIT_MS
-             ' Assume this error prevents further processing for this material
-             Debug.Print "  - Skipping data extraction due to secondary popup (wnd[2])."
-             dataOutputArray(outputRow, 1) = statusMessage
-             GoTo GoBackAndNext ' Go back before next iteration
+             Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling wnd[2]
+
+             ' --- *** REMOVED GoTo GoBackAndNext *** ---
+             ' Allow script to proceed and attempt data extraction after handling wnd[2] warning/info
+             Debug.Print "    - Secondary popup (wnd[2]) handled. Proceeding..."
+
         End If
         Err.Clear
         On Error GoTo MM03ErrorHandler
 
 
-        ' --- Step 4: Check Status Bar (as fallback or if no popup occurred) ---
+        ' --- Step 4: Check Status Bar (as fallback or if no relevant popup occurred/handled) ---
         Dim tempStatus As String: tempStatus = ""
         If Not objSBar Is Nothing Then
             tempStatus = Trim$(objSBar.Text)
@@ -365,7 +430,7 @@ Private Sub RunGUIScript()
                         InStr(1, tempStatus, "Material locked", vbTextCompare) > 0 Then
                         Debug.Print "  - CRITICAL status message found. Skipping data extraction."
                         statusMessage = tempStatus ' Overwrite status with critical error
-                        dataOutputArray(outputRow, 1) = statusMessage
+                        If totalMaterials > 0 Then dataOutputArray(outputRow, 1) = statusMessage
                         GoTo GoBackAndNext ' Go back before next iteration
                      ' Check for known warnings/info messages to record, but allow continuation
                      ElseIf InStr(1, tempStatus, "not maintained", vbTextCompare) > 0 Or _
@@ -475,11 +540,22 @@ Private Sub RunGUIScript()
 StoreDataInArray:
         ' --- Step 7: Store Extracted Data in Array ---
         Debug.Print "  - Storing data in array for row " & i & "..."
-        dataOutputArray(outputRow, 1) = statusMessage ' Col C
-        dataOutputArray(outputRow, 2) = prodHier      ' Col D
-        dataOutputArray(outputRow, 3) = oldMatNum     ' Col E
-        dataOutputArray(outputRow, 4) = createdByText ' Col F
-        dataOutputArray(outputRow, 5) = lastChangedByText ' Col G
+        ' Check if array was dimensioned before writing
+        If totalMaterials > 0 Then
+            dataOutputArray(outputRow, 1) = statusMessage ' Col C
+            dataOutputArray(outputRow, 2) = prodHier      ' Col D
+            dataOutputArray(outputRow, 3) = oldMatNum     ' Col E
+            dataOutputArray(outputRow, 4) = createdByText ' Col F
+            dataOutputArray(outputRow, 5) = lastChangedByText ' Col G
+        Else
+            ' Fallback to writing directly to cells if array is invalid (should be rare)
+            ws.Range(cSTATUS_MSG_COL & i).value = statusMessage
+            ws.Range(cPROD_HIER_COL & i).value = prodHier
+            ws.Range(cOLD_MAT_COL & i).value = oldMatNum
+            ws.Range(cCREATED_BY_COL & i).value = createdByText
+            ws.Range(cLAST_CHANGED_COL & i).value = lastChangedByText
+        End If
+
 
 GoBackAndNext: ' Label used when skipping after critical error/popup
         ' --- Step 8: Navigate Back for Next Material ---
@@ -494,23 +570,30 @@ NextIteration: ' Label to jump to for skipping a row completely (e.g., missing m
 
     Debug.Print "-----------------------------------------------------"
     Debug.Print "STEP 9: Finished processing all rows."
-    Application.StatusBar = "Writing data to Excel..." ' Update status
+
 
     ' --- *** OPTIMIZATION: Write the entire array to Excel *** ---
-    Dim outputRange As Range
-    ' Define the top-left cell of the output range (Status column, starting row)
-    Set outputRange = ws.Range(cSTATUS_MSG_COL & cSTART_ROW)
-    ' Resize the range to match the array dimensions and write the data
-    On Error Resume Next ' Handle error if sheet is protected etc.
-    outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).value = dataOutputArray
-    If Err.Number <> 0 Then
-        MsgBox "Error writing data to Excel range " & outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).Address & ":" & vbCrLf & Err.Description, vbExclamation
-        Err.Clear
+    ' Check if array was dimensioned before attempting to write
+    If totalMaterials > 0 Then
+        Application.StatusBar = "Writing data to Excel..." ' Update status
+        Dim outputRange As Range
+        ' Define the top-left cell of the output range (Status column, starting row)
+        Set outputRange = ws.Range(cSTATUS_MSG_COL & cSTART_ROW)
+        ' Resize the range to match the array dimensions and write the data
+        On Error Resume Next ' Handle error if sheet is protected etc.
+        outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).value = dataOutputArray
+        If Err.Number <> 0 Then
+            MsgBox "Error writing data to Excel range " & outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).Address & ":" & vbCrLf & Err.Description, vbExclamation, "Excel Write Error"
+            Err.Clear
+        Else
+            Debug.Print "  - Data array written to worksheet starting at cell " & outputRange.Address & "."
+        End If
+        On Error GoTo MM03ErrorHandler ' Restore handler
+        Set outputRange = Nothing
     Else
-        Debug.Print "  - Data array written to worksheet starting at cell " & outputRange.Address & "."
+        Debug.Print "  - No data processed or array not dimensioned. Skipping Excel write."
     End If
-    On Error GoTo MM03ErrorHandler ' Restore handler
-    Set outputRange = Nothing
+
 
     ' --- Final Navigation Back (Optional) ---
     ' Go back one more time from the initial MM03 screen if desired
@@ -533,7 +616,8 @@ MM03Cleanup:
     Set adminInfoPopup = Nothing
     Set userArea = Nothing
     Set child = Nothing
-    Erase dataOutputArray ' Clear the array memory
+    ' Check if array is dimensioned before erasing
+    If IsArrayInitialized(dataOutputArray) Then Erase dataOutputArray ' Clear the array memory
     Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript."
     Exit Sub ' Normal exit
 
@@ -547,17 +631,30 @@ MM03ErrorHandler:
     If i > 0 And i <= lastRow Then Debug.Print "  Processing Row: " & i & ", Material: '" & materialNumber & "'" ' Add context
     Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 
+    ' --- MODIFIED Error Message Writing ---
     ' Write error message to current row in Excel if possible
-    If Not ws Is Nothing And i >= cSTART_ROW And i <= lastRow Then ' Check bounds
-        On Error Resume Next ' Avoid error loop if writing to Excel fails
-        ' Try writing to array first if it exists and outputRow is valid
-        If outputRow > 0 And outputRow <= UBound(dataOutputArray, 1) Then
-             dataOutputArray(outputRow, 1) = "Error: " & errDescRun ' Status column
-        Else ' Fallback to writing directly to cell if array isn't ready/valid
-             ws.Range(cSTATUS_MSG_COL & i).value = "Error: " & errDescRun & " (#" & errNumRun & ")"
+    If Not ws Is Nothing Then ' Check if worksheet object is valid
+        ' Check if outputRow is within the valid array index range (1 to totalMaterials)
+        ' Also check if the array has actually been dimensioned (totalMaterials > 0)
+        If totalMaterials > 0 And outputRow >= 1 And outputRow <= UBound(dataOutputArray, 1) Then
+            On Error Resume Next ' Avoid error loop if writing to array fails
+            dataOutputArray(outputRow, 1) = "Error: " & errDescRun ' Status column
+            On Error GoTo 0
+            Debug.Print "  - Error written to array at outputRow: " & outputRow
+        ' Else, try writing directly to the cell using 'i', but only if 'i' is valid
+        ElseIf i >= cSTART_ROW And i <= lastRow Then
+            On Error Resume Next ' Avoid error loop if writing to cell fails
+            ws.Range(cSTATUS_MSG_COL & i).value = "Error: " & errDescRun & " (#" & errNumRun & ")"
+            On Error GoTo 0
+            Debug.Print "  - Error written directly to cell: " & cSTATUS_MSG_COL & i
+        Else
+            Debug.Print "  - Could not write error to array or cell (outputRow=" & outputRow & ", i=" & i & ")"
         End If
-        On Error GoTo 0 ' Turn off Resume Next
+    Else
+         Debug.Print "  - Worksheet object invalid. Cannot write error message."
     End If
+    ' --- END MODIFIED Error Message Writing ---
+
 
     MsgBox "Error during MM03 script execution:" & vbCrLf & _
            "Row: " & i & " (Material: " & materialNumber & ")" & vbCrLf & _
@@ -581,3 +678,12 @@ MM03ErrorHandler:
     Resume MM03Cleanup ' Go to cleanup section after handling error
 
 End Sub
+
+
+' Helper function to check if an array has been dimensioned
+' (Handles the error caused by UBound on an uninitialized dynamic array)
+Private Function IsArrayInitialized(arr As Variant) As Boolean
+    On Error Resume Next
+    IsArrayInitialized = (UBound(arr) >= LBound(arr))
+    On Error GoTo 0
+End Function
