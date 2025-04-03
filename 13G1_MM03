@@ -1,0 +1,533 @@
+' //========================================================================
+' // Sub: RunGUIScript
+' // Purpose: Executes MM03 steps to extract material data.
+' //          Called only by StartExtract. Declared Private.
+' //          *** UPDATED to handle specific Warning popups ***
+' //========================================================================
+Private Sub RunGUIScript()
+
+    ' --- Constants specific to MM03 Execution ---
+    Const cTRANSACTION As String = "mm03" ' Transaction code
+    ' Excel Columns (Adjust if your sheet layout is different)
+    Const cMATERIAL_COL As String = "A" ' Column with Material numbers to read
+    Const cSTATUS_MSG_COL As String = "C" ' Column to write Status/Error/Warning messages
+    Const cPROD_HIER_COL As String = "D" ' Column for Product Hierarchy
+    Const cOLD_MAT_COL As String = "E" ' Column for Old Material Number
+    Const cCREATED_BY_COL As String = "F" ' Column for Full "Created by" text
+    Const cLAST_CHANGED_COL As String = "G" ' Column for Full "Last changed by" text
+    Const cSTART_ROW As Long = 2 ' Starting row for data in Excel (assumes header in row 1)
+    Const cSAP_SHORT_WAIT_MS As Long = 250 ' Short wait after simple actions (ms)
+    Const cSAP_MEDIUM_WAIT_MS As Long = 750 ' Medium wait after navigation/popups (ms)
+    Const cSAP_LONG_WAIT_MS As Long = 1500 ' Longer wait after complex popups or transaction changes
+
+    ' --- SAP GUI Element IDs (Verify with Scripting Tracker if errors occur) ---
+    Const cMATNR_FIELD_ID As String = "wnd[0]/usr/ctxtRMMG1-MATNR" ' Material Number input field
+    ' --- Popup Window IDs ---
+    Const cPOPUP_WND1_ID As String = "wnd[1]" ' Generic ID for first popup
+    Const cPOPUP_WND2_ID As String = "wnd[2]" ' Generic ID for second popup
+    ' --- Select View(s) Popup Elements (wnd[1]) ---
+    Const cVIEWS_POPUP_TITLE_KEYWORD As String = "Select View(s)" ' Keyword in the title
+    Const cVIEWS_SELECT_ALL_BTN_ID As String = "wnd[1]/tbar[0]/btn[20]" ' Select All button
+    Const cVIEWS_CONTINUE_BTN_ID As String = "wnd[1]/tbar[0]/btn[0]" ' OK/Continue button
+    ' --- Warning Popup Elements (wnd[1]) ---
+    Const cWARNING_POPUP_TITLE_KEYWORD As String = "Warning" ' Keyword in the title
+    Const cWARNING_POPUP_OK_BTN_ID As String = "wnd[1]/tbar[0]/btn[0]" ' OK/Continue button
+    Const cWARNING_POPUP_USER_AREA_ID As String = "wnd[1]/usr" ' User area containing labels
+    ' --- Basic Data 1 View Elements (wnd[0]) ---
+    Const cPROD_HIER_FIELD_ID As String = "wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA" ' Product Hierarchy field
+    Const cOLD_MAT_FIELD_ID As String = "wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT" ' Old Material Number field
+    Const cINFO_BTN_ID As String = "wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO" ' Info button for creation details
+    ' --- Info Popup Elements (wnd[1] - different context) ---
+    Const cINFO_POPUP_USER_AREA_ID As String = "wnd[1]/usr" ' User area within the info popup
+    Const cINFO_POPUP_BACK_BTN_ID As String = "wnd[1]/tbar[0]/btn[3]" ' Back button on Info popup
+    ' --- Main Screen Elements (wnd[0]) ---
+    Const cMAIN_BACK_BTN_ID As String = "wnd[0]/tbar[0]/btn[3]" ' Back button on main MM03 screen
+
+    ' --- Local Variables ---
+    Dim ws As Worksheet ' Excel worksheet object
+    Dim lastRow As Long ' Last row with data in Excel
+    Dim i As Long ' Loop counter for rows
+    Dim materialNumber As String ' Material number read from Excel
+    Dim statusMessage As String ' Status/Error/Warning message from SAP
+    Dim prodHier As String ' Extracted Product Hierarchy
+    Dim oldMatNum As String ' Extracted Old Material Number
+    Dim createdByText As String ' Full "Created by..." text
+    Dim lastChangedByText As String ' Full "Last changed by..." text
+    Dim labelText As String ' Temp variable for label text
+    Dim child As Object ' Loop variable for popup children
+    Dim mm03FieldCheck As Object ' To verify navigation
+    Dim popupWnd1 As GuiModalWindow ' Object for wnd[1] popup
+    Dim popupWnd2 As GuiModalWindow ' Object for wnd[2] popup
+    Dim infoPopup As GuiModalWindow ' Object for Info popup (uses wnd[1] ID)
+    Dim userArea As Object ' GuiUserArea
+    Dim objExcelApp As Object ' Excel Application object
+    Dim dataOutputArray() As Variant ' Array to hold results for faster writing
+    Dim outputRow As Long ' Row index for the output array
+    Dim totalMaterials As Long ' Total number of materials to process
+    Dim currentMaterialNum As Long ' Counter for status bar
+    Dim popupHandled As Boolean ' Flag to track if a popup was dealt with
+
+    On Error GoTo MM03ErrorHandler ' Set error handler for this subroutine
+
+    ' --- Pre-checks ---
+    Debug.Print "Entering RunGUIScript..."
+    If objSess Is Nothing Then Err.Raise vbObjectError + 510, "RunGUIScript", "objSess is not valid."
+    ' Try to get status bar if not already set
+    If objSBar Is Nothing Then
+        On Error Resume Next
+        Set objSBar = objSess.FindById("wnd[0]/sbar")
+        On Error GoTo MM03ErrorHandler ' Restore handler
+        If objSBar Is Nothing Then Debug.Print "  - Warning: objSBar could not be obtained for session #" & objSess.Info.SessionNumber & "."
+    End If
+    Debug.Print "  - Session #" & objSess.Info.SessionNumber & " and Status Bar objects checked (Status Bar " & IIf(objSBar Is Nothing, "Not ", "") & "obtained)."
+
+    ' --- Get Excel Worksheet ---
+    On Error Resume Next ' Handle case where Excel isn't open or sheet doesn't exist
+    Set objExcelApp = GetObject(, "Excel.Application")
+    If Err.Number <> 0 Then
+        MsgBox "Error: Could not connect to running Excel application.", vbCritical, "Excel Connection Error"
+        GoTo MM03Cleanup ' Exit if Excel not found
+    End If
+    Err.Clear ' Clear potential GetObject error if Excel was found
+    On Error GoTo MM03ErrorHandler ' Restore main error handler
+
+    Set ws = Nothing ' Reset worksheet object
+    On Error Resume Next ' Try to get the specific sheet
+    Set ws = objExcelApp.Worksheets("Sheet1") ' *** CHANGE "Sheet1" if your sheet name is different ***
+    If Err.Number <> 0 Or ws Is Nothing Then
+        MsgBox "Error: Could not find worksheet named 'Sheet1' in the active Excel workbook.", vbCritical, "Excel Worksheet Error"
+        Set objExcelApp = Nothing
+        GoTo MM03Cleanup ' Exit if sheet not found
+    End If
+    On Error GoTo MM03ErrorHandler ' Restore main error handler
+    Debug.Print "  - Connected to Excel Worksheet: '" & ws.Name & "'"
+
+    ' --- Get Last Row and Calculate Total ---
+    lastRow = ws.Cells(ws.Rows.Count, cMATERIAL_COL).End(xlUp).row
+    If lastRow < cSTART_ROW Then
+        MsgBox "No data found in Excel sheet '" & ws.Name & "' starting from row " & cSTART_ROW & ", column " & cMATERIAL_COL & ".", vbInformation, "No Input Data"
+        GoTo MM03Cleanup ' Exit if no data
+    End If
+    totalMaterials = lastRow - cSTART_ROW + 1
+    Debug.Print "  - Last row with data in column " & cMATERIAL_COL & ": " & lastRow & " (Total: " & totalMaterials & ")"
+
+    ' --- *** OPTIMIZATION: Size the output array *** ---
+    ' Array columns: Status, ProdHier, OldMat, CreatedBy, LastChangedBy
+    ReDim dataOutputArray(1 To totalMaterials, 1 To 5)
+
+    ' --- Navigate to MM03 ---
+    Debug.Print "  - Navigating to transaction '" & cTRANSACTION & "'..."
+    Application.StatusBar = "Navigating to MM03..." ' Update status
+    If objSess.Info.Transaction <> UCase(cTRANSACTION) Then
+        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION
+        objSess.FindById("wnd[0]").sendVKey 0
+        Sleep cSAP_LONG_WAIT_MS ' Longer wait after transaction change
+    Else
+        ' If already in MM03, press Back to ensure we are at the initial screen
+        Debug.Print "  - Already in MM03, pressing Back to reset..."
+        On Error Resume Next ' Ignore error if Back button isn't active
+        objSess.FindById(cMAIN_BACK_BTN_ID).press
+        On Error GoTo MM03ErrorHandler
+        Sleep cSAP_MEDIUM_WAIT_MS
+    End If
+
+    ' --- Verify Navigation to MM03 Initial Screen ---
+    On Error Resume Next
+    Set mm03FieldCheck = objSess.FindById(cMATNR_FIELD_ID)
+    If Err.Number <> 0 Or mm03FieldCheck Is Nothing Then
+        Err.Clear
+        On Error GoTo MM03ErrorHandler
+        Err.Raise vbObjectError + 511, "RunGUIScript", "Failed to navigate to " & cTRANSACTION & " initial screen. Expected field '" & cMATNR_FIELD_ID & "' not found."
+    Else
+        Debug.Print "  - Successfully navigated to MM03 initial screen."
+    End If
+    Set mm03FieldCheck = Nothing ' Release check object
+    On Error GoTo MM03ErrorHandler ' Ensure main handler is active
+
+    ' --- Loop through each row in Excel ---
+    outputRow = 0 ' Initialize output array row counter
+    For i = cSTART_ROW To lastRow
+        outputRow = outputRow + 1 ' Increment array row index
+        currentMaterialNum = outputRow ' Counter for status bar
+
+        Debug.Print "-----------------------------------------------------"
+        Debug.Print "Processing row: " & i & " (" & currentMaterialNum & "/" & totalMaterials & ")"
+
+        ' --- Reset variables for this row ---
+        materialNumber = ""
+        statusMessage = "OK" ' Default status
+        prodHier = ""
+        oldMatNum = ""
+        createdByText = "" ' Reset full text variables
+        lastChangedByText = ""
+        Set popupWnd1 = Nothing
+        Set popupWnd2 = Nothing
+        Set infoPopup = Nothing
+        popupHandled = False ' Reset flag
+
+        ' --- Update Status Bar ---
+        materialNumber = Trim$(CStr(ws.Range(cMATERIAL_COL & i).value)) ' Read material early for status bar
+        Application.StatusBar = "Processing " & currentMaterialNum & " of " & totalMaterials & ": '" & materialNumber & "'..."
+
+        ' --- Step 1: Read Material Number from Excel ---
+        If materialNumber = "" Then
+            Debug.Print "  - WARNING: Skipping row " & i & " due to missing Material Number."
+            statusMessage = "Skipped - Missing Material"
+            ' Store status in array and skip SAP interaction
+            dataOutputArray(outputRow, 1) = statusMessage ' Corresponds to STATUS_MSG_COL
+            dataOutputArray(outputRow, 2) = "" ' Prod Hier
+            dataOutputArray(outputRow, 3) = "" ' Old Mat
+            dataOutputArray(outputRow, 4) = "" ' Created By
+            dataOutputArray(outputRow, 5) = "" ' Last Changed
+            GoTo NextIteration ' Skip to the next row
+        End If
+        Debug.Print "  - Material Number from Excel: '" & materialNumber & "'"
+
+        ' --- Step 2: Enter Material and Press Enter ---
+        Debug.Print "  - Entering Material Number and pressing Enter..."
+        objSess.FindById(cMATNR_FIELD_ID).Text = materialNumber
+        objSess.FindById("wnd[0]").sendVKey 0
+        Sleep cSAP_MEDIUM_WAIT_MS ' Wait for potential popup or status message
+
+        ' --- Step 3: Handle Popups (wnd[1] then wnd[2]) ---
+        ' Check for wnd[1] first
+        Set popupWnd1 = Nothing ' Reset variable
+        On Error Resume Next ' Check if the popup exists
+        Set popupWnd1 = objSess.FindById(cPOPUP_WND1_ID, False) ' False = don't raise error if not found
+        Dim popup1Err As Long: popup1Err = Err.Number
+        Err.Clear
+        On Error GoTo MM03ErrorHandler ' Restore error handler
+
+        If popup1Err = 0 And Not popupWnd1 Is Nothing Then
+            Dim popup1Title As String: popup1Title = popupWnd1.Text
+            Debug.Print "  - Popup (wnd[1]) detected. Title: '" & popup1Title & "'"
+            popupHandled = True ' Mark that we are handling a popup
+
+            ' --- Case 1: Select View(s) Popup ---
+            If InStr(1, popup1Title, cVIEWS_POPUP_TITLE_KEYWORD, vbTextCompare) > 0 Then
+                Debug.Print "    - Handling 'Select View(s)' popup..."
+                On Error Resume Next ' Handle errors during popup interaction
+                popupWnd1.FindById(cVIEWS_SELECT_ALL_BTN_ID).press
+                Sleep cSAP_SHORT_WAIT_MS
+                popupWnd1.FindById(cVIEWS_CONTINUE_BTN_ID).press
+                Sleep cSAP_SHORT_WAIT_MS
+                ' Sometimes requires a second press if organizational levels popup appears
+                popupWnd1.FindById(cVIEWS_CONTINUE_BTN_ID).press ' Press Continue again
+                If Err.Number <> 0 Then
+                    Debug.Print "      - Error interacting with Select Views popup: " & Err.Description
+                    statusMessage = "Error handling Select Views popup"
+                    Err.Clear
+                    On Error Resume Next: popupWnd1.Close: On Error GoTo MM03ErrorHandler ' Try to close
+                    dataOutputArray(outputRow, 1) = statusMessage
+                    GoTo GoBackAndNext ' Go back before next iteration
+                End If
+                On Error GoTo MM03ErrorHandler ' Restore error handler
+                Debug.Print "    - 'Select View(s)' handled. Waiting..."
+                Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling popup
+
+            ' --- Case 2: Warning Popup ---
+            ElseIf InStr(1, popup1Title, cWARNING_POPUP_TITLE_KEYWORD, vbTextCompare) > 0 Then
+                Debug.Print "    - Handling 'Warning' popup..."
+                statusMessage = "" ' Clear default "OK" to capture warning
+                On Error Resume Next ' Handle errors getting user area or labels
+                Set userArea = popupWnd1.FindById(cWARNING_POPUP_USER_AREA_ID)
+                If Err.Number = 0 And Not userArea Is Nothing Then
+                    For Each child In userArea.Children
+                        If child.Type = "GuiLabel" Then
+                            labelText = Trim$(child.Text)
+                            If labelText <> "" And UCase(labelText) <> "WARNING" Then ' Capture non-empty label text that isn't just the title
+                                statusMessage = labelText
+                                Debug.Print "      - Captured Warning Text: '" & statusMessage & "'"
+                                Exit For ' Assume first relevant label is the message
+                            End If
+                        End If
+                    Next child
+                    Set child = Nothing: Set userArea = Nothing
+                Else
+                     Debug.Print "      - Warning: Could not find user area (" & cWARNING_POPUP_USER_AREA_ID & ") in Warning popup: " & Err.Description
+                     statusMessage = "Warning Popup - Text Read Error" ' Fallback message
+                End If
+                Err.Clear ' Clear any errors from reading labels
+
+                ' Press OK on the warning popup
+                Debug.Print "      - Pressing OK button (" & cWARNING_POPUP_OK_BTN_ID & ")..."
+                popupWnd1.FindById(cWARNING_POPUP_OK_BTN_ID).press
+                If Err.Number <> 0 Then
+                    Debug.Print "      - Error pressing OK on Warning popup: " & Err.Description
+                    statusMessage = statusMessage & " (Error closing)" ' Append error note
+                    Err.Clear
+                    On Error Resume Next: popupWnd1.Close: On Error GoTo MM03ErrorHandler ' Try to close
+                End If
+                On Error GoTo MM03ErrorHandler ' Restore error handler
+                Debug.Print "    - 'Warning' popup handled. Proceeding to data extraction."
+                Sleep cSAP_MEDIUM_WAIT_MS ' Wait after handling popup
+
+             ' --- Case 3: Unexpected wnd[1] Popup ---
+             Else
+                Debug.Print "    - Unexpected popup (wnd[1]) detected. Title: '" & popup1Title & "'"
+                statusMessage = "Unexpected Popup: " & popup1Title
+                On Error Resume Next ' Try to close it
+                popupWnd1.FindById(cWARNING_POPUP_OK_BTN_ID).press ' Try OK button first
+                If Err.Number <> 0 Then popupWnd1.Close ' Try Close method if OK fails
+                Err.Clear
+                On Error GoTo MM03ErrorHandler
+                Debug.Print "    - Skipping data extraction due to unexpected popup."
+                dataOutputArray(outputRow, 1) = statusMessage
+                GoTo GoBackAndNext ' Go back before next iteration
+             End If
+        Else
+             Debug.Print "  - Popup (wnd[1]) not detected."
+             popupHandled = False
+        End If
+        Set popupWnd1 = Nothing ' Release popup object
+
+        ' Check for wnd[2] ONLY if wnd[1] wasn't found or was handled (e.g., Select Views might trigger wnd[2])
+        ' However, typically a blocking error popup would prevent further processing anyway.
+        If Not popupHandled Then ' Only check wnd[2] if wnd[1] didn't appear or wasn't handled as blocking
+            Set popupWnd2 = Nothing
+            On Error Resume Next
+            Set popupWnd2 = objSess.FindById(cPOPUP_WND2_ID, False)
+            If Err.Number = 0 And Not popupWnd2 Is Nothing Then
+                 statusMessage = Trim$(popupWnd2.Text) ' Capture text from wnd[2]
+                 Debug.Print "  - Secondary Popup (wnd[2]) detected. Text: '" & statusMessage & "'"
+                 popupWnd2.FindById("tbar[0]/btn[0]").press ' Press OK/Continue
+                 Set popupWnd2 = Nothing
+                 Sleep cSAP_SHORT_WAIT_MS
+                 ' Assume this error prevents further processing for this material
+                 Debug.Print "  - Skipping data extraction due to secondary popup (wnd[2])."
+                 dataOutputArray(outputRow, 1) = statusMessage
+                 GoTo GoBackAndNext ' Go back before next iteration
+            End If
+            Err.Clear
+            On Error GoTo MM03ErrorHandler
+        End If
+
+
+        ' --- Step 4: Check Status Bar (if no blocking popup occurred) ---
+        Dim tempStatus As String: tempStatus = ""
+        If Not objSBar Is Nothing Then
+            tempStatus = Trim$(objSBar.Text)
+            If tempStatus <> "" Then
+                 Debug.Print "  - Status Bar Message: '" & tempStatus & "'"
+                 ' Check for CRITICAL errors that prevent proceeding
+                 If InStr(1, tempStatus, "does not exist", vbTextCompare) > 0 Or _
+                    InStr(1, tempStatus, "Material locked", vbTextCompare) > 0 Then
+                    Debug.Print "  - CRITICAL status message found. Skipping data extraction."
+                    statusMessage = tempStatus ' Overwrite status with critical error
+                    dataOutputArray(outputRow, 1) = statusMessage
+                    GoTo GoBackAndNext ' Go back before next iteration
+                 ' Check for known warnings/info messages to record, but allow continuation
+                 ElseIf InStr(1, tempStatus, "not maintained", vbTextCompare) > 0 Or _
+                        InStr(1, tempStatus, "Deletion flag", vbTextCompare) > 0 Or _
+                        InStr(1, tempStatus, "No data", vbTextCompare) > 0 Then ' Added "No data" here as info
+                     Debug.Print "  - Informational/Warning status message found. Recording and continuing."
+                     If statusMessage = "OK" Then statusMessage = tempStatus ' Record if no popup warning was already captured
+                 Else
+                     ' Optional: Record any other unexpected status bar message?
+                     ' If statusMessage = "OK" Then statusMessage = "Status: " & tempStatus
+                     Debug.Print "  - Non-critical/unhandled status message. Proceeding."
+                 End If
+            End If
+        ElseIf statusMessage = "OK" Then ' Only if status bar object fails AND no popup message
+             Debug.Print "  - Status Bar object not available to check messages."
+             statusMessage = "OK (No SBar)" ' Indicate status bar wasn't checked
+        End If
+
+
+        ' --- Step 5: Extract Data from Basic Data 1 View ---
+        Debug.Print "  - Attempting to extract data (Current Status: '" & statusMessage & "')..."
+        On Error Resume Next ' Use Resume Next for data extraction fields
+
+        prodHier = objSess.FindById(cPROD_HIER_FIELD_ID).Text
+        If Err.Number <> 0 Then Debug.Print "    - Warning: Error getting Product Hierarchy (" & cPROD_HIER_FIELD_ID & "): " & Err.Description: Err.Clear: prodHier = "[Read Error]"
+
+        oldMatNum = objSess.FindById(cOLD_MAT_FIELD_ID).Text
+        If Err.Number <> 0 Then Debug.Print "    - Warning: Error getting Old Material Number (" & cOLD_MAT_FIELD_ID & "): " & Err.Description: Err.Clear: oldMatNum = "[Read Error]"
+
+        On Error GoTo MM03ErrorHandler ' Restore main handler after data extraction attempts
+
+        Debug.Print "    - Product Hierarchy: '" & prodHier & "'"
+        Debug.Print "    - Old Material Num: '" & oldMatNum & "'"
+
+        ' --- Step 6: Extract Creation / Last Changed Info ---
+        Debug.Print "  - Attempting to extract creation/change info..."
+        Set infoPopup = Nothing ' Reset variable
+        createdByText = "[Not Found]" ' Initialize full text variables
+        lastChangedByText = "[Not Found]"
+
+        On Error Resume Next ' Handle error if Info button doesn't exist or popup fails
+        objSess.FindById(cINFO_BTN_ID).press ' Press the Info button
+        If Err.Number <> 0 Then
+            Debug.Print "    - Warning: Could not press Info button (" & cINFO_BTN_ID & "): " & Err.Description
+            Err.Clear
+            createdByText = "[Info Btn Error]" ' Indicate button error
+            lastChangedByText = "[Info Btn Error]"
+            GoTo StoreDataInArray ' Skip info extraction if button fails
+        End If
+        Sleep cSAP_MEDIUM_WAIT_MS ' Wait for Info popup
+
+        Set infoPopup = objSess.FindById(cPOPUP_WND1_ID, False) ' Check if Info popup appeared (uses wnd[1])
+        If Err.Number = 0 And Not infoPopup Is Nothing Then
+            ' Check if it's actually the info popup (might have a specific title/element)
+            ' For now, assume if wnd[1] appears here, it's the info popup
+            Debug.Print "  - Info popup detected. Iterating labels..."
+            Set userArea = Nothing: On Error Resume Next
+            Set userArea = infoPopup.FindById(cINFO_POPUP_USER_AREA_ID) ' Get the user area container
+            If Err.Number = 0 And Not userArea Is Nothing Then
+                Const createdByKey As String = "Created by"
+                Const changedByKey As String = "Last changed by" ' Keyword for last changed
+
+                For Each child In userArea.Children
+                    If child.Type = "GuiLabel" Then ' Check if it's a label
+                        labelText = Trim$(child.Text)
+                        ' Debug.Print "    - Checking Label: '" & labelText & "'" ' Uncomment for detailed debugging
+
+                        ' Check for "Created by" - Only capture the first time
+                        If InStr(1, labelText, createdByKey, vbTextCompare) > 0 And createdByText = "[Not Found]" Then
+                            createdByText = labelText ' Store the entire label text
+                            Debug.Print "      - Found Created By Text: '" & createdByText & "'"
+                        End If
+
+                        ' Check for "Last changed by" - Only capture the first time
+                        If InStr(1, labelText, changedByKey, vbTextCompare) > 0 And lastChangedByText = "[Not Found]" Then
+                           lastChangedByText = labelText ' Store the entire label text
+                           Debug.Print "      - Found Last Changed By Text: '" & lastChangedByText & "'"
+                        End If
+                    End If
+                    ' Optional optimization: Exit loop if both found
+                    If createdByText <> "[Not Found]" And lastChangedByText <> "[Not Found]" Then Exit For
+                Next child ' End loop through children
+            Else
+                 Debug.Print "    - Warning: Could not find user area (" & cINFO_POPUP_USER_AREA_ID & ") in Info popup: " & Err.Description
+                 Err.Clear
+                 createdByText = "[Info Area Error]"
+                 lastChangedByText = "[Info Area Error]"
+            End If
+            On Error GoTo MM03ErrorHandler ' Restore handler
+
+            ' Close the Info popup
+            On Error Resume Next ' Handle error closing popup
+            infoPopup.FindById(cINFO_POPUP_BACK_BTN_ID).press ' Press Back button
+            If Err.Number <> 0 Then Err.Clear: infoPopup.Close ' Try Close method if Back fails
+            On Error GoTo MM03ErrorHandler
+            Sleep cSAP_SHORT_WAIT_MS
+        Else
+            Debug.Print "  - Info popup did not appear or error occurred (" & Err.Number & "). Skipping creation/change info."
+            Err.Clear ' Clear any error from FindById failing
+            createdByText = "[Info Popup Error]"
+            lastChangedByText = "[Info Popup Error]"
+        End If
+        Set infoPopup = Nothing ' Release object
+        Set userArea = Nothing
+        Set child = Nothing
+        On Error GoTo MM03ErrorHandler ' Restore main handler
+
+StoreDataInArray:
+        ' --- Step 7: Store Extracted Data in Array ---
+        Debug.Print "  - Storing data in array for row " & i & "..."
+        dataOutputArray(outputRow, 1) = statusMessage ' Col C
+        dataOutputArray(outputRow, 2) = prodHier      ' Col D
+        dataOutputArray(outputRow, 3) = oldMatNum     ' Col E
+        dataOutputArray(outputRow, 4) = createdByText ' Col F
+        dataOutputArray(outputRow, 5) = lastChangedByText ' Col G
+
+GoBackAndNext: ' Label used when skipping after critical error/popup
+        ' --- Step 8: Navigate Back for Next Material ---
+        Debug.Print "  - Pressing Back to return to initial MM03 screen..."
+        On Error Resume Next ' Ignore error if already back or session closed
+        objSess.FindById(cMAIN_BACK_BTN_ID).press
+        On Error GoTo MM03ErrorHandler ' Restore handler (important!)
+        Sleep cSAP_MEDIUM_WAIT_MS ' Wait before processing next material
+
+NextIteration: ' Label to jump to for skipping a row completely (e.g., missing material)
+    Next i ' End of the main For loop processing rows
+
+    Debug.Print "-----------------------------------------------------"
+    Debug.Print "STEP 9: Finished processing all rows."
+    Application.StatusBar = "Writing data to Excel..." ' Update status
+
+    ' --- *** OPTIMIZATION: Write the entire array to Excel *** ---
+    Dim outputRange As Range
+    ' Define the top-left cell of the output range (Status column, starting row)
+    Set outputRange = ws.Range(cSTATUS_MSG_COL & cSTART_ROW)
+    ' Resize the range to match the array dimensions and write the data
+    On Error Resume Next ' Handle error if sheet is protected etc.
+    outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).value = dataOutputArray
+    If Err.Number <> 0 Then
+        MsgBox "Error writing data to Excel range " & outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).Address & ":" & vbCrLf & Err.Description, vbExclamation
+        Err.Clear
+    Else
+        Debug.Print "  - Data array written to worksheet starting at cell " & outputRange.Address & "."
+    End If
+    On Error GoTo MM03ErrorHandler ' Restore handler
+    Set outputRange = Nothing
+
+    ' --- Final Navigation Back (Optional) ---
+    ' Go back one more time from the initial MM03 screen if desired
+    Debug.Print "  - Pressing Back one last time from MM03 initial screen..."
+    On Error Resume Next ' Ignore error if already back at main menu
+    objSess.FindById(cMAIN_BACK_BTN_ID).press
+    On Error GoTo MM03ErrorHandler
+    Sleep cSAP_SHORT_WAIT_MS
+
+MM03Cleanup:
+    ' --- Cleanup for this Subroutine ---
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Running Cleanup for RunGUIScript..."
+    Application.StatusBar = False ' *** Reset status bar on exit ***
+    ' Release local objects
+    Set ws = Nothing
+    Set objExcelApp = Nothing
+    Set mm03FieldCheck = Nothing
+    Set popupWnd1 = Nothing
+    Set popupWnd2 = Nothing
+    Set infoPopup = Nothing
+    Set userArea = Nothing
+    Set child = Nothing
+    Erase dataOutputArray ' Clear the array memory
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript."
+    Exit Sub ' Normal exit
+
+MM03ErrorHandler:
+    ' --- Error Handler for this Subroutine ---
+    Dim errNumRun As Long: errNumRun = Err.Number
+    Dim errDescRun As String: errDescRun = Err.Description
+    Dim errSourceRun As String: errSourceRun = Err.Source
+    Debug.Print "!!!!!!!!!!!!!!!!!!! ERROR in RunGUIScript !!!!!!!!!!!!!!!!!!!"
+    Debug.Print "  Err #: " & errNumRun: Debug.Print "  Source: " & errSourceRun: Debug.Print "  Desc: " & errDescRun
+    If i > 0 And i <= lastRow Then Debug.Print "  Processing Row: " & i & ", Material: '" & materialNumber & "'" ' Add context
+    Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+
+    ' Write error message to current row in Excel if possible
+    If Not ws Is Nothing And i >= cSTART_ROW And i <= lastRow Then ' Check bounds
+        On Error Resume Next ' Avoid error loop if writing to Excel fails
+        ' Try writing to array first if it exists and outputRow is valid
+        If outputRow > 0 And outputRow <= UBound(dataOutputArray, 1) Then
+             dataOutputArray(outputRow, 1) = "Error: " & errDescRun ' Status column
+        Else ' Fallback to writing directly to cell if array isn't ready/valid
+             ws.Range(cSTATUS_MSG_COL & i).value = "Error: " & errDescRun & " (#" & errNumRun & ")"
+        End If
+        On Error GoTo 0 ' Turn off Resume Next
+    End If
+
+    MsgBox "Error during MM03 script execution:" & vbCrLf & _
+           "Row: " & i & " (Material: " & materialNumber & ")" & vbCrLf & _
+           "Err #: " & errNumRun & vbCrLf & _
+           "Desc: " & errDescRun, vbCritical, "MM03 Script Error"
+
+    ' Attempt basic SAP cleanup after error
+    On Error Resume Next ' Ignore errors during cleanup
+    If Not objSess Is Nothing Then
+        Debug.Print "Attempting SAP cleanup after error..."
+        If objSess.Busy Then Sleep 500
+        ' Try to close popups first
+        objSess.FindById(cPOPUP_WND2_ID, False).Close: Sleep 250
+        objSess.FindById(cPOPUP_WND1_ID, False).Close: Sleep 250
+        ' Try to get back to main screen or exit
+        If objSess.ActiveWindow.Name = "wnd[0]" Then objSess.FindById("wnd[0]/tbar[0]/btn[15]").press: Sleep 250 ' Exit button
+        Debug.Print "SAP cleanup attempt finished."
+    End If
+    On Error GoTo 0 ' Restore default error handling
+
+    Resume MM03Cleanup ' Go to cleanup section after handling error
+
+End Sub
