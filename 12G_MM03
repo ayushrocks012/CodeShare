@@ -425,10 +425,10 @@ NextIdleCheck:
                                 Debug.Print "          - Enter (VKey 0) also failed (Error: " & Err.Description & ").": Err.Clear
                             Else ' Corresponds to INNER If
                                 Debug.Print "          - Enter (VKey 0) sent successfully."
-                            End If ' *** CORRECTED: Added End If for INNER If ***
+                            End If ' End If for INNER If
                         Else ' Corresponds to OUTER If
                             Debug.Print "          - Generate button pressed successfully."
-                        End If ' *** CORRECTED: Added End If for OUTER If ***
+                        End If ' End If for OUTER If
                         On Error GoTo ErrorHandler ' Restore handler AFTER the If block
                         Debug.Print "        - Waiting after handling popup for session to initialize..."
                         ' Inline WaitForSessionReady(objSess, cDEFAULT_TIMEOUT_SEC)
@@ -446,13 +446,17 @@ NextIdleCheck:
                         On Error Resume Next: popupWnd.Close: On Error GoTo ErrorHandler
                         Sleep cSHORT_WAIT_MS ' Keep short fixed sleep here after close attempt
                     End If
-                 Else
-                    If popupErr <> 0 Then Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & popupErr
-                    Else Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
+                 Else ' Corresponds to If popupErr = 0 And Not (objToCheck Is Nothing)
+                    ' Check *why* the object check failed
+                    If popupErr <> 0 Then
+                        Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & popupErr
+                    Else
+                        Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
                     End If
+                    ' Common actions if popup wasn't valid
                     Debug.Print "        - Popup (wnd[1]) not detected or error finding it. Assuming direct session creation."
                     Sleep cSHORT_WAIT_MS ' Keep short fixed sleep if no popup
-                 End If
+                 End If ' End If for popup check
                  Set objToCheck = Nothing ' Clear reusable variable
                  Set popupWnd = Nothing ' Release popup object
                  Set objSess = Nothing ' Release temporary handle used for /o and popup check (will find the new one below)
@@ -507,8 +511,10 @@ NextIdleCheck:
                                         Set NewSess = W_Sess ' Store the session object with the highest number
                                         Debug.Print "              - Found new highest session: #" & highestSessNum
                                     End If
-                                Else Debug.Print "            - Warning: Error reading session number for index " & j & ".": Err.Clear
-                                On Error GoTo ErrorHandler
+                                Else
+                                    Debug.Print "            - Warning: Error reading session number for index " & j & ".": Err.Clear
+                                End If
+                                On Error GoTo ErrorHandler ' Restore after potential error
                             Else
                                 Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
                             End If
@@ -1231,12 +1237,15 @@ Private Sub RunGUIScript()
                 GoTo NextIteration
             End If
             Debug.Print "  - Select Views popup handled."
-        Else
-            If viewsPopupErr <> 0 Then Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & viewsPopupErr
-            Else Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
+        Else ' Corresponds to If viewsPopupErr = 0 And Not (objToCheck Is Nothing)
+            ' Check *why* the object check failed
+            If viewsPopupErr <> 0 Then
+                Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & viewsPopupErr
+            Else
+                Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
             End If
             Debug.Print "  - 'Select View(s)' popup (wnd[1]) not detected or error finding it. Proceeding..."
-        End If
+        End If ' End If for select views popup check
         Set objToCheck = Nothing ' Clear reusable variable
         Set selectViewsPopup = Nothing
 
@@ -1307,7 +1316,12 @@ Private Sub RunGUIScript()
         Dim prodHierField As GuiTextField: Set prodHierField = objSess.FindById(cPROD_HIER_FIELD_ID)
         ' Inline CheckObject (prodHierField, cPROD_HIER_FIELD_ID, False)
         Set objToCheck = prodHierField: objName = cPROD_HIER_FIELD_ID: raiseErrorFlag = False
-        If Not (objToCheck Is Nothing) Then prodHier = prodHierField.Text Else Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing.": prodHier = "Error: Field Not Found"
+        If Not (objToCheck Is Nothing) Then
+            prodHier = prodHierField.Text
+        Else
+            Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
+            prodHier = "Error: Field Not Found"
+        End If
         ' End Inline CheckObject
         If Err.Number <> 0 Then Debug.Print "    - Warning: Error reading Prod Hier: " & Err.Description: Err.Clear: prodHier = "Error: Read Failed"
         Set prodHierField = Nothing
@@ -1315,7 +1329,12 @@ Private Sub RunGUIScript()
         Dim oldMatField As GuiTextField: Set oldMatField = objSess.FindById(cOLD_MAT_FIELD_ID)
         ' Inline CheckObject (oldMatField, cOLD_MAT_FIELD_ID, False)
         Set objToCheck = oldMatField: objName = cOLD_MAT_FIELD_ID: raiseErrorFlag = False
-        If Not (objToCheck Is Nothing) Then oldMatNum = oldMatField.Text Else Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing.": oldMatNum = "Error: Field Not Found"
+        If Not (objToCheck Is Nothing) Then
+            oldMatNum = oldMatField.Text
+        Else
+            Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
+            oldMatNum = "Error: Field Not Found"
+        End If
         ' End Inline CheckObject
         If Err.Number <> 0 Then Debug.Print "    - Warning: Error reading Old Mat: " & Err.Description: Err.Clear: oldMatNum = "Error: Read Failed"
         Set oldMatField = Nothing
@@ -1436,14 +1455,17 @@ Private Sub RunGUIScript()
             ' End Inline CheckObject
             Set infoBackBtn = Nothing
             If Err.Number <> 0 Then Debug.Print "    - Error closing info popup: " & Err.Description: Err.Clear: actionSuccess = False
-        Else
-            If infoPopupErr <> 0 Then Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & infoPopupErr
-            Else Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
+        Else ' Corresponds to If infoPopupErr = 0 And Not (objToCheck Is Nothing)
+            ' Check *why* the object check failed
+            If infoPopupErr <> 0 Then
+                Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & infoPopupErr
+            Else
+                Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
             End If
             Debug.Print "  - Info popup (wnd[1]) did not appear or error finding it (" & infoPopupErr & ")."
             Err.Clear
             createdByText = "Info Popup Error": lastChangedByText = "Info Popup Error"
-        End If
+        End If ' End If for info popup check
         Set objToCheck = Nothing ' Clear reusable variable
         Set infoPopup = Nothing
         On Error GoTo MM03ErrorHandler
@@ -1515,11 +1537,16 @@ NextIteration: ' Label to jump to for skipping a row
         ' outputRange is valid
         outputRange.Resize(UBound(dataOutputArray, 1), UBound(dataOutputArray, 2)).value = dataOutputArray
         Debug.Print "  - Data array written to worksheet starting at cell " & outputRange.Address & "."
-    Else
-        If objToCheck Is Nothing Then Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
+    Else ' Corresponds to If Err.Number = 0 And Not (objToCheck Is Nothing)
+        ' Check *why* the object check failed
+        If Err.Number <> 0 Then
+             Debug.Print "CheckObject WARNING: Error finding object '" & objName & "'. Error: " & Err.Number
+        Else
+            Debug.Print "CheckObject WARNING: Object '" & objName & "' is Nothing."
+        End If
         Debug.Print "  - ERROR: Could not define output range starting at " & cSTATUS_MSG_COL & cSTART_ROW & ". Data not written."
         If raiseErrorFlag Then MsgBox "Error writing data to Excel. Could not set output range.", vbCritical ' Raise error via MsgBox
-    End If
+    End If ' End If for output range check
     ' End Inline CheckObject
     Err.Clear
     On Error GoTo MM03ErrorHandler
