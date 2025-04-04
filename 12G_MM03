@@ -1000,7 +1000,7 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
 
 WriteData: ' Label to jump to if info button/popup fails
         ' --- Step 8: Write Extracted Data to Excel ---
-        ' *** ADDED: More Debugging before write attempt ***
+        ' *** Added extra debug info before write attempt ***
         Debug.Print "  - Preparing to write data for row " & i & "..."
         Debug.Print "    - TypeName(ws): " & TypeName(ws)
         Debug.Print "    - TypeName(dataArr): " & TypeName(dataArr)
@@ -1012,22 +1012,13 @@ WriteData: ' Label to jump to if info button/popup fails
 
         Debug.Print "  - Writing data to Excel row " & i & " starting column " & cOUTPUT_START_COLUMN & "..." ' Log write action
 
-        ' *** Write elements individually for debugging ***
+        ' *** MODIFIED: Simplified Error Handling for Write Loop ***
+        ' Rely on the main sub's error handler (On Error GoTo ErrorHandler_RunScript)
         For k = 1 To UBound(dataArr) ' Loop from 1 to 5
-            Debug.Print "    - Writing element " & k & " ('" & CStr(dataArr(k)) & "') to column " & cOUTPUT_START_COLUMN + k - 1 & " (Cell: " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ")..."
-            On Error Resume Next ' Use Resume Next for the individual cell write only
+            Debug.Print "    - Attempting write: Element " & k & " ('" & CStr(dataArr(k)) & "') to Cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & "..."
             ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).value = dataArr(k)
-            If Err.Number <> 0 Then ' Check for error immediately after writing each cell
-                Debug.Print "      - >>> ERROR occurred writing element " & k & " (Value: '" & CStr(dataArr(k)) & "'). Error(" & Err.Number & "): " & Err.Description
-                ' Raise the error again to trigger the main handler with context
-                Dim errDesc As String: errDesc = "Type mismatch writing element " & k & " to cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ". Value: " & CStr(dataArr(k)) & ". Original Error: " & Err.Description
-                Dim errNum As Long: errNum = Err.Number
-                On Error GoTo ErrorHandler_RunScript ' Restore main handler before raising
-                Err.Raise errNum, "RunGUIScript - Write Loop", errDesc
-            Else
-                Debug.Print "      - Element " & k & " written successfully."
-            End If
-            On Error GoTo ErrorHandler_RunScript ' Restore main handler immediately after checking error for the specific write
+            ' If an error occurs on the line above, execution should jump directly to ErrorHandler_RunScript
+            Debug.Print "      - Element " & k & " written successfully."
         Next k
 
         Debug.Print "  - Data written successfully (individually)." ' Log success
@@ -1093,6 +1084,10 @@ ErrorHandler_RunScript: ' Error handler for the RunGUIScript sub
     Debug.Print "!!!!!!!!!!!!!!!!!!! ERROR in RunGUIScript (MM03) !!!!!!!!!!!!!!!!!!!" ' Log error start
     Debug.Print "  Err #: " & errNumRun: Debug.Print "  Source: " & errSourceRun: Debug.Print "  Desc: " & errDescRun ' Log details
     Debug.Print "  Processing Row: " & i ' Add context: which row failed
+    ' *** ADDED: Log which element might have failed if error came from write loop ***
+    If k > 0 And k <= UBound(dataArr) Then
+        Debug.Print "  Error likely occurred writing element " & k & " to cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ". Value: '" & CStr(dataArr(k)) & "'"
+    End If
     Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" ' Log error end
     MsgBox "Error during MM03 script processing row " & i & ":" & vbCrLf & "Err #: " & errNumRun & vbCrLf & "Desc: " & errDescRun, vbCritical ' Inform user
     ' Attempt cleanup within SAP session if possible after an error
