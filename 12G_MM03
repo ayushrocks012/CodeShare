@@ -694,6 +694,8 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
     Dim wnd1Exists As Boolean ' Moved declaration here
     ' *** ADDED: Explicit declaration for materialNumber ***
     Dim materialNumber As String
+    ' *** ADDED: Explicit declaration for objExcelApp ***
+    Dim objExcelApp As Object
 
     ' --- Constants (can be defined here or passed from StartExtract if needed) ---
     Const cMATERIAL_COLUMN As String = "A" ' Column for Material in Excel
@@ -710,7 +712,23 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
 
     On Error GoTo ErrorHandler_RunScript_User ' Set error handler for this sub
 
-    Set ws = ThisWorkbook.Sheets("Sheet1") ' Assumes sheet name is Sheet1
+    ' *** MODIFIED: Added GetObject/Set ws logic from previous versions for robustness ***
+    On Error Resume Next ' Prepare for error getting Excel objects
+    Set objExcelApp = GetObject(, "Excel.Application") ' Get running Excel instance
+    If Err.Number <> 0 Then ' Handle error if Excel not running
+        MsgBox "Error: Could not connect to running Excel application. Please ensure the workbook is open.", vbCritical ' Inform user
+        GoTo Cleanup_RunScript_User ' Exit script sub
+    End If
+    ' *** IMPORTANT: CHANGE "Sheet1" if your sheet has a different name ***
+    Set ws = objExcelApp.Worksheets("Sheet1") ' Get the specific worksheet
+    If ws Is Nothing Then ' Handle error if sheet not found
+         MsgBox "Error: Could not find worksheet named 'Sheet1' in the active Excel workbook. Please check the sheet name.", vbCritical ' Inform user
+        Set objExcelApp = Nothing ' Release Excel App object
+        GoTo Cleanup_RunScript_User ' Exit script sub
+    End If
+    On Error GoTo ErrorHandler_RunScript_User ' Restore main error handler for this sub
+    Debug.Print "  - Connected to Excel Worksheet: '" & ws.Name & "'" ' Log success
+
     lastRow = ws.Cells(ws.Rows.Count, cMATERIAL_COLUMN).End(xlUp).row
 
     If lastRow < cSTART_ROW Then
