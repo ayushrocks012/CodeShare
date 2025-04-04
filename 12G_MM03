@@ -698,20 +698,15 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
     Dim ws As Worksheet ' Excel worksheet object
     Dim lastRow As Long, i As Long ' Loop control variables
     Dim infoText As String ' Variable to hold text from info labels
+    ' *** MODIFIED: Dimension array OUTSIDE loop based on user's working code ***
     Dim dataArr() As Variant ' Declared as DYNAMIC array
-                                    ' It will be dimensioned inside the loop using ReDim.
-                                    ' Column 1: Status/Warning Text
-                                    ' Column 2: Product Hierarchy (MARA-PRDHA)
-                                    ' Column 3: Old Material Number (MARA-BISMT)
-                                    ' Column 4: Created/Changed By User
-                                    ' Column 5: Created/Changed On Date/Time
     Dim materialNumber As String ' Material number read from Excel
     Dim wnd1Exists As Boolean ' Flag to check if wnd[1] exists
     Dim testControl As Object ' Generic object for safe existence checks (e.g., FindById(..., False))
     Dim warningText As String ' To store potential warning popup text
     Dim objExcelApp As Object ' Excel Application object (added for robustness)
     Dim mm03FieldCheck As Object ' Object for checking if navigation to MM03 was successful
-    Dim k As Long ' Loop counter for writing individual array elements
+    Dim k As Long ' Loop counter for writing individual array elements (kept for potential future debug)
 
     On Error GoTo ErrorHandler_RunScript ' Set error handler for this sub
 
@@ -748,6 +743,18 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         GoTo Cleanup_RunScript ' Exit script sub
     End If
     Debug.Print "  - Last row with data: " & lastRow ' Log last row
+
+    ' *** MODIFIED: Dimension array ONCE before the loop ***
+    ' Dimension to hold data for all rows (row index i-1 corresponds to Excel row i)
+    ' Array columns: 1=Status/Warn, 2=ProdHier, 3=OldMat, 4=User, 5=Date/Time
+    If lastRow >= cSTART_ROW Then
+        ReDim dataArr(0 To lastRow - cSTART_ROW, 1 To 5) ' 0-based for row index, 1-based for columns
+        Debug.Print "  - dataArr ReDim'd: 0 To " & UBound(dataArr, 1) & ", 1 To " & UBound(dataArr, 2)
+    Else
+        Debug.Print "  - No data rows found, skipping array ReDim."
+        GoTo Cleanup_RunScript ' Exit if no rows
+    End If
+
 
     ' --- Navigate to MM03 Transaction if not already there ---
     Debug.Print "  - Navigating to transaction '" & cTRANSACTION & "'..." ' Log navigation start
@@ -792,9 +799,8 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         Debug.Print "-----------------------------------------------------"
         Debug.Print "Processing row: " & i & "/" & lastRow ' Log progress
 
-        ' Clear and Re-Dimension the dynamic array for the new row
-        Erase dataArr ' Clear previous row's data from the dynamic array
-        ReDim dataArr(1 To 5) ' Dimension the dynamic array for this iteration (1 to 5 elements)
+        ' *** REMOVED: Erase dataArr - Handled by assigning to specific index ***
+        ' *** REMOVED: ReDim dataArr(1 To 5) - Array dimensioned outside loop ***
         warningText = "" ' Reset warning text variable
 
         ' --- Step 1: Read Material Number from Excel row ---
@@ -802,7 +808,10 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
 
         If materialNumber = "" Then ' Check if material number is empty
             Debug.Print "  - WARNING: Skipping row " & i & " due to missing Material Number." ' Log skip
-            ws.Cells(i, cOUTPUT_START_COLUMN).value = "Skipped - Missing Material" ' Write skip reason to Excel
+            ' *** MODIFIED: Assign skip message to the correct array index ***
+            dataArr(i - cSTART_ROW, 1) = "Skipped - Missing Material"
+            ' Optionally write immediately or wait until end
+            ' ws.Cells(i, cOUTPUT_START_COLUMN).value = dataArr(i - cSTART_ROW, 1)
             GoTo NextIteration ' Skip to next loop iteration
         End If
         Debug.Print "  - Material from Excel: '" & materialNumber & "'" ' Log material number
@@ -830,15 +839,17 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         If Not wnd1Exists Then '
             Debug.Print "  - 'Select View(s)' window (wnd[1]) not found. Reading status bar..." ' Log scenario
             If Not objSBar Is Nothing Then ' Check if status bar object exists
-                dataArr(1) = Trim$(objSBar.Text) ' Store status bar text in first column of array
-                Debug.Print "  - Status Bar Text: '" & dataArr(1) & "'" ' Log the text
+                ' *** MODIFIED: Assign status text to the correct array index ***
+                dataArr(i - cSTART_ROW, 1) = Trim$(objSBar.Text)
+                Debug.Print "  - Status Bar Text: '" & dataArr(i - cSTART_ROW, 1) & "'" ' Log the text
             Else
-                dataArr(1) = "Status bar object not available." ' Fallback message
-                Debug.Print "  - " & dataArr(1) ' Log fallback
+                 ' *** MODIFIED: Assign status text to the correct array index ***
+                dataArr(i - cSTART_ROW, 1) = "Status bar object not available." ' Fallback message
+                Debug.Print "  - " & dataArr(i - cSTART_ROW, 1) ' Log fallback
             End If
-            ' Write only the first element if status bar text was captured
-            ws.Cells(i, cOUTPUT_START_COLUMN).value = dataArr(1)
-            Debug.Print "  - Status/Error written to Excel."
+            ' Optionally write immediately or wait until end
+            ' ws.Cells(i, cOUTPUT_START_COLUMN).value = dataArr(i - cSTART_ROW, 1)
+            Debug.Print "  - Status/Error stored in array for row " & i
             ' Reset the material field for the next iteration (optional, but good practice)
              On Error Resume Next ' Ignore error if field not found
              objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = "" ' Clear material field
@@ -891,7 +902,8 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
             Set testControl = objSess.FindById("wnd[2]", False) ' Get the window object itself
             If Not testControl Is Nothing Then ' If window object obtained
                 warningText = Trim$(testControl.PopupDialogText) ' Get the text
-                dataArr(1) = warningText ' Store warning in the first data column
+                 ' *** MODIFIED: Assign warning text to the correct array index ***
+                dataArr(i - cSTART_ROW, 1) = warningText
                 Debug.Print "    - Warning Popup Detected. Text: '" & warningText & "'" ' Log detection and text
                 objSess.FindById("wnd[2]/tbar[0]/btn[0]").press ' Press Continue/OK on the warning popup
                 Sleep cWAIT_TIME_SHORT_MS ' Wait briefly after pressing
@@ -912,15 +924,15 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         Debug.Print "  - Extracting data from Basic Data 1 view..." ' Log step
         ' Use On Error Resume Next carefully for reading fields
         On Error Resume Next
-        dataArr(2) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText ' Product hierarchy
-        If Err.Number <> 0 Then Debug.Print "    - Error reading Product Hierarchy (MARA-PRDHA): " & Err.Description: dataArr(2) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
-        dataArr(3) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText ' Old material number
-        If Err.Number <> 0 Then Debug.Print "    - Error reading Old Material Number (MARA-BISMT): " & Err.Description: dataArr(3) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
-        ' *** ADDED: Explicitly restore main error handler AFTER this block ***
-        On Error GoTo ErrorHandler_RunScript
+        ' *** MODIFIED: Assign data to the correct array index ***
+        dataArr(i - cSTART_ROW, 2) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText ' Product hierarchy
+        If Err.Number <> 0 Then Debug.Print "    - Error reading Product Hierarchy (MARA-PRDHA): " & Err.Description: dataArr(i - cSTART_ROW, 2) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
+        dataArr(i - cSTART_ROW, 3) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText ' Old material number
+        If Err.Number <> 0 Then Debug.Print "    - Error reading Old Material Number (MARA-BISMT): " & Err.Description: dataArr(i - cSTART_ROW, 3) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
+        On Error GoTo ErrorHandler_RunScript ' Restore main handler
 
-        Debug.Print "    - Product Hierarchy: '" & dataArr(2) & "'" ' Log extracted data
-        Debug.Print "    - Old Material Number: '" & dataArr(3) & "'" ' Log extracted data
+        Debug.Print "    - Product Hierarchy: '" & dataArr(i - cSTART_ROW, 2) & "'" ' Log extracted data
+        Debug.Print "    - Old Material Number: '" & dataArr(i - cSTART_ROW, 3) & "'" ' Log extracted data
 
         ' --- Step 7: Extract Creation/Change Info via Information Button ---
         Debug.Print "  - Extracting creation/change information..." ' Log step
@@ -930,8 +942,9 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         Sleep cWAIT_TIME_SHORT_MS ' Wait for info popup (wnd[1]) to appear
         If Err.Number <> 0 Then ' Check if button press failed
              Debug.Print "    - Warning: Could not press Information button (btnINFO) (Error: " & Err.Description & "). Skipping creation/change info." ' Log failure
-             dataArr(4) = cREAD_ERROR_TEXT ' Store error text if button fails
-             dataArr(5) = cREAD_ERROR_TEXT
+             ' *** MODIFIED: Assign error text to the correct array index ***
+             dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT
+             dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT
              Err.Clear ' Clear error
              GoTo WriteData ' Skip the label reading if button failed
         End If
@@ -941,8 +954,9 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         Set testControl = objSess.FindById("wnd[1]", False) ' Check for wnd[1]
         If testControl Is Nothing Then ' If popup didn't appear
             Debug.Print "    - Warning: Information popup (wnd[1]) did not appear after pressing button. Skipping creation/change info." ' Log failure
-            dataArr(4) = cREAD_ERROR_TEXT ' Store error text if popup fails
-            dataArr(5) = cREAD_ERROR_TEXT
+             ' *** MODIFIED: Assign error text to the correct array index ***
+            dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT
+            dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT
             GoTo WriteData ' Skip label reading
         End If
         Debug.Print "    - Information popup (wnd[1]) found." ' Log popup found
@@ -953,8 +967,9 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         infoText = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Read text from label
         If Err.Number <> 0 Then ' Handle error reading primary label
             Debug.Print "    - Warning: Could not read primary label at [1,7] (Error: " & Err.Description & "). Subsequent reads might fail." ' Log warning
-            dataArr(4) = cREAD_ERROR_TEXT ' Store error text if read fails
-            dataArr(5) = cREAD_ERROR_TEXT
+             ' *** MODIFIED: Assign error text to the correct array index ***
+            dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT
+            dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT
             Err.Clear ' Clear error
             ' Try to close popup even if read failed
              objSess.FindById("wnd[1]/tbar[0]/btn[3]").press ' Press 'Close' or 'Back' button (usually btn[3])
@@ -966,19 +981,21 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         If Left(infoText, 7) <> "Created" Then ' Check if text at [1,7] starts with "Created"
             ' Scenario: Text likely "Changed by..." or similar. Read [1,6] and [1,7].
              Debug.Print "    - Reading 'Changed By' info (Labels [1,6], [1,7])." ' Log scenario
-             dataArr(4) = objSess.FindById("wnd[1]/usr/lbl[1,6]").DisplayedText ' Changed By User
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,6]: " & Err.Description: dataArr(4) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             dataArr(5) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Changed On Date/Time (already read into infoText, but read again for consistency)
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,7] (Changed Case): " & Err.Description: dataArr(5) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             Debug.Print "      - Changed By: '" & dataArr(4) & "', On: '" & dataArr(5) & "'" ' Log extracted data
+             ' *** MODIFIED: Assign data to the correct array index ***
+             dataArr(i - cSTART_ROW, 4) = objSess.FindById("wnd[1]/usr/lbl[1,6]").DisplayedText ' Changed By User
+             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,6]: " & Err.Description: dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
+             dataArr(i - cSTART_ROW, 5) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Changed On Date/Time (already read into infoText, but read again for consistency)
+             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,7] (Changed Case): " & Err.Description: dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
+             Debug.Print "      - Changed By: '" & dataArr(i - cSTART_ROW, 4) & "', On: '" & dataArr(i - cSTART_ROW, 5) & "'" ' Log extracted data
         Else
             ' Scenario: Text likely "Created by...". Read [1,7] and [1,8].
              Debug.Print "    - Reading 'Created By' info (Labels [1,7], [1,8])." ' Log scenario
-             dataArr(4) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Created By User (already read into infoText)
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,7] (Created Case): " & Err.Description: dataArr(4) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             dataArr(5) = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText ' Created On Date/Time
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,8]: " & Err.Description: dataArr(5) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             Debug.Print "      - Created By: '" & dataArr(4) & "', On: '" & dataArr(5) & "'" ' Log extracted data
+             ' *** MODIFIED: Assign data to the correct array index ***
+             dataArr(i - cSTART_ROW, 4) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Created By User (already read into infoText)
+             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,7] (Created Case): " & Err.Description: dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
+             dataArr(i - cSTART_ROW, 5) = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText ' Created On Date/Time
+             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,8]: " & Err.Description: dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
+             Debug.Print "      - Created By: '" & dataArr(i - cSTART_ROW, 4) & "', On: '" & dataArr(i - cSTART_ROW, 5) & "'" ' Log extracted data
         End If
 
         ' Close the Information popup (wnd[1])
@@ -995,33 +1012,21 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         End If
         Sleep cWAIT_TIME_SHORT_MS ' Wait briefly after closing popup
 
-        ' *** ADDED: Explicitly restore main error handler AFTER this block ***
-        On Error GoTo ErrorHandler_RunScript
+        On Error GoTo ErrorHandler_RunScript ' Restore main handler
 
 WriteData: ' Label to jump to if info button/popup fails
         ' --- Step 8: Write Extracted Data to Excel ---
-        ' *** Added extra debug info before write attempt ***
-        Debug.Print "  - Preparing to write data for row " & i & "..."
-        Debug.Print "    - TypeName(ws): " & TypeName(ws)
-        Debug.Print "    - TypeName(dataArr): " & TypeName(dataArr)
-        Debug.Print "    - IsArray(dataArr): " & IsArray(dataArr)
-        If IsArray(dataArr) Then Debug.Print "    - UBound(dataArr): " & UBound(dataArr)
-        Debug.Print "    - Value of i: " & i
-        Debug.Print "    - Value of k (before loop): " & k ' Should be 0 or last value from previous iteration if any
-        Sleep 250 ' Small delay before write attempt
+        ' *** MODIFIED: Use Application.Index method like user's working code ***
+        Debug.Print "  - Preparing to write data for row " & i & " using Application.Index..."
+        Debug.Print "    - Target Range: " & ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr, 2) - 1)).Address(False, False) ' Log target range
+        Debug.Print "    - Array Row Index: " & i - cSTART_ROW ' Log array row index (0-based)
 
-        Debug.Print "  - Writing data to Excel row " & i & " starting column " & cOUTPUT_START_COLUMN & "..." ' Log write action
+        ' Use Application.Index to extract the specific row (i - cSTART_ROW) from the 2D dataArr
+        ' The third argument '0' tells Index to return all columns for that row
+        ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr, 2) - 1)).value = Application.Index(dataArr, i - cSTART_ROW + 1, 0) ' Use i-cSTART_ROW+1 for 1-based row index in Application.Index
+        ' If an error occurs on the line above, execution should jump directly to ErrorHandler_RunScript
 
-        ' *** MODIFIED: Simplified Error Handling for Write Loop ***
-        ' Rely on the main sub's error handler (On Error GoTo ErrorHandler_RunScript)
-        For k = 1 To UBound(dataArr) ' Loop from 1 to 5
-            Debug.Print "    - Attempting write: Element " & k & " ('" & CStr(dataArr(k)) & "') to Cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & "..."
-            ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).value = dataArr(k)
-            ' If an error occurs on the line above, execution should jump directly to ErrorHandler_RunScript
-            Debug.Print "      - Element " & k & " written successfully."
-        Next k
-
-        Debug.Print "  - Data written successfully (individually)." ' Log success
+        Debug.Print "  - Data written successfully using Application.Index." ' Log success
 
         ' --- Step 9: Navigate Back to Material Selection Screen for Next Iteration ---
         Debug.Print "  - Navigating back to Material selection screen..." ' Log navigation
@@ -1084,9 +1089,11 @@ ErrorHandler_RunScript: ' Error handler for the RunGUIScript sub
     Debug.Print "!!!!!!!!!!!!!!!!!!! ERROR in RunGUIScript (MM03) !!!!!!!!!!!!!!!!!!!" ' Log error start
     Debug.Print "  Err #: " & errNumRun: Debug.Print "  Source: " & errSourceRun: Debug.Print "  Desc: " & errDescRun ' Log details
     Debug.Print "  Processing Row: " & i ' Add context: which row failed
-    ' *** ADDED: Log which element might have failed if error came from write loop ***
-    If k > 0 And k <= UBound(dataArr) Then
-        Debug.Print "  Error likely occurred writing element " & k & " to cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ". Value: '" & CStr(dataArr(k)) & "'"
+    ' *** MODIFIED: Log which element might have failed if error came from write loop ***
+    If k > 0 And k <= UBound(dataArr, 2) Then ' Check second dimension for column count
+        Debug.Print "  Error likely occurred writing element " & k & " to cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ". Value: '" & CStr(dataArr(i - cSTART_ROW, k)) & "'"
+    ElseIf Err.Source = "RunGUIScript - Write Loop" Then ' Check if error came from Application.Index write
+         Debug.Print "  Error occurred during Application.Index write to range " & ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr, 2) - 1)).Address(False, False)
     End If
     Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" ' Log error end
     MsgBox "Error during MM03 script processing row " & i & ":" & vbCrLf & "Err #: " & errNumRun & vbCrLf & "Desc: " & errDescRun, vbCritical ' Inform user
