@@ -692,6 +692,8 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
     Dim dataArr() ' Dynamic array as in user's code
     Dim testControl As Object
     Dim wnd1Exists As Boolean ' Moved declaration here
+    ' *** ADDED: Explicit declaration for materialNumber ***
+    Dim materialNumber As String
 
     ' --- Constants (can be defined here or passed from StartExtract if needed) ---
     Const cMATERIAL_COLUMN As String = "A" ' Column for Material in Excel
