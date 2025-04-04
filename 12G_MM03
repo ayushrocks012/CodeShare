@@ -22,7 +22,7 @@ Public objSBar      As GuiStatusbar ' SAP Status Bar object
 ' //========================================================================
 ' // Sub: StartExtract
 ' // Purpose: Main entry point. Handles all connection/session logic.
-' // Adapted from Code1_MB51.txt
+' // Adapted from Code1_MB51.txt (Proven Robust Session Handling)
 ' //========================================================================
 Public Sub StartExtract() ' Main Sub to start the process
 
@@ -681,450 +681,198 @@ End Sub
 ' //========================================================================
 ' // Sub: RunGUIScript (MM03 Extraction Logic)
 ' // Purpose: Executes MM03 steps. Called only by StartExtract. Declared Private.
-' // Integrates logic from Code2_MM03.txt into the modular structure.
+' // *** MODIFIED: Based entirely on user's working Code2_MM03_v2.txt ***
 ' //========================================================================
 Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
 
-    ' --- Constants specific to MM03 Execution ---
-    Const cTRANSACTION As String = "mm03" ' Transaction code
-    Const cMATERIAL_COLUMN As String = "A" ' Column for Material in Excel (Based on Code2)
-    Const cOUTPUT_START_COLUMN As String = "C" ' First column to write output in Excel (Based on Code2)
-    Const cSTART_ROW As Long = 2 ' Starting row for data in Excel (assumes header in row 1)
-    Const cWAIT_TIME_SHORT_MS As Long = 500  ' General wait after actions (milliseconds)
-    Const cWAIT_TIME_MEDIUM_MS As Long = 1000 ' Wait after potentially slower actions like view selection (milliseconds)
-    Const cREAD_ERROR_TEXT As String = "#READ_ERROR#" ' Text to write if SAP read fails
+    ' --- Local Variables (from user's working code) ---
+    Dim ws As Worksheet
+    Dim lastRow As Long, i As Long
+    Dim infoText As String
+    Dim dataArr() ' Dynamic array as in user's code
+    Dim testControl As Object
+    Dim wnd1Exists As Boolean ' Moved declaration here
 
-    ' --- Local Variables ---
-    Dim ws As Worksheet ' Excel worksheet object
-    Dim lastRow As Long, i As Long ' Loop control variables
-    Dim infoText As String ' Variable to hold text from info labels
-    ' *** MODIFIED: Dimension array OUTSIDE loop based on user's working code ***
-    Dim dataArr() As Variant ' Declared as DYNAMIC array
-    Dim materialNumber As String ' Material number read from Excel
-    Dim wnd1Exists As Boolean ' Flag to check if wnd[1] exists
-    Dim testControl As Object ' Generic object for safe existence checks (e.g., FindById(..., False))
-    Dim warningText As String ' To store potential warning popup text
-    Dim objExcelApp As Object ' Excel Application object (added for robustness)
-    Dim mm03FieldCheck As Object ' Object for checking if navigation to MM03 was successful
-    Dim k As Long ' Loop counter for writing individual array elements (kept for potential future debug)
+    ' --- Constants (can be defined here or passed from StartExtract if needed) ---
+    Const cMATERIAL_COLUMN As String = "A" ' Column for Material in Excel
+    Const cOUTPUT_START_COLUMN As String = "C" ' First column to write output in Excel
+    Const cSTART_ROW As Long = 2 ' Starting row for data in Excel
 
-    On Error GoTo ErrorHandler_RunScript ' Set error handler for this sub
+    Debug.Print "Entering RunGUIScript (Using User's Logic)..." ' Log entry
 
-    ' --- Initialize ---
-    Debug.Print "Entering RunGUIScript (MM03)..." ' Log entry
-    If objSess Is Nothing Then Err.Raise vbObjectError + 510, "RunGUIScript", "objSess is not valid at the start of RunGUIScript." ' Critical check
-    If objSBar Is Nothing Then ' Attempt to get status bar if not already set globally
-        On Error Resume Next: Set objSBar = objSess.FindById("wnd[0]/sbar"): On Error GoTo ErrorHandler_RunScript ' Try getting status bar
-        If objSBar Is Nothing Then Debug.Print "  - Warning: objSBar could not be obtained for session #" & objSess.Info.SessionNumber & "." ' Log warning if failed
-    End If
-    Debug.Print "  - Session #" & objSess.Info.SessionNumber & " checked." ' Log session check
-
-    ' --- Get the Excel worksheet (Added for robustness like in Code1_MB51) ---
-    On Error Resume Next ' Prepare for error getting Excel objects
-    Set objExcelApp = GetObject(, "Excel.Application") ' Get running Excel instance
-    If Err.Number <> 0 Then ' Handle error if Excel not running
-        MsgBox "Error: Could not connect to running Excel application. Please ensure the workbook is open.", vbCritical ' Inform user
-        GoTo Cleanup_RunScript ' Exit script sub
-    End If
-    ' *** IMPORTANT: CHANGE "Sheet1" if your sheet has a different name ***
-    Set ws = objExcelApp.Worksheets("Sheet1") ' Get the specific worksheet
-    If ws Is Nothing Then ' Handle error if sheet not found
-         MsgBox "Error: Could not find worksheet named 'Sheet1' in the active Excel workbook. Please check the sheet name.", vbCritical ' Inform user
-        Set objExcelApp = Nothing ' Release Excel App object
-        GoTo Cleanup_RunScript ' Exit script sub
-    End If
-    On Error GoTo ErrorHandler_RunScript ' Restore main error handler for this sub
-    Debug.Print "  - Connected to Excel Worksheet: '" & ws.Name & "'" ' Log success
-
-    ' --- Get the last row with data in the Material column ---
-    lastRow = ws.Cells(ws.Rows.Count, cMATERIAL_COLUMN).End(xlUp).row ' Find last used row
-    If lastRow < cSTART_ROW Then ' Check if there is any data to process
-         MsgBox "No data found in Excel sheet '" & ws.Name & "' starting from row " & cSTART_ROW & ", column " & cMATERIAL_COLUMN & ".", vbInformation ' Inform user
-        GoTo Cleanup_RunScript ' Exit script sub
-    End If
-    Debug.Print "  - Last row with data: " & lastRow ' Log last row
-
-    ' *** MODIFIED: Dimension array ONCE before the loop ***
-    ' Dimension to hold data for all rows (row index i-1 corresponds to Excel row i)
-    ' Array columns: 1=Status/Warn, 2=ProdHier, 3=OldMat, 4=User, 5=Date/Time
-    If lastRow >= cSTART_ROW Then
-        ReDim dataArr(0 To lastRow - cSTART_ROW, 1 To 5) ' 0-based for row index, 1-based for columns
-        Debug.Print "  - dataArr ReDim'd: 0 To " & UBound(dataArr, 1) & ", 1 To " & UBound(dataArr, 2)
-    Else
-        Debug.Print "  - No data rows found, skipping array ReDim."
-        GoTo Cleanup_RunScript ' Exit if no rows
+    ' Ensure objSess is valid (set by StartExtract)
+    If objSess Is Nothing Then
+        MsgBox "RunGUIScript Error: SAP Session object (objSess) is not valid.", vbCritical
+        Exit Sub
     End If
 
+    On Error GoTo ErrorHandler_RunScript_User ' Set error handler for this sub
 
-    ' --- Navigate to MM03 Transaction if not already there ---
-    Debug.Print "  - Navigating to transaction '" & cTRANSACTION & "'..." ' Log navigation start
-    Dim needsNavigation As Boolean: needsNavigation = True ' Assume navigation is needed
-    On Error Resume Next ' Prepare for error checking current screen
-    ' Check for a field specific to the initial MM03 screen (Material Number input)
-    Set mm03FieldCheck = objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR") '
-    If Err.Number = 0 And Not mm03FieldCheck Is Nothing Then ' If field exists
-        ' Double-check the transaction code for certainty
-        If objSess.Info.Transaction = UCase(cTRANSACTION) Then '
-            Debug.Print "  - Already in transaction " & cTRANSACTION & "." ' Log already there
-            needsNavigation = False ' No navigation needed
-        End If
+    Set ws = ThisWorkbook.Sheets("Sheet1") ' Assumes sheet name is Sheet1
+    lastRow = ws.Cells(ws.Rows.Count, cMATERIAL_COLUMN).End(xlUp).row
+
+    If lastRow < cSTART_ROW Then
+        MsgBox "No data found in Material column '" & cMATERIAL_COLUMN & "' starting from row " & cSTART_ROW & ".", vbInformation
+        GoTo Cleanup_RunScript_User
     End If
-    Err.Clear ' Clear potential error from FindById check
-    On Error GoTo ErrorHandler_RunScript ' Restore main handler
 
-    If needsNavigation Then ' If not already in MM03
-        Debug.Print "  - Executing /n" & cTRANSACTION & "..." ' Log command
-        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION ' Enter TCode
-        objSess.FindById("wnd[0]").sendVKey 0 ' Press Enter
-        Sleep cWAIT_TIME_MEDIUM_MS ' Wait after TCode change
+    ' Dimension array ONCE before the loop (like user's code)
+    ' Note: Using 0-based index for rows to match Application.Index usage later
+    ReDim dataArr(0 To lastRow - cSTART_ROW, 1 To 5) ' Array columns: 1=Status/Warn, 2=ProdHier, 3=OldMat, 4=User, 5=Date/Time
+    Debug.Print "  - dataArr ReDim'd: 0 To " & UBound(dataArr, 1) & ", 1 To " & UBound(dataArr, 2)
 
-        ' Verify Navigation by checking for the material field again
-        Debug.Print "  - Navigation presumably complete. Checking presence of material field..." '
-        On Error Resume Next ' Prepare for error during check
-        Set mm03FieldCheck = Nothing ' Reset check object
-        Set mm03FieldCheck = objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR") ' Try to find field
-        If Err.Number <> 0 Or mm03FieldCheck Is Nothing Then ' If check fails
-            Err.Clear ' Clear error
-            On Error GoTo ErrorHandler_RunScript ' Restore handler before raising new error
-            Err.Raise vbObjectError + 511, "RunGUIScript", "Failed to navigate to " & cTRANSACTION & ". Expected field 'RMMG1-MATNR' not found after /n command." ' Raise specific error
-        Else
-            Debug.Print "  - SUCCESS: Navigation confirmed." ' Log success
-        End If
-        Set mm03FieldCheck = Nothing ' Release check object
-        On Error GoTo ErrorHandler_RunScript ' Ensure main handler is active
-    End If
+    ' Navigate to MM03 (assuming StartExtract left session ready)
+    Debug.Print "  - Navigating to MM03..."
+    objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "mm03"
+    objSess.FindById("wnd[0]").sendVKey 0
+    Sleep 500 ' Short wait after navigation
 
     ' --- Loop through each row in Excel ---
-    For i = cSTART_ROW To lastRow ' Start loop from specified row to last row
+    For i = cSTART_ROW To lastRow
         Debug.Print "-----------------------------------------------------"
         Debug.Print "Processing row: " & i & "/" & lastRow ' Log progress
 
-        ' *** REMOVED: Erase dataArr - Handled by assigning to specific index ***
-        ' *** REMOVED: ReDim dataArr(1 To 5) - Array dimensioned outside loop ***
-        warningText = "" ' Reset warning text variable
-
-        ' --- Step 1: Read Material Number from Excel row ---
+        ' --- Get Material ---
         materialNumber = Trim$(CStr(ws.Cells(i, cMATERIAL_COLUMN).value)) ' Read and trim value
-
-        If materialNumber = "" Then ' Check if material number is empty
-            Debug.Print "  - WARNING: Skipping row " & i & " due to missing Material Number." ' Log skip
-            ' *** MODIFIED: Assign skip message to the correct array index ***
-            dataArr(i - cSTART_ROW, 1) = "Skipped - Missing Material"
-            ' Optionally write immediately or wait until end
-            ' ws.Cells(i, cOUTPUT_START_COLUMN).value = dataArr(i - cSTART_ROW, 1)
-            GoTo NextIteration ' Skip to next loop iteration
+        If materialNumber = "" Then
+             Debug.Print "  - WARNING: Skipping row " & i & " due to missing Material Number." ' Log skip
+             dataArr(i - cSTART_ROW, 1) = "Skipped - Missing Material"
+             GoTo NextIteration ' Skip to next loop iteration
         End If
-        Debug.Print "  - Material from Excel: '" & materialNumber & "'" ' Log material number
+         Debug.Print "  - Material from Excel: '" & materialNumber & "'" ' Log material number
 
-        ' --- Step 2: Enter Material and Initial Navigation (Press Enter) ---
-        Debug.Print "  - Entering Material Number '" & materialNumber & "' and pressing Enter..." ' Log action
-        On Error GoTo ErrorHandler_RunScript ' Ensure main handler is active
-        objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = materialNumber ' Set material field
-        objSess.FindById("wnd[0]").sendVKey 0 ' Press Enter
-        Sleep cWAIT_TIME_SHORT_MS ' Wait briefly
+        ' --- Enter Material & Proceed ---
+        objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = materialNumber
+        objSess.FindById("wnd[0]").sendVKey 0
+        Sleep 250
 
-        ' --- Step 3: Handle "Select View(s)" Popup (wnd[1]) or Error on Main Screen ---
-        ' Check if wnd[1] (Select View(s) popup) exists safely without raising an error
+        ' --- Check if wnd[1] (Select Views) exists ---
+        On Error Resume Next ' Use Resume Next for safe check
         wnd1Exists = False ' Reset flag
-        On Error Resume Next ' Prepare for non-existent object check
-        Set testControl = Nothing ' Reset test control object
-        Set testControl = objSess.FindById("wnd[1]", False) ' Try to get wnd[1], False prevents error if not found
-        If Err.Number = 0 And Not testControl Is Nothing Then ' Check if object was found without error
-            wnd1Exists = True ' Set flag if found
+        Set testControl = Nothing
+        Set testControl = objSess.FindById("wnd[1]")
+        If Err.Number = 0 And Not testControl Is Nothing Then
+            wnd1Exists = True
         End If
-        Err.Clear ' Clear potential (expected) 'object not found' error
-        On Error GoTo ErrorHandler_RunScript ' Restore main error handler '
+        Err.Clear ' Clear potential error
+        On Error GoTo ErrorHandler_RunScript_User ' Restore main handler
 
-        ' --- Scenario A: wnd[1] does NOT exist (Likely an error message on main screen status bar) ---
-        If Not wnd1Exists Then '
-            Debug.Print "  - 'Select View(s)' window (wnd[1]) not found. Reading status bar..." ' Log scenario
-            If Not objSBar Is Nothing Then ' Check if status bar object exists
-                ' *** MODIFIED: Assign status text to the correct array index ***
-                dataArr(i - cSTART_ROW, 1) = Trim$(objSBar.Text)
-                Debug.Print "  - Status Bar Text: '" & dataArr(i - cSTART_ROW, 1) & "'" ' Log the text
-            Else
-                 ' *** MODIFIED: Assign status text to the correct array index ***
-                dataArr(i - cSTART_ROW, 1) = "Status bar object not available." ' Fallback message
-                Debug.Print "  - " & dataArr(i - cSTART_ROW, 1) ' Log fallback
-            End If
-            ' Optionally write immediately or wait until end
-            ' ws.Cells(i, cOUTPUT_START_COLUMN).value = dataArr(i - cSTART_ROW, 1)
-            Debug.Print "  - Status/Error stored in array for row " & i
-            ' Reset the material field for the next iteration (optional, but good practice)
-             On Error Resume Next ' Ignore error if field not found
-             objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR").Text = "" ' Clear material field
-             On Error GoTo ErrorHandler_RunScript ' Restore handler
-            GoTo NextIteration ' Skip the rest of the processing for this material
+        ' --- Handle Scenario: wnd[1] does NOT exist (Error) ---
+        If Not wnd1Exists Then
+            Debug.Print "  - 'Select View(s)' window (wnd[1]) not found. Reading status bar..."
+            On Error Resume Next ' Read status bar safely
+            dataArr(i - cSTART_ROW, 1) = objSess.FindById("wnd[0]/sbar").Text
+            If Err.Number <> 0 Then dataArr(i - cSTART_ROW, 1) = "Status bar read error"
+            Err.Clear
+            On Error GoTo ErrorHandler_RunScript_User
+            Debug.Print "    - Status Bar Text: '" & dataArr(i - cSTART_ROW, 1) & "'"
+            ' Write only status to Excel
+            ws.Cells(i, cOUTPUT_START_COLUMN).value = dataArr(i - cSTART_ROW, 1)
+            GoTo NextIteration ' Skip rest of processing for this row
         End If
 
-        ' --- Scenario B: wnd[1] exists (Proceed with view selection) ---
-        Debug.Print "  - 'Select View(s)' window (wnd[1]) found. Selecting all and continuing..." ' Log scenario
-        On Error GoTo ErrorHandler_RunScript ' Ensure main handler active
-        ' Press "Select All Views" Button (usually btn[20], but check existence first)
-        Set testControl = Nothing: On Error Resume Next ' Reset and prepare for check
-        Set testControl = objSess.FindById("wnd[1]/tbar[0]/btn[20]", False) ' Check if button exists
-        On Error GoTo ErrorHandler_RunScript ' Restore handler
-        If Not testControl Is Nothing Then ' If button exists
-             objSess.FindById("wnd[1]/tbar[0]/btn[20]").press ' Press Select All Views
-             Sleep cWAIT_TIME_SHORT_MS ' Wait briefly
-             Debug.Print "    - Pressed 'Select All Views' (btn[20])." ' Log action
+        ' --- Handle Scenario: wnd[1] exists (Select Views / Org Levels) ---
+        Debug.Print "  - 'Select View(s)' window (wnd[1]) found. Processing views..."
+        On Error Resume Next ' Use Resume Next for potentially non-existent buttons/actions
+        objSess.FindById("wnd[1]/tbar[0]/btn[20]").press ' Select All
+        Sleep 100
+        objSess.FindById("wnd[1]/tbar[0]/btn[0]").press ' Continue (from Select Views)
+        Sleep 250
+        objSess.FindById("wnd[1]/tbar[0]/btn[0]").press ' Continue (from Org Levels, might not exist)
+        Sleep 500 ' Wait longer after Org Levels
+
+        ' --- Handle Scenario: wnd[2] (Warning Popup) ---
+        Set testControl = Nothing
+        Set testControl = objSess.FindById("wnd[2]/tbar[0]/btn[0]", False) ' Check button existence safely
+        If Err.Number = 0 And Not testControl Is Nothing Then
+             Debug.Print "  - Warning popup (wnd[2]) detected."
+             dataArr(i - cSTART_ROW, 1) = objSess.FindById("wnd[2]").PopupDialogText
+             Debug.Print "    - Warning Text: '" & dataArr(i - cSTART_ROW, 1) & "'"
+             objSess.FindById("wnd[2]/tbar[0]/btn[0]").press ' Press OK/Continue
+             Sleep 250
+        End If
+        Err.Clear ' Clear potential error from FindById check
+
+        ' --- Extract Data ---
+        Debug.Print "  - Extracting data fields..."
+        dataArr(i - cSTART_ROW, 2) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText
+        If Err.Number <> 0 Then Debug.Print "    - Error reading Prod Hier": dataArr(i - cSTART_ROW, 2) = "#ERR": Err.Clear
+        dataArr(i - cSTART_ROW, 3) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText
+        If Err.Number <> 0 Then Debug.Print "    - Error reading Old Mat": dataArr(i - cSTART_ROW, 3) = "#ERR": Err.Clear
+
+        objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press
+        Sleep 250 ' Wait for info popup
+
+        infoText = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText
+        If Err.Number <> 0 Then Debug.Print "    - Error reading Info Label [1,7]": infoText = "": Err.Clear
+
+        If Left(infoText, 7) <> "Created" Then
+            dataArr(i - cSTART_ROW, 4) = objSess.FindById("wnd[1]/usr/lbl[1,6]").DisplayedText
+            If Err.Number <> 0 Then Debug.Print "    - Error reading Info Label [1,6]": dataArr(i - cSTART_ROW, 4) = "#ERR": Err.Clear
+            dataArr(i - cSTART_ROW, 5) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Re-read [1,7]
+            If Err.Number <> 0 Then Debug.Print "    - Error reading Info Label [1,7] (Changed)": dataArr(i - cSTART_ROW, 5) = "#ERR": Err.Clear
         Else
-             Debug.Print "  - Warning: 'Select All Views' button (btn[20]) not found on wnd[1]. Proceeding without pressing it." ' Log warning if button missing
+            dataArr(i - cSTART_ROW, 4) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Re-read [1,7]
+            If Err.Number <> 0 Then Debug.Print "    - Error reading Info Label [1,7] (Created)": dataArr(i - cSTART_ROW, 4) = "#ERR": Err.Clear
+            dataArr(i - cSTART_ROW, 5) = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText
+            If Err.Number <> 0 Then Debug.Print "    - Error reading Info Label [1,8]": dataArr(i - cSTART_ROW, 5) = "#ERR": Err.Clear
         End If
 
-        ' Press Continue (Green Check) from Select Views popup
-        objSess.FindById("wnd[1]/tbar[0]/btn[0]").press '
-        Debug.Print "    - Pressed 'Continue' (btn[0]) on Select Views." ' Log action
-        Sleep cWAIT_TIME_SHORT_MS ' Wait briefly
+        ' --- Write Data Row using Application.Index ---
+        Debug.Print "  - Writing data row " & i & " using Application.Index..."
+        ' Note: Application.Index expects 1-based row index, our array is 0-based for rows.
+        ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr, 2) - 1)).value = Application.Index(dataArr, i - cSTART_ROW + 1, 0)
+        Debug.Print "  - Data row written."
 
-        ' --- Step 4: Handle "Organizational Levels" Popup (also wnd[1]) ---
-         Debug.Print "  - Handling 'Organizational Levels' window (wnd[1])..." ' Log step
-         On Error Resume Next ' This window might not always appear if defaults are sufficient
-         objSess.FindById("wnd[1]/tbar[0]/btn[0]").press ' Press Continue (Green Check) again
-         If Err.Number <> 0 Then ' If error (likely window didn't appear)
-             Debug.Print "    - 'Organizational Levels' window or Continue button not found/needed (Error: " & Err.Description & "). Proceeding..." ' Log skip/error
-             Err.Clear ' Clear the expected error
-         Else
-             Debug.Print "    - Pressed 'Continue' on 'Organizational Levels'." ' Log success
-         End If
-         On Error GoTo ErrorHandler_RunScript ' Restore main handler
-         Sleep cWAIT_TIME_MEDIUM_MS ' Wait longer after this step as data loading might occur
+        ' --- Navigate Back ---
+        objSess.FindById("wnd[1]/tbar[0]/btn[3]").press ' Close Info Popup
+        Sleep 100
+        objSess.FindById("wnd[0]/tbar[0]/btn[3]").press ' Back from Material Display
+        Sleep 250
 
-        ' --- Step 5: Handle Potential "Warning" Popup (wnd[2]) ---
-        ' Specifically checks for the "Deletion flag set at client level" warning as requested
-         Debug.Print "  - Checking for Warning popup (wnd[2])..." ' Log check
-         Set testControl = Nothing ' Reset test control object
-         On Error Resume Next ' Check existence of the OK button safely
-         Set testControl = objSess.FindById("wnd[2]/tbar[0]/btn[0]", False) ' Check if OK button exists on wnd[2]
-         If Err.Number = 0 And Not testControl Is Nothing Then ' If button object was found without error
-            ' Button exists, now try to get the window itself to read the text
-            Set testControl = Nothing ' Reset test control
-            Set testControl = objSess.FindById("wnd[2]", False) ' Get the window object itself
-            If Not testControl Is Nothing Then ' If window object obtained
-                warningText = Trim$(testControl.PopupDialogText) ' Get the text
-                 ' *** MODIFIED: Assign warning text to the correct array index ***
-                dataArr(i - cSTART_ROW, 1) = warningText
-                Debug.Print "    - Warning Popup Detected. Text: '" & warningText & "'" ' Log detection and text
-                objSess.FindById("wnd[2]/tbar[0]/btn[0]").press ' Press Continue/OK on the warning popup
-                Sleep cWAIT_TIME_SHORT_MS ' Wait briefly after pressing
-            Else
-                ' This case is less likely: button found but window object couldn't be retrieved
-                Debug.Print "    - Warning: Found button on wnd[2], but could not get window object to read text. Pressing button anyway." ' Log anomaly
-                objSess.FindById("wnd[2]/tbar[0]/btn[0]").press ' Press button even if text couldn't be read
-                Sleep cWAIT_TIME_SHORT_MS ' Wait briefly
-            End If
-         Else
-             Debug.Print "  - No Warning popup (wnd[2]) detected or its OK button not found." ' Log normal case (no popup)
-         End If
-         Err.Clear ' Clear any 'object not found' error from the check
-         On Error GoTo ErrorHandler_RunScript ' Restore main error handler
+        On Error GoTo ErrorHandler_RunScript_User ' Restore main handler fully after Resume Next block
 
-        ' --- Step 6: Extract Data from Basic Data 1 View ---
-        ' Assumes the view displayed after popups is Basic Data 1
-        Debug.Print "  - Extracting data from Basic Data 1 view..." ' Log step
-        ' Use On Error Resume Next carefully for reading fields
-        On Error Resume Next
-        ' *** MODIFIED: Assign data to the correct array index ***
-        dataArr(i - cSTART_ROW, 2) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/ctxtMARA-PRDHA").DisplayedText ' Product hierarchy
-        If Err.Number <> 0 Then Debug.Print "    - Error reading Product Hierarchy (MARA-PRDHA): " & Err.Description: dataArr(i - cSTART_ROW, 2) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
-        dataArr(i - cSTART_ROW, 3) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText ' Old material number
-        If Err.Number <> 0 Then Debug.Print "    - Error reading Old Material Number (MARA-BISMT): " & Err.Description: dataArr(i - cSTART_ROW, 3) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
-        On Error GoTo ErrorHandler_RunScript ' Restore main handler
+NextIteration:
+    Next i
 
-        Debug.Print "    - Product Hierarchy: '" & dataArr(i - cSTART_ROW, 2) & "'" ' Log extracted data
-        Debug.Print "    - Old Material Number: '" & dataArr(i - cSTART_ROW, 3) & "'" ' Log extracted data
+    Debug.Print "Finished processing all rows."
+    ' Final navigation back (optional)
+    On Error Resume Next ' Ignore error if already back
+    objSess.FindById("wnd[0]/tbar[0]/btn[3]").press ' Back from MM03 initial screen
+    On Error GoTo ErrorHandler_RunScript_User
 
-        ' --- Step 7: Extract Creation/Change Info via Information Button ---
-        Debug.Print "  - Extracting creation/change information..." ' Log step
-        ' Use On Error Resume Next carefully for button press and subsequent reads
-        On Error Resume Next
-        objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB1:SAPLMGD1:1002/btnINFO").press ' Press the 'Information' button
-        Sleep cWAIT_TIME_SHORT_MS ' Wait for info popup (wnd[1]) to appear
-        If Err.Number <> 0 Then ' Check if button press failed
-             Debug.Print "    - Warning: Could not press Information button (btnINFO) (Error: " & Err.Description & "). Skipping creation/change info." ' Log failure
-             ' *** MODIFIED: Assign error text to the correct array index ***
-             dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT
-             dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT
-             Err.Clear ' Clear error
-             GoTo WriteData ' Skip the label reading if button failed
-        End If
+    GoTo Cleanup_RunScript_User
 
-        ' Check if the info popup (wnd[1]) actually appeared before trying to read labels
-        Set testControl = Nothing ' Reset test control
-        Set testControl = objSess.FindById("wnd[1]", False) ' Check for wnd[1]
-        If testControl Is Nothing Then ' If popup didn't appear
-            Debug.Print "    - Warning: Information popup (wnd[1]) did not appear after pressing button. Skipping creation/change info." ' Log failure
-             ' *** MODIFIED: Assign error text to the correct array index ***
-            dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT
-            dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT
-            GoTo WriteData ' Skip label reading
-        End If
-        Debug.Print "    - Information popup (wnd[1]) found." ' Log popup found
-
-        ' Read info text using the conditional logic provided
-        infoText = "" ' Reset infoText variable
-        ' Attempt to read the primary label first ([1,7])
-        infoText = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Read text from label
-        If Err.Number <> 0 Then ' Handle error reading primary label
-            Debug.Print "    - Warning: Could not read primary label at [1,7] (Error: " & Err.Description & "). Subsequent reads might fail." ' Log warning
-             ' *** MODIFIED: Assign error text to the correct array index ***
-            dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT
-            dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT
-            Err.Clear ' Clear error
-            ' Try to close popup even if read failed
-             objSess.FindById("wnd[1]/tbar[0]/btn[3]").press ' Press 'Close' or 'Back' button (usually btn[3])
-             Sleep cWAIT_TIME_SHORT_MS
-            GoTo WriteData ' Skip rest of label logic
-        End If
-
-        ' --- Conditional Logic based on label text ---
-        If Left(infoText, 7) <> "Created" Then ' Check if text at [1,7] starts with "Created"
-            ' Scenario: Text likely "Changed by..." or similar. Read [1,6] and [1,7].
-             Debug.Print "    - Reading 'Changed By' info (Labels [1,6], [1,7])." ' Log scenario
-             ' *** MODIFIED: Assign data to the correct array index ***
-             dataArr(i - cSTART_ROW, 4) = objSess.FindById("wnd[1]/usr/lbl[1,6]").DisplayedText ' Changed By User
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,6]: " & Err.Description: dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             dataArr(i - cSTART_ROW, 5) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Changed On Date/Time (already read into infoText, but read again for consistency)
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,7] (Changed Case): " & Err.Description: dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             Debug.Print "      - Changed By: '" & dataArr(i - cSTART_ROW, 4) & "', On: '" & dataArr(i - cSTART_ROW, 5) & "'" ' Log extracted data
-        Else
-            ' Scenario: Text likely "Created by...". Read [1,7] and [1,8].
-             Debug.Print "    - Reading 'Created By' info (Labels [1,7], [1,8])." ' Log scenario
-             ' *** MODIFIED: Assign data to the correct array index ***
-             dataArr(i - cSTART_ROW, 4) = objSess.FindById("wnd[1]/usr/lbl[1,7]").DisplayedText ' Created By User (already read into infoText)
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,7] (Created Case): " & Err.Description: dataArr(i - cSTART_ROW, 4) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             dataArr(i - cSTART_ROW, 5) = objSess.FindById("wnd[1]/usr/lbl[1,8]").DisplayedText ' Created On Date/Time
-             If Err.Number <> 0 Then Debug.Print "      - Error reading label [1,8]: " & Err.Description: dataArr(i - cSTART_ROW, 5) = cREAD_ERROR_TEXT: Err.Clear ' Log specific error, store error text
-             Debug.Print "      - Created By: '" & dataArr(i - cSTART_ROW, 4) & "', On: '" & dataArr(i - cSTART_ROW, 5) & "'" ' Log extracted data
-        End If
-
-        ' Close the Information popup (wnd[1])
-        Debug.Print "    - Closing Information popup (wnd[1])..." ' Log action
-        objSess.FindById("wnd[1]/tbar[0]/btn[3]").press ' Press 'Close' or 'Back' button (usually btn[3])
-        If Err.Number <> 0 Then ' If button press fails
-             Debug.Print "      - Warning: Could not press Close/Back (btn[3]) on info popup (Error: " & Err.Description & "). Attempting window close." ' Log failure
-             Err.Clear ' Clear error
-             objSess.FindById("wnd[1]").Close ' Try closing window directly as fallback
-             If Err.Number <> 0 Then ' If direct close also fails
-                 Debug.Print "      - Warning: Direct window close also failed. May cause issues on next iteration." ' Log critical warning
-                 Err.Clear ' Clear error
-             End If
-        End If
-        Sleep cWAIT_TIME_SHORT_MS ' Wait briefly after closing popup
-
-        On Error GoTo ErrorHandler_RunScript ' Restore main handler
-
-WriteData: ' Label to jump to if info button/popup fails
-        ' --- Step 8: Write Extracted Data to Excel ---
-        ' *** MODIFIED: Use Application.Index method like user's working code ***
-        Debug.Print "  - Preparing to write data for row " & i & " using Application.Index..."
-        Debug.Print "    - Target Range: " & ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr, 2) - 1)).Address(False, False) ' Log target range
-        Debug.Print "    - Array Row Index: " & i - cSTART_ROW ' Log array row index (0-based)
-
-        ' Use Application.Index to extract the specific row (i - cSTART_ROW) from the 2D dataArr
-        ' The third argument '0' tells Index to return all columns for that row
-        ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr, 2) - 1)).value = Application.Index(dataArr, i - cSTART_ROW + 1, 0) ' Use i-cSTART_ROW+1 for 1-based row index in Application.Index
-        ' If an error occurs on the line above, execution should jump directly to ErrorHandler_RunScript
-
-        Debug.Print "  - Data written successfully using Application.Index." ' Log success
-
-        ' --- Step 9: Navigate Back to Material Selection Screen for Next Iteration ---
-        Debug.Print "  - Navigating back to Material selection screen..." ' Log navigation
-        On Error Resume Next ' Use Back button first (preferred)
-        objSess.FindById("wnd[0]/tbar[0]/btn[3]").press ' Press Back (F3)
-        Sleep cWAIT_TIME_SHORT_MS ' Wait briefly
-        ' Check if Back worked correctly (still in MM03)
-        If Err.Number <> 0 Or objSess.Info.Transaction <> UCase(cTRANSACTION) Then ' If Back failed or exited MM03
-            ' If Back failed, try navigating directly using /nMM03 as a more robust fallback
-            Debug.Print "    - Back button failed or left transaction. Re-navigating using /n" & cTRANSACTION & "..." ' Log fallback
-            Err.Clear ' Clear the error from the failed Back attempt
-            On Error GoTo ErrorHandler_RunScript ' Restore main handler before next action
-            objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION ' Enter TCode
-            objSess.FindById("wnd[0]").sendVKey 0 ' Press Enter
-            Sleep cWAIT_TIME_MEDIUM_MS ' Wait after TCode change
-            ' Verify return to MM03 initial screen
-            On Error Resume Next ' Prepare for verification check error
-            Set mm03FieldCheck = Nothing ' Reset check object
-            Set mm03FieldCheck = objSess.FindById("wnd[0]/usr/ctxtRMMG1-MATNR") ' Check for material field
-            If Err.Number <> 0 Or mm03FieldCheck Is Nothing Then ' If verification fails
-                Err.Clear ' Clear error
-                On Error GoTo ErrorHandler_RunScript ' Restore handler before raising new error
-                Err.Raise vbObjectError + 519, "RunGUIScript", "Failed to return to " & cTRANSACTION & " selection screen using /n for next iteration." ' Raise specific error
-            Else
-                Debug.Print "    - Successfully returned to " & cTRANSACTION & " selection screen via /n." ' Log success
-            End If
-             Set mm03FieldCheck = Nothing ' Release check object
-             On Error GoTo ErrorHandler_RunScript ' Restore main handler
-        Else
-             Debug.Print "    - Back button pressed successfully." ' Log successful Back press
-        End If
-        On Error GoTo ErrorHandler_RunScript ' Ensure main handler is active
-
-NextIteration: ' Label to jump to for skipping a row or after handling status bar error
-    Next i ' End of the main loop processing each row
-
-    Debug.Print "Finished processing all rows." ' Log completion of loop
-
-    ' Final navigation back (optional, depends if you want to leave MM03 open at the end)
-    Debug.Print "Navigating back from transaction..." ' Log final navigation
-    On Error Resume Next ' Attempt final Back/Exit gracefully
-    If objSess.Info.Transaction = UCase(cTRANSACTION) Then ' Check if still on MM03 initial screen
-         objSess.FindById("wnd[0]/tbar[0]/btn[3]").press ' Press Back from initial MM03 screen
-         Sleep cWAIT_TIME_SHORT_MS ' Wait briefly
-         Debug.Print "  - Pressed Back from initial MM03 screen." ' Log action
-    Else
-         ' Maybe already at main menu due to previous navigation, try Exit
-         objSess.FindById("wnd[0]/tbar[0]/btn[15]").press ' Press Exit (Shift+F3)
-         Sleep cWAIT_TIME_SHORT_MS ' Wait briefly
-         Debug.Print "  - Pressed Exit (not in MM03)." ' Log action
-    End If
-    On Error GoTo ErrorHandler_RunScript ' Restore main handler
-
-    GoTo Cleanup_RunScript ' Jump to cleanup section for normal exit
-
-ErrorHandler_RunScript: ' Error handler for the RunGUIScript sub
-    Dim errNumRun As Long: errNumRun = Err.Number ' Get error details
-    Dim errDescRun As String: errDescRun = Err.Description '
-    Dim errSourceRun As String: errSourceRun = Err.Source '
-    Debug.Print "!!!!!!!!!!!!!!!!!!! ERROR in RunGUIScript (MM03) !!!!!!!!!!!!!!!!!!!" ' Log error start
-    Debug.Print "  Err #: " & errNumRun: Debug.Print "  Source: " & errSourceRun: Debug.Print "  Desc: " & errDescRun ' Log details
+ErrorHandler_RunScript_User: ' Error handler for this sub
+    Dim errNumRun As Long: errNumRun = Err.Number
+    Dim errDescRun As String: errDescRun = Err.Description
+    Dim errSourceRun As String: errSourceRun = Err.Source
+    Debug.Print "!!!!!!!!!!!!!!!!!!! ERROR in RunGUIScript (User Logic) !!!!!!!!!!!!!!!!!!!"
+    Debug.Print "  Err #: " & errNumRun: Debug.Print "  Source: " & errSourceRun: Debug.Print "  Desc: " & errDescRun
     Debug.Print "  Processing Row: " & i ' Add context: which row failed
-    ' *** MODIFIED: Log which element might have failed if error came from write loop ***
-    If k > 0 And k <= UBound(dataArr, 2) Then ' Check second dimension for column count
-        Debug.Print "  Error likely occurred writing element " & k & " to cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ". Value: '" & CStr(dataArr(i - cSTART_ROW, k)) & "'"
-    ElseIf Err.Source = "RunGUIScript - Write Loop" Then ' Check if error came from Application.Index write
-         Debug.Print "  Error occurred during Application.Index write to range " & ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr, 2) - 1)).Address(False, False)
-    End If
-    Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" ' Log error end
-    MsgBox "Error during MM03 script processing row " & i & ":" & vbCrLf & "Err #: " & errNumRun & vbCrLf & "Desc: " & errDescRun, vbCritical ' Inform user
+    Debug.Print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    MsgBox "Error during MM03 script processing row " & i & ":" & vbCrLf & "Err #: " & errNumRun & vbCrLf & "Desc: " & errDescRun, vbCritical
+
     ' Attempt cleanup within SAP session if possible after an error
     On Error Resume Next ' Attempt cleanup gracefully, ignore further errors here
-    If Not objSess Is Nothing Then ' Check if session object exists
-        Debug.Print "Attempting SAP cleanup after error..." ' Log cleanup attempt
-        If objSess.Busy Then Sleep 500 ' Wait if busy
-        ' Try to close known popups first (wnd[2] then wnd[1])
-        Dim popupWin As Object ' Temporary object for popups
-        Set popupWin = objSess.FindById("wnd[2]", False): If Not popupWin Is Nothing Then popupWin.Close: Sleep 250 ' Close wnd[2] if exists
-        Set popupWin = objSess.FindById("wnd[1]", False): If Not popupWin Is Nothing Then popupWin.Close: Sleep 250 ' Close wnd[1] if exists
-        ' Try to get back to main screen or exit gracefully
-        If objSess.ActiveWindow.Name = "wnd[0]" Then ' Check if on main window
-            If objSess.Info.Transaction = UCase(cTRANSACTION) Then ' Check if still in MM03
-                 objSess.FindById("wnd[0]/tbar[0]/btn[3]").press ' Try Back first
-                 Sleep cWAIT_TIME_SHORT_MS ' Wait
-            End If
-             objSess.FindById("wnd[0]/tbar[0]/btn[15]").press: Sleep 250 ' Try Exit (Shift+F3)
+    If Not objSess Is Nothing Then
+        Debug.Print "Attempting SAP cleanup after error..."
+        If objSess.Busy Then Sleep 500
+        Dim popupWin As Object
+        Set popupWin = objSess.FindById("wnd[2]", False): If Not popupWin Is Nothing Then popupWin.Close: Sleep 250
+        Set popupWin = objSess.FindById("wnd[1]", False): If Not popupWin Is Nothing Then popupWin.Close: Sleep 250
+        If objSess.ActiveWindow.Name = "wnd[0]" Then
+            objSess.FindById("wnd[0]/tbar[0]/btn[15]").press: Sleep 250 ' Exit
         End If
-        Debug.Print "SAP cleanup attempt finished." ' Log cleanup finished
+        Debug.Print "SAP cleanup attempt finished."
     End If
-    ' Note: It does NOT release global SAP objects here; that happens in StartExtract's cleanup.
-    ' It proceeds to the local cleanup for this sub.
+    ' Fall through to local cleanup
 
-Cleanup_RunScript: ' Cleanup section for RunGUIScript
+Cleanup_RunScript_User: ' Cleanup section for RunGUIScript
     ' Release local Excel objects if they were set
-    If Not ws Is Nothing Then Set ws = Nothing: Debug.Print "  - Released ws (Worksheet object)" ' Release worksheet
-    If Not objExcelApp Is Nothing Then Set objExcelApp = Nothing: Debug.Print "  - Released objExcelApp (Excel Application object)" ' Release Excel App
-    ' Screen updating/calculation are handled in StartExtract's main cleanup
+    If Not ws Is Nothing Then Set ws = Nothing: Debug.Print "  - Released ws (Worksheet object)"
+    If Not objExcelApp Is Nothing Then Set objExcelApp = Nothing: Debug.Print "  - Released objExcelApp (Excel Application object)"
     On Error GoTo 0 ' Ensure default error handling is restored before exiting sub
-    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript (MM03)." ' Log exit from this sub
+    Debug.Print Format(Now, "yyyy-mm-dd hh:nn:ss") & " - Exiting RunGUIScript (User Logic)."
 
 End Sub
