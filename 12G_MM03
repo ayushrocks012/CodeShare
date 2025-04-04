@@ -697,7 +697,8 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
     Dim ws As Worksheet ' Excel worksheet object
     Dim lastRow As Long, i As Long ' Loop control variables
     Dim infoText As String ' Variable to hold text from info labels
-    Dim dataArr(1 To 5) As Variant ' Array to hold data for the current row (1-based, 5 columns)
+    Dim dataArr() As Variant ' *** MODIFIED: Declared as DYNAMIC array ***
+                                    ' It will be dimensioned inside the loop using ReDim.
                                     ' Column 1: Status/Warning Text
                                     ' Column 2: Product Hierarchy (MARA-PRDHA)
                                     ' Column 3: Old Material Number (MARA-BISMT)
@@ -789,9 +790,9 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         Debug.Print "-----------------------------------------------------"
         Debug.Print "Processing row: " & i & "/" & lastRow ' Log progress
 
-        ' Clear data array for the new row
-        Erase dataArr ' Clear previous row's data
-        ReDim dataArr(1 To 5) ' Re-dimension (though fixed size, Erase ensures clean start)
+        ' Clear and Re-Dimension the dynamic array for the new row
+        Erase dataArr ' Clear previous row's data from the dynamic array
+        ReDim dataArr(1 To 5) ' Dimension the dynamic array for this iteration (1 to 5 elements)
         warningText = "" ' Reset warning text variable
 
         ' --- Step 1: Read Material Number from Excel row ---
