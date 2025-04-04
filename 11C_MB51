@@ -18,6 +18,8 @@ Public objSess As GuiSession
 Public objSBar As GuiStatusbar
 
 Public Sub StartExtract()
+
+    ' --- CONFIGURATION CONSTANTS ---
     Const cTARGET_SYSTEM_ID_CLIENT As String = "PEA100"
     Const cTARGET_SYSTEM_DESCRIPTION As String = "9A. Symphony ECC Production"
     Const cSAP_LOGON_PATH As String = "C:\Program Files (x86)\SAP\FrontEnd\SAPgui\saplogon.exe"
@@ -26,11 +28,11 @@ Public Sub StartExtract()
     Const cMEDIUM_WAIT_MS As Long = 3000
 
     Dim SapGuiAuto As Object, W_conn As GuiConnection, W_Sess As GuiSession
-    Dim foundConnection As Boolean, SessionObtained As Boolean
+    Dim SessionObtained As Boolean, foundConnection As Boolean
 
     On Error GoTo ErrorHandler
 
-    ' Existing session check
+    ' --- STEP 1: Check Existing Global Session ---
     SessionObtained = False
     If Not objSess Is Nothing Then
         If objSess.Info.SystemName & objSess.Info.Client = cTARGET_SYSTEM_ID_CLIENT Then
@@ -43,48 +45,80 @@ Public Sub StartExtract()
         End If
     End If
 
-    ' SAP GUI Scripting Engine
+    ' --- STEP 2: Get SAP GUI Scripting Engine ---
     If objGui Is Nothing Then
         On Error Resume Next
         Set SapGuiAuto = GetObject("SAPGUI")
         If Not SapGuiAuto Is Nothing Then Set objGui = SapGuiAuto.GetScriptingEngine
+        On Error GoTo ErrorHandler
+    End If
+
+    ' --- STEP 3: Find Existing Connection ---
+    foundConnection = False
+    If Not objGui Is Nothing Then
+        For Each W_conn In objGui.Children
+            If W_conn.Children.Count > 0 Then
+                Set W_Sess = W_conn.Children(0)
+                If W_Sess.Info.SystemName & W_Sess.Info.Client = cTARGET_SYSTEM_ID_CLIENT Then
+                    Set objConn = W_conn
+                    foundConnection = True
+                    Exit For
+                End If
+            End If
+        Next W_conn
+    End If
+
+    ' --- STEP 4: Handle Based on Connection Found Status ---
+    If foundConnection Then
+        'Check for idle session
+        For Each W_Sess In objConn.Children
+            If W_Sess.Info.TRANSACTION = "SESSION_MANAGER" Or _
+               W_Sess.Info.TRANSACTION = "SMEN" Or _
+               W_Sess.Info.TRANSACTION = "S000" Then
+                Set objSess = W_Sess
+                Set objSBar = objSess.FindById("wnd[0]/sbar")
+                SessionObtained = True
+                Exit For
+            End If
+        Next W_Sess
+
+        'Create new session if no idle session found
+        If Not SessionObtained And objConn.Children.Count < cMAX_SESSIONS Then
+            Set objSess = objConn.Children(0)
+            objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/o"
+            objSess.FindById("wnd[0]").sendVKey 0
+            Sleep cMEDIUM_WAIT_MS
+            Set objSess = objConn.Children(objConn.Children.Count - 1)
+            Set objSBar = objSess.FindById("wnd[0]/sbar")
+            SessionObtained = True
+        End If
+
+    Else
+        ' --- Start of Integrated EstablishSsoConnection Logic ---
+        ' Step 1: Get/Ensure SAP GUI Scripting Engine
         If objGui Is Nothing Then
             Shell cSAP_LOGON_PATH, vbNormalFocus
             Sleep 5000
             Set SapGuiAuto = GetObject("SAPGUI")
             Set objGui = SapGuiAuto.GetScriptingEngine
         End If
-        On Error GoTo ErrorHandler
-    End If
 
-    ' Find connection
-    foundConnection = False
-    For Each W_conn In objGui.Children
-        If W_conn.Children.Count > 0 Then
-            Set W_Sess = W_conn.Children(0)
-            If W_Sess.Info.SystemName & W_Sess.Info.Client = cTARGET_SYSTEM_ID_CLIENT Then
-                Set objConn = W_conn
-                foundConnection = True
-                Exit For
-            End If
-        End If
-    Next W_conn
-
-    ' Use existing or create new session
-    If foundConnection Then
-        Set objSess = objConn.Children(0)
-        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/o"
-        objSess.FindById("wnd[0]").sendVKey 0
-        Sleep cMEDIUM_WAIT_MS
-        Set objSess = objConn.Children(objConn.Children.Count - 1)
-        Set objSBar = objSess.FindById("wnd[0]/sbar")
-        SessionObtained = True
-    Else
+        ' Step 2: Open Connection
         Set objConn = objGui.OpenConnection(cTARGET_SYSTEM_DESCRIPTION, True)
         Sleep cMEDIUM_WAIT_MS
+
+        ' Step 3: Get Session
         Set objSess = objConn.Children(0)
+
+        ' Step 4: Wait for Session Ready
+        Sleep cMEDIUM_WAIT_MS
+
+        ' Step 5: Get Status Bar
         Set objSBar = objSess.FindById("wnd[0]/sbar")
+
+        ' Step 6: SSO Success
         SessionObtained = True
+        ' --- End of Integrated SSO Logic ---
     End If
 
 RunReportScript:
