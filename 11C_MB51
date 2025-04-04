@@ -1,0 +1,168 @@
+Option Explicit
+
+' --- Windows API Declaration for OLE Message Filter ---
+Private Declare PtrSafe Function CoRegisterMessageFilter Lib "OLE32.DLL" _
+    (ByVal lpMessageFilter As LongPtr, ByRef lplpMessageFilter As LongPtr) As Long
+
+' --- Windows API Declaration for Sleep Function ---
+#If VBA7 Then
+    Public Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As LongPtr)
+#Else
+    Public Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
+
+' Global SAP objects
+Public objGui As GuiApplication
+Public objConn As GuiConnection
+Public objSess As GuiSession
+Public objSBar As GuiStatusbar
+
+Public Sub StartExtract()
+    Const cTARGET_SYSTEM_ID_CLIENT As String = "PEA100"
+    Const cTARGET_SYSTEM_DESCRIPTION As String = "9A. Symphony ECC Production"
+    Const cSAP_LOGON_PATH As String = "C:\Program Files (x86)\SAP\FrontEnd\SAPgui\saplogon.exe"
+    Const cMAX_SESSIONS As Integer = 6
+    Const cLOGON_TIMEOUT_SECONDS As Long = 60
+    Const cMEDIUM_WAIT_MS As Long = 3000
+
+    Dim SapGuiAuto As Object, W_conn As GuiConnection, W_Sess As GuiSession
+    Dim foundConnection As Boolean, SessionObtained As Boolean
+
+    On Error GoTo ErrorHandler
+
+    ' Existing session check
+    SessionObtained = False
+    If Not objSess Is Nothing Then
+        If objSess.Info.SystemName & objSess.Info.Client = cTARGET_SYSTEM_ID_CLIENT Then
+            SessionObtained = True
+            If objConn Is Nothing Then Set objConn = objSess.Parent
+            If objSBar Is Nothing Then Set objSBar = objSess.FindById("wnd[0]/sbar")
+            GoTo RunReportScript
+        Else
+            Set objSess = Nothing: Set objConn = Nothing: Set objSBar = Nothing: Set objGui = Nothing
+        End If
+    End If
+
+    ' SAP GUI Scripting Engine
+    If objGui Is Nothing Then
+        On Error Resume Next
+        Set SapGuiAuto = GetObject("SAPGUI")
+        If Not SapGuiAuto Is Nothing Then Set objGui = SapGuiAuto.GetScriptingEngine
+        If objGui Is Nothing Then
+            Shell cSAP_LOGON_PATH, vbNormalFocus
+            Sleep 5000
+            Set SapGuiAuto = GetObject("SAPGUI")
+            Set objGui = SapGuiAuto.GetScriptingEngine
+        End If
+        On Error GoTo ErrorHandler
+    End If
+
+    ' Find connection
+    foundConnection = False
+    For Each W_conn In objGui.Children
+        If W_conn.Children.Count > 0 Then
+            Set W_Sess = W_conn.Children(0)
+            If W_Sess.Info.SystemName & W_Sess.Info.Client = cTARGET_SYSTEM_ID_CLIENT Then
+                Set objConn = W_conn
+                foundConnection = True
+                Exit For
+            End If
+        End If
+    Next W_conn
+
+    ' Use existing or create new session
+    If foundConnection Then
+        Set objSess = objConn.Children(0)
+        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/o"
+        objSess.FindById("wnd[0]").sendVKey 0
+        Sleep cMEDIUM_WAIT_MS
+        Set objSess = objConn.Children(objConn.Children.Count - 1)
+        Set objSBar = objSess.FindById("wnd[0]/sbar")
+        SessionObtained = True
+    Else
+        Set objConn = objGui.OpenConnection(cTARGET_SYSTEM_DESCRIPTION, True)
+        Sleep cMEDIUM_WAIT_MS
+        Set objSess = objConn.Children(0)
+        Set objSBar = objSess.FindById("wnd[0]/sbar")
+        SessionObtained = True
+    End If
+
+RunReportScript:
+    If SessionObtained Then RunGUIScript Else Err.Raise vbObjectError + 1000, "StartExtract", "Session could not be established."
+
+Cleanup:
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    Set SapGuiAuto = Nothing: Set W_conn = Nothing: Set W_Sess = Nothing
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "Error #" & Err.Number & ": " & Err.Description, vbCritical
+    Resume Cleanup
+End Sub
+
+Private Sub RunGUIScript()
+    Const cTRANSACTION As String = "mb51"
+    Const cGRID_ID As String = "wnd[0]/usr/cntlGRID1/shellcont/shell"
+    Const cDOWNLOAD_PATH As String = "Z:\Demand\Demand Review\SAP H2H Report"
+    Const cSTART_ROW As Long = 2
+    Const cFILENAME_PREFIX As String = "MB51"
+    Const cFILENAME_EXTENSION As String = ".XLSX"
+
+    Dim ws As Worksheet, objExcelApp As Object
+    Dim i As Long, lastRow As Long, gridObject As GuiShell
+    Dim plant As String, dateLow As String, dateHigh As String, layout As String, dynamicFilename As String
+
+    On Error GoTo ErrorHandler
+
+    Set objExcelApp = GetObject(, "Excel.Application")
+    Set ws = objExcelApp.Worksheets("Sheet1")
+    lastRow = ws.Cells(ws.Rows.Count, "D").End(xlUp).Row
+
+    For i = cSTART_ROW To lastRow
+        plant = ws.Cells(i, "D").Value
+        dateLow = ws.Cells(i, "B").Value
+        dateHigh = ws.Cells(i, "C").Value
+        layout = ws.Cells(i, "E").Value
+        dynamicFilename = cFILENAME_PREFIX & "_" & plant & "_" & Replace(dateLow, ".", "") & "-" & Replace(dateHigh, ".", "") & "_" & Format$(Now, "yyyymmdd_hhmmss") & cFILENAME_EXTENSION
+
+        objSess.FindById("wnd[0]/tbar[0]/okcd").Text = "/n" & cTRANSACTION
+        objSess.FindById("wnd[0]").sendVKey 0
+        Sleep 1000
+
+        ' Clear fields
+        On Error Resume Next
+        Dim fld As Variant
+        For Each fld In Array("MATNR-LOW", "MATNR-HIGH", "WERKS-LOW", "LGORT-LOW", "CHARG-LOW", "LIFNR-LOW", "BUDAT-LOW", "BUDAT-HIGH", "ALV_DEF")
+            objSess.FindById("wnd[0]/usr/ctxt" & fld).Text = ""
+        Next fld
+        On Error GoTo ErrorHandler
+
+        objSess.FindById("wnd[0]/usr/ctxtWERKS-LOW").Text = plant
+        objSess.FindById("wnd[0]/usr/ctxtBUDAT-LOW").Text = dateLow
+        objSess.FindById("wnd[0]/usr/ctxtBUDAT-HIGH").Text = dateHigh
+        objSess.FindById("wnd[0]/usr/ctxtALV_DEF").Text = layout
+        objSess.FindById("wnd[0]/tbar[1]/btn[8]").press
+        Sleep 1000
+
+        Set gridObject = objSess.FindById(cGRID_ID)
+        gridObject.ContextMenu
+        gridObject.SelectContextMenuItem "&XXL"
+        Sleep 500
+        objSess.FindById("wnd[1]/tbar[0]/btn[0]").press
+        Sleep 500
+        objSess.FindById("wnd[1]/usr/ctxtDY_PATH").Text = cDOWNLOAD_PATH
+        objSess.FindById("wnd[1]/usr/ctxtDY_FILENAME").Text = dynamicFilename
+        objSess.FindById("wnd[1]/tbar[0]/btn[11]").press
+        Sleep 1500
+        ws.Cells(i, "F").Value = dynamicFilename
+    Next i
+
+Cleanup:
+    Set ws = Nothing: Set objExcelApp = Nothing
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "Error #" & Err.Number & ": " & Err.Description, vbCritical
+    Resume Cleanup
+End Sub
