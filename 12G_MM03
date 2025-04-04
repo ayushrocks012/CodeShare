@@ -916,7 +916,8 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         If Err.Number <> 0 Then Debug.Print "    - Error reading Product Hierarchy (MARA-PRDHA): " & Err.Description: dataArr(2) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
         dataArr(3) = objSess.FindById("wnd[0]/usr/tabsTABSPR1/tabpSP01/ssubTABFRA1:SAPLMGMM:2004/subSUB2:SAPLMGD1:2001/txtMARA-BISMT").DisplayedText ' Old material number
         If Err.Number <> 0 Then Debug.Print "    - Error reading Old Material Number (MARA-BISMT): " & Err.Description: dataArr(3) = cREAD_ERROR_TEXT: Err.Clear ' Log specific field error, store error text
-        On Error GoTo ErrorHandler_RunScript ' Restore main handler
+        ' *** ADDED: Explicitly restore main error handler AFTER this block ***
+        On Error GoTo ErrorHandler_RunScript
 
         Debug.Print "    - Product Hierarchy: '" & dataArr(2) & "'" ' Log extracted data
         Debug.Print "    - Old Material Number: '" & dataArr(3) & "'" ' Log extracted data
@@ -994,27 +995,41 @@ Private Sub RunGUIScript() ' Sub containing the actual MM03 interaction logic
         End If
         Sleep cWAIT_TIME_SHORT_MS ' Wait briefly after closing popup
 
-        On Error GoTo ErrorHandler_RunScript ' Restore main handler after Resume Next block
+        ' *** ADDED: Explicitly restore main error handler AFTER this block ***
+        On Error GoTo ErrorHandler_RunScript
 
 WriteData: ' Label to jump to if info button/popup fails
         ' --- Step 8: Write Extracted Data to Excel ---
-        Debug.Print "  - Writing data to Excel row " & i & " starting column " & cOUTPUT_START_COLUMN & "..." ' Log write action
-        ' Main error handler is active here
+        ' *** ADDED: More Debugging before write attempt ***
+        Debug.Print "  - Preparing to write data for row " & i & "..."
+        Debug.Print "    - TypeName(ws): " & TypeName(ws)
+        Debug.Print "    - TypeName(dataArr): " & TypeName(dataArr)
+        Debug.Print "    - IsArray(dataArr): " & IsArray(dataArr)
+        If IsArray(dataArr) Then Debug.Print "    - UBound(dataArr): " & UBound(dataArr)
+        Debug.Print "    - Value of i: " & i
+        Debug.Print "    - Value of k (before loop): " & k ' Should be 0 or last value from previous iteration if any
+        Sleep 250 ' Small delay before write attempt
 
-        ' *** MODIFIED: Write elements individually for debugging ***
-        For k = 1 To UBound(dataArr)
-            Debug.Print "    - Writing element " & k & " to column " & cOUTPUT_START_COLUMN + k - 1 & "..."
+        Debug.Print "  - Writing data to Excel row " & i & " starting column " & cOUTPUT_START_COLUMN & "..." ' Log write action
+
+        ' *** Write elements individually for debugging ***
+        For k = 1 To UBound(dataArr) ' Loop from 1 to 5
+            Debug.Print "    - Writing element " & k & " ('" & CStr(dataArr(k)) & "') to column " & cOUTPUT_START_COLUMN + k - 1 & " (Cell: " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ")..."
+            On Error Resume Next ' Use Resume Next for the individual cell write only
             ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).value = dataArr(k)
-            ' Check for error immediately after writing each cell
-            If Err.Number <> 0 Then
-                Debug.Print "      - ERROR occurred writing element " & k & " (Value: '" & CStr(dataArr(k)) & "'). Error: " & Err.Description
+            If Err.Number <> 0 Then ' Check for error immediately after writing each cell
+                Debug.Print "      - >>> ERROR occurred writing element " & k & " (Value: '" & CStr(dataArr(k)) & "'). Error(" & Err.Number & "): " & Err.Description
                 ' Raise the error again to trigger the main handler with context
-                Err.Raise Err.Number, "RunGUIScript - Write Loop", "Type mismatch writing element " & k & " to cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ". Value: " & CStr(dataArr(k))
+                Dim errDesc As String: errDesc = "Type mismatch writing element " & k & " to cell " & ws.Cells(i, cOUTPUT_START_COLUMN + k - 1).Address(False, False) & ". Value: " & CStr(dataArr(k)) & ". Original Error: " & Err.Description
+                Dim errNum As Long: errNum = Err.Number
+                On Error GoTo ErrorHandler_RunScript ' Restore main handler before raising
+                Err.Raise errNum, "RunGUIScript - Write Loop", errDesc
+            Else
+                Debug.Print "      - Element " & k & " written successfully."
             End If
-            Debug.Print "      - Element " & k & " written."
+            On Error GoTo ErrorHandler_RunScript ' Restore main handler immediately after checking error for the specific write
         Next k
-        ' Original line commented out:
-        ' ws.Range(ws.Cells(i, cOUTPUT_START_COLUMN), ws.Cells(i, cOUTPUT_START_COLUMN + UBound(dataArr) - 1)).value = dataArr '
+
         Debug.Print "  - Data written successfully (individually)." ' Log success
 
         ' --- Step 9: Navigate Back to Material Selection Screen for Next Iteration ---
