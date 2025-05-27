@@ -1,0 +1,566 @@
+Option Explicit
+
+Sub UpdateForeCast_Click()
+
+    ' --- Variable Declarations ---
+    Dim TWB As Workbook
+    Dim NewWB As Workbook
+
+    Dim MainSheet As Worksheet
+    Dim WS_Summary As Worksheet
+    Dim WS_ProductStatus As Worksheet
+    Dim WS_DemandForeCast As Worksheet
+    Dim WS_HistoricalSales As Worksheet
+    Dim WS_CurrentFamily As Worksheet
+    Dim WS_NewFamily As Worksheet
+
+    Dim ProductStatusLRow As Long
+    Dim DemandForeCastLRow As Long
+    Dim HistoricalLRow As Long
+    Dim CurrFamilyRow As Long
+    Dim CurrProductRow As Long
+    Dim CurrFamilyLRow As Long
+    Dim CurrFamilyLCol As Long
+    Dim CurrFamilyProductRow As Long
+    Dim CurrRow As Long ' General purpose row counter
+    Dim SummaryLRow As Long
+    Dim PS_Inner_Row As Long ' For nested loops on ProductStatus sheet
+    Dim Hist_CurrRow As Long ' For loops on HistoricalSales sheet
+    Dim PdtCurrRow As Long   ' For loops on ProductStatus sheet (another context)
+    Dim TempProdRowForFamilySum As Long ' For calculating total FamilySum
+
+    Dim DemandForeCastLCol As Long
+    Dim HistoricalLCol As Long
+    Dim CurrCol As Long      ' General purpose column counter
+    Dim HistDataCol As Long  ' For iterating historical data columns
+
+    Dim CurrFamily As String
+    Dim CurrProductFamily As String
+    Dim CurrFamilyProduct As String
+    Dim CurrProduct As String
+    Dim ActiveType As String
+    Dim NewProduct As String
+    Dim CurrGroupID As String
+    Dim HSGroupID As String
+    Dim HSProduct As String
+    Dim HSFamily As String
+    Dim HSActiveType As String
+    Dim SourceName As String
+    Dim PathName As String
+    Dim GroupID_Part1 As String
+    Dim GroupID_Part2 As String
+    Dim TempGroupIDForFamilySum As String
+
+
+    Dim IsFamilySheet As Boolean
+    Dim IsNewProduct As Boolean ' Corrected typo from IsNeWProduct
+    Dim isSuperseding As Boolean
+
+    Dim PhaseOutMonth As Date
+    Dim HSPhaseOutMonth As Date
+
+    Dim PhaseOutPercent As Variant ' Keep as Variant if it can be non-numeric or error
+    Dim NewPercent As Variant      ' Keep as Variant
+    Dim ProductSum As Variant      ' Corrected typo from ProdutSum, keep as Variant or use Double
+    Dim MonthCount As Long         ' Changed from Variant to Long
+    Dim FamilySum As Double        ' Changed to Double for calculations
+    Dim ProductGroupSum As Double  ' Changed to Double
+    Dim ProductGroupSumForFamilyTotal As Double ' For summing up to FamilySum
+
+    Dim HistLCol As Long ' Last column index for historical data section on Historical Sales sheet
+
+    Dim DemandData As Variant
+    Dim HistoricDataValues As Variant ' Corrected name from HistoricData
+    
+    Dim TempSht As Object ' For safely deleting sheet
+
+    ' --- Setup and Initialization ---
+    On Error GoTo ErrorHandler
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    Set TWB = ThisWorkbook
+    Set MainSheet = TWB.Sheets("Main")
+    Set WS_ProductStatus = TWB.Sheets("Product Status")
+    Set WS_DemandForeCast = TWB.Sheets("Demand Forecast")
+    Set WS_HistoricalSales = TWB.Sheets("Historical Sales")
+
+    ' Add Summary Sheet
+    On Error Resume Next
+    Set WS_Summary = TWB.Sheets("Summary")
+    On Error GoTo ErrorHandler 
+    
+    If WS_Summary Is Nothing Then
+        Set WS_Summary = TWB.Sheets.Add(after:=TWB.Sheets(TWB.Sheets.Count))
+        WS_Summary.Name = "Summary"
+    Else
+        WS_Summary.Cells.Clear
+        WS_Summary.Name = "Summary"
+    End If
+
+    ' Get Last Rows and Columns
+    ProductStatusLRow = WS_ProductStatus.Cells(WS_ProductStatus.Rows.Count, "A").End(xlUp).Row
+    DemandForeCastLRow = WS_DemandForeCast.Cells(WS_DemandForeCast.Rows.Count, "A").End(xlUp).Row
+    DemandForeCastLCol = WS_DemandForeCast.Cells(1, WS_DemandForeCast.Columns.Count).End(xlToLeft).Column
+    HistoricalLRow = WS_HistoricalSales.Cells(WS_HistoricalSales.Rows.Count, "A").End(xlUp).Row
+    HistoricalLCol = WS_HistoricalSales.Cells(1, WS_HistoricalSales.Columns.Count).End(xlToLeft).Column
+
+    ' Calculate MonthCount: Number of historical months before the first forecast month
+    MonthCount = 0
+    If DemandForeCastLCol >= 2 And HistoricalLCol >= 5 Then ' Ensure there are dates to compare
+        For CurrCol = 5 To HistoricalLCol ' Assuming historical data starts at column E (5)
+            If WS_DemandForeCast.Cells(1, 2).Value > WS_HistoricalSales.Cells(1, CurrCol).Value Then
+                MonthCount = MonthCount + 1
+            Else
+                Exit For
+            End If
+        Next CurrCol
+    End If
+
+    ' Last column of relevant historical data on Historical Sales sheet
+    ' 4 leading columns (A-D) + MonthCount data columns
+    HistLCol = 4 + MonthCount
+
+    ' --- Phase 1: Create New Family Sheets and Basic Structure ---
+    For CurrFamilyRow = 2 To DemandForeCastLRow
+        CurrFamily = CStr(WS_DemandForeCast.Range("A" & CurrFamilyRow).Value)
+        
+        IsFamilySheet = False
+        For Each WS_CurrentFamily In TWB.Worksheets
+            If WS_CurrentFamily.Name = CurrFamily Then
+                IsFamilySheet = True
+                Exit For
+            End If
+        Next WS_CurrentFamily
+
+        If Not IsFamilySheet Then
+            Set WS_NewFamily = TWB.Sheets.Add(after:=TWB.Sheets(TWB.Sheets.Count))
+            WS_NewFamily.Name = CurrFamily
+
+            WS_ProductStatus.Range("A1:D1").Copy WS_NewFamily.Range("A1")
+            WS_NewFamily.Range("E1").Value = "Active/Discontinued"
+            WS_NewFamily.Range("F1").Value = "Phase Out Month"
+
+            If IsEmpty(WS_Summary.Range("A1").Value) Then
+                WS_ProductStatus.Range("A1:D1").Copy WS_Summary.Range("A1")
+                WS_Summary.Range("E1").Value = "Active/Discontinued"
+                WS_Summary.Range("F1").Value = "Phase Out Month"
+            End If
+            Application.CutCopyMode = False
+
+            For CurrProductRow = 2 To ProductStatusLRow
+                CurrProductFamily = LCase(CStr(WS_ProductStatus.Range("A" & CurrProductRow).Value))
+                If CurrProductFamily = LCase(CurrFamily) Then
+                    Dim NewFamilyNextRow As Long
+                    NewFamilyNextRow = WS_NewFamily.Cells(WS_NewFamily.Rows.Count, "A").End(xlUp).Row + 1
+                    WS_ProductStatus.Range("A" & CurrProductRow & ":D" & CurrProductRow).Copy WS_NewFamily.Range("A" & NewFamilyNextRow)
+                End If
+            Next CurrProductRow
+        End If
+    Next CurrFamilyRow
+
+    ' --- Phase 2: Process Each Family Sheet ---
+    For CurrFamilyRow = 2 To DemandForeCastLRow
+        CurrFamily = CStr(WS_DemandForeCast.Range("A" & CurrFamilyRow).Value)
+        Debug.Print "Processing Family: " & CurrFamily
+        DemandData = WS_DemandForeCast.Range(WS_DemandForeCast.Cells(CurrFamilyRow, 2), WS_DemandForeCast.Cells(CurrFamilyRow, DemandForeCastLCol)).Value
+
+        Set WS_CurrentFamily = Nothing
+        On Error Resume Next
+        Set WS_CurrentFamily = TWB.Sheets(CurrFamily)
+        On Error GoTo ErrorHandler
+
+        If Not WS_CurrentFamily Is Nothing Then
+            CurrFamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row
+            CurrFamilyLCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
+
+            If CurrFamilyLCol >= 7 Then
+                WS_CurrentFamily.Range(WS_CurrentFamily.Cells(1, 7), WS_CurrentFamily.Cells(1, CurrFamilyLCol)).EntireColumn.Delete
+            End If
+
+            ' Copy Historical Sales Headers (MonthCount columns starting from col 5 on HistoricalSales)
+            If MonthCount > 0 Then
+                WS_HistoricalSales.Range(WS_HistoricalSales.Cells(1, 5), WS_HistoricalSales.Cells(1, 4 + MonthCount)).Copy WS_CurrentFamily.Range("G1")
+            End If
+            
+            If IsEmpty(WS_Summary.Range("G1").Value) And MonthCount > 0 Then
+                WS_HistoricalSales.Range(WS_HistoricalSales.Cells(1, 5), WS_HistoricalSales.Cells(1, 4 + MonthCount)).Copy WS_Summary.Range("G1")
+            End If
+            
+            CurrFamilyLCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
+
+            WS_DemandForeCast.Range(WS_DemandForeCast.Cells(1, 2), WS_DemandForeCast.Cells(1, DemandForeCastLCol)).Copy WS_CurrentFamily.Cells(1, CurrFamilyLCol + 1)
+            
+            Dim SummaryFcstHeaderStartCol As Long
+            SummaryFcstHeaderStartCol = WS_Summary.Cells(1, WS_Summary.Columns.Count).End(xlToLeft).Column
+            If Not IsEmpty(WS_Summary.Range("A1").Value) Then
+                WS_DemandForeCast.Range(WS_DemandForeCast.Cells(1, 2), WS_DemandForeCast.Cells(1, DemandForeCastLCol)).Copy WS_Summary.Cells(1, SummaryFcstHeaderStartCol + 1)
+            End If
+
+            CurrFamilyLCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
+
+            ' Add New Products from ProductStatus to CurrentFamily sheet if they are "New" type
+            For CurrProductRow = 2 To ProductStatusLRow
+                If LCase(CStr(WS_ProductStatus.Range("A" & CurrProductRow).Value)) = LCase(CurrFamily) Then
+                    CurrProduct = CStr(WS_ProductStatus.Range("D" & CurrProductRow).Value)
+                    ActiveType = CStr(WS_ProductStatus.Range("E" & CurrProductRow).Value)
+                    
+                    IsNewProduct = True
+                    For CurrFamilyProductRow = 2 To CurrFamilyLRow
+                        If CStr(WS_CurrentFamily.Range("D" & CurrFamilyProductRow).Value) = CurrProduct Then
+                            IsNewProduct = False
+                            Exit For
+                        End If
+                    Next CurrFamilyProductRow
+
+                    If IsNewProduct And ActiveType = "New" Then
+                        Dim nextEmptyRowInFamily As Long
+                        nextEmptyRowInFamily = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row + 1
+                        WS_ProductStatus.Range("A" & CurrProductRow & ":D" & CurrProductRow).Copy WS_CurrentFamily.Range("A" & nextEmptyRowInFamily)
+                        CurrFamilyLRow = nextEmptyRowInFamily ' Update last row after adding
+                    End If
+                End If
+            Next CurrProductRow
+            
+            CurrFamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row ' Final update of last row
+
+            ' --- Calculate Total Family Historical Sum (FamilySum) for allocation base ---
+            FamilySum = 0
+            For TempProdRowForFamilySum = 2 To CurrFamilyLRow
+                CurrProductFamily = CStr(WS_CurrentFamily.Range("A" & TempProdRowForFamilySum).Value) ' Family from current family sheet
+                Dim tempProductForFamilySum As String
+                tempProductForFamilySum = CStr(WS_CurrentFamily.Range("D" & TempProdRowForFamilySum).Value)
+
+                ' Get GroupID for this temporary product
+                If InStr(tempProductForFamilySum, "-") > 0 Then
+                    GroupID_Part1 = Split(tempProductForFamilySum, "-")(0)
+                    If UBound(Split(tempProductForFamilySum, "-")) >= 1 Then
+                        GroupID_Part2 = Split(tempProductForFamilySum, "-")(1)
+                    Else
+                        GroupID_Part2 = ""
+                    End If
+                    TempGroupIDForFamilySum = GroupID_Part1 & GroupID_Part2
+                Else
+                    TempGroupIDForFamilySum = tempProductForFamilySum
+                End If
+                
+                ProductGroupSumForFamilyTotal = 0
+                For Hist_CurrRow = 2 To HistoricalLRow
+                    HSProduct = CStr(WS_HistoricalSales.Range("D" & Hist_CurrRow).Value)
+                    HSFamily = CStr(WS_HistoricalSales.Range("A" & Hist_CurrRow).Value)
+                    
+                    If InStr(HSProduct, "-") > 0 Then
+                        GroupID_Part1 = Split(HSProduct, "-")(0)
+                        If UBound(Split(HSProduct, "-")) >= 1 Then
+                            GroupID_Part2 = Split(HSProduct, "-")(1)
+                        Else
+                            GroupID_Part2 = ""
+                        End If
+                        HSGroupID = GroupID_Part1 & GroupID_Part2
+                    Else
+                        HSGroupID = HSProduct
+                    End If
+
+                    ' Match GroupID and ensure it's within the *currently processing family* (CurrFamily, not CurrProductFamily from sheet)
+                    If HSGroupID = TempGroupIDForFamilySum And UCase(HSFamily) = UCase(CurrFamily) Then
+                        For CurrCol = 5 To HistLCol ' Iterate relevant historical columns on Historical Sales sheet
+                             If WS_HistoricalSales.Cells(1, CurrCol).Value < WS_DemandForeCast.Cells(1, 2).Value Then
+                                If IsNumeric(WS_HistoricalSales.Cells(Hist_CurrRow, CurrCol).Value) Then
+                                    ProductGroupSumForFamilyTotal = ProductGroupSumForFamilyTotal + CDbl(WS_HistoricalSales.Cells(Hist_CurrRow, CurrCol).Value)
+                                End If
+                            End If
+                        Next CurrCol
+                    End If
+                Next Hist_CurrRow
+                FamilySum = FamilySum + ProductGroupSumForFamilyTotal
+            Next TempProdRowForFamilySum
+
+            If FamilySum = 0 Then FamilySum = 1 ' Avoid division by zero; if no historical sales for family, allocation will be 0 or based on other rules.
+
+            ' --- Process each product in the current family sheet ---
+            For CurrProductRow = 2 To CurrFamilyLRow
+                CurrProductFamily = CStr(WS_CurrentFamily.Range("A" & CurrProductRow).Value) ' This is the family listed on the current family sheet for this product
+                CurrProduct = CStr(WS_CurrentFamily.Range("D" & CurrProductRow).Value)
+
+                If InStr(CurrProduct, "-") > 0 Then
+                    GroupID_Part1 = Split(CurrProduct, "-")(0)
+                    If UBound(Split(CurrProduct, "-")) >= 1 Then
+                        GroupID_Part2 = Split(CurrProduct, "-")(1)
+                    Else
+                        GroupID_Part2 = ""
+                    End If
+                    CurrGroupID = GroupID_Part1 & GroupID_Part2
+                Else
+                    CurrGroupID = CurrProduct
+                End If
+                
+                isSuperseding = False
+                ActiveType = ""
+                PhaseOutMonth = CDate(0)
+                PhaseOutPercent = 0
+                NewProduct = ""
+                NewPercent = 0
+
+                For Hist_CurrRow = 2 To ProductStatusLRow
+                    If CStr(WS_ProductStatus.Range("D" & Hist_CurrRow).Value) = CurrProduct Then
+                        ActiveType = CStr(WS_ProductStatus.Range("E" & Hist_CurrRow).Value)
+                        If IsDate(WS_ProductStatus.Range("F" & Hist_CurrRow).Value) Then PhaseOutMonth = CDate(WS_ProductStatus.Range("F" & Hist_CurrRow).Value)
+                        If IsNumeric(WS_ProductStatus.Range("G" & Hist_CurrRow).Value) Then PhaseOutPercent = WS_ProductStatus.Range("G" & Hist_CurrRow).Value
+                        NewProduct = CStr(WS_ProductStatus.Range("H" & Hist_CurrRow).Value)
+                        If IsNumeric(WS_ProductStatus.Range("I" & Hist_CurrRow).Value) Then NewPercent = WS_ProductStatus.Range("I" & Hist_CurrRow).Value
+                        
+                        If ActiveType = "Active" Then
+                            For PS_Inner_Row = 2 To ProductStatusLRow
+                                If CStr(WS_ProductStatus.Range("H" & PS_Inner_Row).Value) = CurrProduct Then
+                                    isSuperseding = True
+                                    If IsDate(WS_ProductStatus.Range("F" & PS_Inner_Row).Value) Then PhaseOutMonth = CDate(WS_ProductStatus.Range("F" & PS_Inner_Row).Value)
+                                    If IsNumeric(WS_ProductStatus.Range("G" & PS_Inner_Row).Value) Then PhaseOutPercent = WS_ProductStatus.Range("G" & PS_Inner_Row).Value
+                                    Exit For
+                                End If
+                            Next PS_Inner_Row
+                        End If
+                        Exit For
+                    End If
+                Next Hist_CurrRow
+
+                ProductSum = 0 ' This variable seems to be for individual product's total historical sum, used for HistoricDataValues
+                If MonthCount > 0 Then
+                    ReDim HistoricDataValues(1 To 1, 1 To MonthCount)
+                Else
+                    ReDim HistoricDataValues(1 To 1, 1 To 1) ' Avoid error if MonthCount is 0
+                End If
+                
+                Dim histDataColCounter As Long
+                histDataColCounter = 0
+
+                For Hist_CurrRow = 2 To HistoricalLRow
+                    HSProduct = CStr(WS_HistoricalSales.Range("D" & Hist_CurrRow).Value)
+                    If HSProduct = CurrProduct Then
+                        histDataColCounter = 0
+                        For CurrCol = 5 To HistLCol ' Iterate relevant historical columns on Historical Sales Sheet (5 to 4+MonthCount)
+                            If WS_HistoricalSales.Cells(1, CurrCol).Value < WS_DemandForeCast.Cells(1, 2).Value Then
+                                If IsNumeric(WS_HistoricalSales.Cells(Hist_CurrRow, CurrCol).Value) Then
+                                    ProductSum = ProductSum + CDbl(WS_HistoricalSales.Cells(Hist_CurrRow, CurrCol).Value)
+                                    histDataColCounter = histDataColCounter + 1
+                                    If histDataColCounter <= UBound(HistoricDataValues, 2) Then
+                                        HistoricDataValues(1, histDataColCounter) = WS_HistoricalSales.Cells(Hist_CurrRow, CurrCol).Value
+                                    Else
+                                        ' This case should ideally not happen if MonthCount is correct
+                                        Debug.Print "Warning: histDataColCounter exceeded HistoricDataValues array bounds for product " & CurrProduct
+                                    End If
+                                End If
+                            End If
+                        Next CurrCol
+                        Exit For 
+                    End If
+                Next Hist_CurrRow
+                
+                If histDataColCounter > 0 And histDataColCounter < UBound(HistoricDataValues, 2) Then
+                    ReDim Preserve HistoricDataValues(1 To 1, 1 To histDataColCounter)
+                ElseIf histDataColCounter = 0 Then
+                     Erase HistoricDataValues 
+                End If
+
+                ProductGroupSum = 0
+                For Hist_CurrRow = 2 To HistoricalLRow
+                    HSProduct = CStr(WS_HistoricalSales.Range("D" & Hist_CurrRow).Value)
+                    HSFamily = CStr(WS_HistoricalSales.Range("A" & Hist_CurrRow).Value)
+                    
+                    If InStr(HSProduct, "-") > 0 Then
+                        GroupID_Part1 = Split(HSProduct, "-")(0)
+                        If UBound(Split(HSProduct, "-")) >= 1 Then
+                            GroupID_Part2 = Split(HSProduct, "-")(1)
+                        Else
+                            GroupID_Part2 = ""
+                        End If
+                        HSGroupID = GroupID_Part1 & GroupID_Part2
+                    Else
+                        HSGroupID = HSProduct
+                    End If
+                    
+                    ' Ensure HSFamily matches the family of the product being processed (CurrProductFamily from WS_CurrentFamily)
+                    If HSGroupID = CurrGroupID And UCase(HSFamily) = UCase(CurrProductFamily) Then
+                        For CurrCol = 5 To HistLCol ' Iterate relevant historical columns
+                             If WS_HistoricalSales.Cells(1, CurrCol).Value < WS_DemandForeCast.Cells(1, 2).Value Then
+                                If IsNumeric(WS_HistoricalSales.Cells(Hist_CurrRow, CurrCol).Value) Then
+                                    ProductGroupSum = ProductGroupSum + CDbl(WS_HistoricalSales.Cells(Hist_CurrRow, CurrCol).Value)
+                                End If
+                            End If
+                        Next CurrCol
+                    End If
+                Next Hist_CurrRow
+
+                WS_CurrentFamily.Cells(CurrProductRow, 5).Value = ActiveType
+                If PhaseOutMonth > CDate(0) Then WS_CurrentFamily.Cells(CurrProductRow, 6).Value = PhaseOutMonth
+                
+                Dim forecastStartColOnFamilySheet As Long
+                forecastStartColOnFamilySheet = 7 + MonthCount ' Historical data G to G+MonthCount-1. Forecast from G+MonthCount.
+
+                If histDataColCounter > 0 Then
+                    WS_CurrentFamily.Range(WS_CurrentFamily.Cells(CurrProductRow, 7), WS_CurrentFamily.Cells(CurrProductRow, 7 + histDataColCounter - 1)).Value = HistoricDataValues
+                    WS_CurrentFamily.Range(WS_CurrentFamily.Cells(CurrProductRow, 7), WS_CurrentFamily.Cells(CurrProductRow, 7 + histDataColCounter - 1)).Interior.Color = RGB(208, 208, 208)
+                End If
+
+                For CurrCol = forecastStartColOnFamilySheet To CurrFamilyLCol
+                    Dim forecastPeriodIndex As Long
+                    forecastPeriodIndex = CurrCol - (forecastStartColOnFamilySheet - 1)
+                    
+                    Dim allocatedValue As Double
+                    allocatedValue = 0
+                    Dim currentForecastPeriodDate As Date
+                    currentForecastPeriodDate = CDate(WS_CurrentFamily.Cells(1, CurrCol).Value)
+                    
+                    If FamilySum <> 0 Then
+                        If ActiveType = "Discontinued" Then
+                            If PhaseOutMonth > CDate(0) And currentForecastPeriodDate >= PhaseOutMonth Then
+                                allocatedValue = 0
+                            ElseIf PhaseOutMonth = CDate(0) Then ' Discontinued without a date, so always 0
+                                allocatedValue = 0
+                            Else ' Still active before a specified phase-out or no phase-out month means it might get some historical allocation
+                                allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) / FamilySum
+                            End If
+                        ElseIf ActiveType = "Active" And Not isSuperseding Then
+                            allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) / FamilySum
+                        ElseIf ActiveType = "Active" And isSuperseding Then
+                            If PhaseOutMonth > CDate(0) Then
+                                If currentForecastPeriodDate < PhaseOutMonth Then
+                                    allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) / FamilySum
+                                ElseIf currentForecastPeriodDate = PhaseOutMonth Then
+                                    allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) * (1 - PhaseOutPercent) / FamilySum
+                                Else ' currentForecastPeriodDate > PhaseOutMonth
+                                    allocatedValue = 0
+                                End If
+                            Else ' No phase out month for superseding, treat as fully active
+                                allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) / FamilySum
+                            End If
+                        ElseIf ActiveType = "PhaseIn-PhaseOut" Then
+                             If PhaseOutMonth > CDate(0) Then
+                                If currentForecastPeriodDate < PhaseOutMonth Then
+                                     allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) / FamilySum
+                                ElseIf currentForecastPeriodDate = PhaseOutMonth Then
+                                    allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) * PhaseOutPercent / FamilySum
+                                Else ' currentForecastPeriodDate > PhaseOutMonth
+                                    allocatedValue = 0
+                                End If
+                            Else ' No phase out month, treat as fully active (or apply different rule if needed)
+                                allocatedValue = ProductGroupSum * DemandData(1, forecastPeriodIndex) / FamilySum
+                            End If
+                        End If
+                    End If
+                    WS_CurrentFamily.Cells(CurrProductRow, CurrCol).Value = allocatedValue
+                Next CurrCol
+
+            Next CurrProductRow
+
+            ' Sum up totals for the current family sheet (historical and forecast part)
+            Dim totalRow As Long
+            totalRow = CurrFamilyLRow + 1
+            WS_CurrentFamily.Cells(totalRow, 1).Value = "Total " & CurrFamily
+            For CurrCol = 7 To CurrFamilyLCol ' From first data column (G) to last
+                WS_CurrentFamily.Cells(totalRow, CurrCol).Value = Application.WorksheetFunction.Sum(WS_CurrentFamily.Range(WS_CurrentFamily.Cells(2, CurrCol), WS_CurrentFamily.Cells(CurrFamilyLRow, CurrCol)))
+            Next CurrCol
+
+
+            ' --- Formatting and Finalizing Current Family Sheet ---
+            Dim dataEndCol As Long
+            dataEndCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
+
+            WS_CurrentFamily.Range(WS_CurrentFamily.Cells(2, 7), WS_CurrentFamily.Cells(totalRow, dataEndCol)).NumberFormat = "0"
+            WS_CurrentFamily.Range(WS_CurrentFamily.Cells(1, 1), WS_CurrentFamily.Cells(totalRow, dataEndCol)).Borders.LineStyle = xlContinuous
+            WS_CurrentFamily.Range(WS_CurrentFamily.Cells(1, 1), WS_CurrentFamily.Cells(totalRow, dataEndCol)).EntireColumn.AutoFit
+            WS_CurrentFamily.Range(WS_CurrentFamily.Cells(totalRow, 1), WS_CurrentFamily.Cells(totalRow, dataEndCol)).Font.Bold = True
+            WS_CurrentFamily.Range(WS_CurrentFamily.Cells(totalRow, 7), WS_CurrentFamily.Cells(totalRow, dataEndCol)).Interior.Color = RGB(228, 158, 221)
+
+            ' --- Copy Processed Family Data to Summary Sheet ---
+            SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
+            If SummaryLRow = 1 And IsEmpty(WS_Summary.Range("A1").Value) Then
+                ' Summary sheet is empty, headers already copied (or should be)
+            Else
+                SummaryLRow = SummaryLRow + 1
+            End If
+            
+            ' Copy data rows including the total row
+            WS_CurrentFamily.Range(WS_CurrentFamily.Cells(2, 1), WS_CurrentFamily.Cells(totalRow, dataEndCol)).Copy
+            WS_Summary.Range("A" & SummaryLRow).PasteSpecial xlPasteValuesAndNumberFormats
+            Application.CutCopyMode = False
+            
+        End If
+    Next CurrFamilyRow
+
+    ' Final Autofit and Sort for Summary Sheet
+    Dim finalSummaryLastCol As Long
+    finalSummaryLastCol = WS_Summary.Cells(1, WS_Summary.Columns.Count).End(xlToLeft).Column
+    Dim finalSummaryLastRow As Long
+    finalSummaryLastRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
+    If finalSummaryLastRow > 1 Then
+        If finalSummaryLastCol > 0 Then
+            WS_Summary.Range(WS_Summary.Cells(1, 1), WS_Summary.Cells(finalSummaryLastRow, finalSummaryLastCol)).EntireColumn.AutoFit
+        End If
+        If finalSummaryLastCol >= 4 Then ' Column D is 4, ensure it exists for sorting
+             WS_Summary.Range(WS_Summary.Cells(1, 1), WS_Summary.Cells(finalSummaryLastRow, finalSummaryLastCol)).Sort _
+                Key1:=WS_Summary.Columns(4), Order1:=xlAscending, Header:=xlYes
+        End If
+    End If
+
+    ' --- Create New Workbook and Move Processed Sheets ---
+    Set NewWB = Workbooks.Add
+
+    For Each WS_CurrentFamily In TWB.Worksheets
+        SourceName = WS_CurrentFamily.Name
+        Select Case SourceName
+            Case "Main", "Product Status", "Historical Sales", "Demand Forecast"
+                ' Do nothing
+            Case Else
+                WS_CurrentFamily.Move after:=NewWB.Sheets(NewWB.Sheets.Count)
+        End Select
+    Next WS_CurrentFamily
+
+    Application.DisplayAlerts = False
+    For Each TempSht In NewWB.Worksheets
+        If TempSht.Name Like "Sheet*" Then
+            TempSht.Delete
+        End If
+    Next TempSht
+    Application.DisplayAlerts = True
+
+    If NewWB.Sheets.Count > 0 Then
+        On Error Resume Next
+        NewWB.Sheets("Summary").Activate
+        If Err.Number <> 0 Then NewWB.Sheets(1).Activate
+        Err.Clear
+        On Error GoTo ErrorHandler
+    End If
+
+    PathName = TWB.Path
+    If PathName = "" Then PathName = Application.DefaultFilePath
+    If Right(PathName, 1) <> Application.PathSeparator Then PathName = PathName & Application.PathSeparator
+
+    NewWB.SaveAs PathName & "Demand ForeCast - " & Format(Now, "ddmmyyyy_hhmmss") & ".xlsx", FileFormat:=xlOpenXMLWorkbook
+    NewWB.Close SaveChanges:=False
+
+    MainSheet.Activate
+    MsgBox "Forecast Update Completed Successfully!", vbInformation
+
+Cleanup:
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.DisplayAlerts = True
+    Set TWB = Nothing
+    Set NewWB = Nothing
+    Set MainSheet = Nothing
+    Set WS_Summary = Nothing
+    Set WS_ProductStatus = Nothing
+    Set WS_DemandForeCast = Nothing
+    Set WS_HistoricalSales = Nothing
+    Set WS_CurrentFamily = Nothing
+    Set WS_NewFamily = Nothing
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "An error occurred: " & vbCrLf & _
+           "Error Number: " & Err.Number & vbCrLf & _
+           "Error Description: " & Err.Description & vbCrLf & _
+           "Procedure: UpdateForeCast_Click", vbCritical, "Error"
+    Resume Cleanup
+
+End Sub
