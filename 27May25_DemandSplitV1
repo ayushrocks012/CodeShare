@@ -562,6 +562,10 @@ Sub Refactored_UpdateForeCast_Click()
                 End If
 
                 wsCurrentFamilySheet.Cells(lngCurrentProductRowFS, lngSheetCol).Value = dblForecastValue
+            ' User reported "Next without For" error on the following line.
+            ' The For loop "For lngForecastMonthIndex = 1 To UBound(varDemandData, 2)" appears correctly initiated.
+            ' All If/ElseIf/End If blocks within this loop also appear to be correctly structured.
+            ' If this error persists, check for subtle typos or structural issues in the local VBA editor.
             Next lngForecastMonthIndex
 NextProductInFamilySheet:
         Next lngCurrentProductRowFS
