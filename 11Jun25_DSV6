@@ -207,7 +207,6 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
         If InStr(CurrProduct, "-") > 0 Then CurrGroupID = Split(CurrProduct, "-")(0) & Split(CurrProduct, "-")(1) Else CurrGroupID = CurrProduct
 
         Dim CurrentLifecycle As ProductLifecycle
-        ' ***FIXED***: Used explicit .Item to resolve warning and corrected bug by removing incorrect 'Set'
         If LifecycleMap.Exists(CurrProduct) Then
             CurrentLifecycle = LifecycleMap.Item(CurrProduct)
         Else
@@ -244,7 +243,8 @@ End Sub
 ' =================================================================================================================
 ' Helper Function: CalculateForecastValue
 ' =================================================================================================================
-Private Function CalculateForecastValue(ByVal Lifecycle As ProductLifecycle, ByVal ForecastDate As Date, ByVal ProdGroupSum As Double, ByVal FamilySum As Double, ByVal FamilyDemand As Double) As Double
+' ***FIXED***: Removed 'ByVal' from the Lifecycle parameter, as it's a User-Defined Type.
+Private Function CalculateForecastValue(Lifecycle As ProductLifecycle, ByVal ForecastDate As Date, ByVal ProdGroupSum As Double, ByVal FamilySum As Double, ByVal FamilyDemand As Double) As Double
     Dim BaseForecast As Double: BaseForecast = 0
     If FamilySum > 0 Then BaseForecast = (ProdGroupSum * FamilyDemand) / FamilySum
 
@@ -362,8 +362,6 @@ Private Function BuildLifecycleMap(ByVal WS_ProductStatus As Worksheet, ByVal WS
     For r = 2 To LRow
         ProductID = Trim(WS_ProductStatus.Range("D" & r).Value)
         If Len(ProductID) > 0 Then
-            ' ***FIXED***: Removed incorrect 'New' keyword for a Type
-            ' Set TempLifecycle = New ProductLifecycle
             TempLifecycle.ProductID = ProductID
             TempLifecycle.Status = Trim(WS_ProductStatus.Range("E" & r).Value)
             PhaseOutDate = WS_ProductStatus.Range("F" & r).Value
@@ -383,21 +381,15 @@ Private Function BuildLifecycleMap(ByVal WS_ProductStatus As Worksheet, ByVal WS
 
     ' Second Pass: Link the chains. Find the products that are phasing IN.
     For Each ProductID In LifecycleDict.Keys
-        ' ***FIXED***: Used explicit .Item and removed incorrect 'Set'
         TempLifecycle = LifecycleDict.Item(ProductID)
         If TempLifecycle.IsPhasingOut And Len(TempLifecycle.SupersededByProductID) > 0 Then
-            ' This product is being replaced. Now, find the REPLACEMENT product in the dictionary.
             If LifecycleDict.Exists(TempLifecycle.SupersededByProductID) Then
                 Dim SuccessorLifecycle As ProductLifecycle
-                ' ***FIXED***: Used explicit .Item and removed incorrect 'Set'
                 SuccessorLifecycle = LifecycleDict.Item(TempLifecycle.SupersededByProductID)
-                ' Update the successor's 'phasing in' details.
                 SuccessorLifecycle.IsPhasingIn = True
                 SuccessorLifecycle.ReplacesProductID = TempLifecycle.ProductID
                 SuccessorLifecycle.PhaseInDate = TempLifecycle.PhaseOutDate
                 SuccessorLifecycle.PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
-                ' Put the updated successor back into the dictionary.
-                ' ***FIXED***: Used explicit .Item
                 LifecycleDict.Item(TempLifecycle.SupersededByProductID) = SuccessorLifecycle
             Else
                 WriteToLog WS_Log, "Warning", "Product '" & TempLifecycle.ProductID & "' is set to be superseded by '" & TempLifecycle.SupersededByProductID & "', but the successor product was not found in '" & STATUS_SHEET & "'."
@@ -456,7 +448,6 @@ Private Function GetHistoricalFamilySum(ByVal FamilyName As String, ByVal WS_His
         If HSFamily = LCase(FamilyName) Then
             HSProduct = Trim(WS_Hist.Range("D" & r).Value)
             Dim HSLifecycle As ProductLifecycle
-            ' ***FIXED***: Used explicit .Item
             If LifecycleMap.Exists(HSProduct) Then HSLifecycle = LifecycleMap.Item(HSProduct)
             
             For c = 5 To WS_Hist.Cells(1, Columns.Count).End(xlToLeft).Column
