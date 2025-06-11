@@ -1,4 +1,4 @@
-'@Folder("Forecasting") 
+'@Folder("Forecasting") 'Suggested by Rubberduck for better organization
 Option Explicit
 
 ' =================================================================================================================
@@ -85,7 +85,6 @@ Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be call
     
     If Not NewWB Is Nothing Then
         Application.StatusBar = "Finalizing formatting..."
-        ' ***ADDED***: Loop through final workbook to apply formatting and autofit.
         Dim WS As Worksheet
         For Each WS In NewWB.Worksheets
             If WS.Name <> LOG_SHEET Then
@@ -170,7 +169,7 @@ Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal StatusData As Varia
         
         If SheetExists(TWB, CurrFamily) Then
             Set WS_CurrentFamily = TWB.Sheets(CurrFamily)
-            CalculateAndFormatFamilySheet WS_CurrentFamily, StatusData, HistoryData, WS_DemandForecast, WS_Log, LifecycleMap
+            CalculateAndOutputFamilySheet WS_CurrentFamily, StatusData, HistoryData, WS_DemandForecast, WS_Log, LifecycleMap
             AppendToSummarySheet WS_CurrentFamily, WS_Summary
             Set WS_CurrentFamily = Nothing
         End If
@@ -178,9 +177,9 @@ Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal StatusData As Varia
 End Sub
 
 ' =================================================================================================================
-' Helper Procedure: CalculateAndFormatFamilySheet
+' Helper Procedure: CalculateAndOutputFamilySheet
 ' =================================================================================================================
-Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal WS_DemandForecast As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
+Private Sub CalculateAndOutputFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal WS_DemandForecast As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
     Dim FamilyLRow As Long, FamilyLCol As Long, HistLCol As Long
     Dim ProdGroupSum As Double, FamilySum As Double
     Dim MonthCount As Long
@@ -240,7 +239,7 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
     
     WS_CurrentFamily.Cells.Clear
     WS_CurrentFamily.Range("A1").Resize(UBound(OutputArray, 1), UBound(OutputArray, 2)).Value = OutputArray
-    FormatFamilySheetTotals WS_CurrentFamily
+    FormatSheetTotals WS_CurrentFamily
 End Sub
 
 ' =================================================================================================================
@@ -305,9 +304,9 @@ Private Sub AddNewProductsToFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByV
 End Sub
 
 ' =================================================================================================================
-' Helper Procedure: FormatFamilySheetTotals
+' Helper Procedure: FormatSheetTotals
 ' =================================================================================================================
-Private Sub FormatFamilySheetTotals(ByVal WS As Worksheet)
+Private Sub FormatSheetTotals(ByVal WS As Worksheet)
     Dim LastRow As Long, LastCol As Long
     LastRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row
     LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
@@ -330,47 +329,47 @@ End Sub
 ' =================================================================================================================
 Private Sub AppendToSummarySheet(ByVal WS_Family As Worksheet, ByVal WS_Summary As Worksheet)
     Dim FamilyLRow As Long, FamilyLCol As Long
-    Dim SummaryLRow As Long
-    
+    Dim SummaryLRow As Long, SummaryLastRow As Long
     FamilyLRow = WS_Family.Cells(WS_Family.Rows.Count, "A").End(xlUp).Row
-    'If the family sheet has a total row, exclude it. Otherwise, use the last row.
     If WS_Family.Cells(FamilyLRow, 1).Font.Bold Then FamilyLRow = FamilyLRow - 1
     If FamilyLRow < 2 Then Exit Sub
     
     FamilyLCol = WS_Family.Cells(1, WS_Family.Columns.Count).End(xlToLeft).Column
     SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
     
-    If IsEmpty(WS_Summary.Range("A1").Value) Then
-        WS_Family.Rows(1).Copy WS_Summary.Rows(1)
+    If IsEmpty(WS_Summary.Range("A1").Value) Or SummaryLRow = 1 And IsEmpty(WS_Summary.Range("A1").Value) Then
+        WS_Family.Rows(1).Copy
+        WS_Summary.Rows(1).PasteSpecial xlPasteAll
         SummaryLRow = 1
     End If
     
     Dim FamilyData As Variant
     FamilyData = WS_Family.Range("A2", WS_Family.Cells(FamilyLRow, FamilyLCol)).Value
     WS_Summary.Range("A" & SummaryLRow + 1).Resize(UBound(FamilyData, 1), UBound(FamilyData, 2)).Value = FamilyData
+    
+    SummaryLastRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
+    If SummaryLastRow > 1 Then
+      WS_Summary.Range("A1", WS_Summary.Cells(SummaryLastRow, FamilyLCol)).Sort Key1:=WS_Summary.Range("D2"), Order1:=xlAscending, Header:=xlYes
+    End If
 End Sub
 
 ' =================================================================================================================
 ' Lifecycle Mapping Function (In-Memory)
 ' =================================================================================================================
 Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As Worksheet) As Object
-    Dim r As Long
-    Dim ProductID As String
-    Dim productKey As Variant
-    Dim TempLifecycle As cProductLifecycle
-    Dim LifecycleDict As Object: Set LifecycleDict = CreateObject("Scripting.Dictionary")
+    Dim r As Long, ProductID As String, productKey As Variant
+    Dim TempLifecycle As cProductLifecycle, LifecycleDict As Object
+    Set LifecycleDict = CreateObject("Scripting.Dictionary")
     
     For r = 2 To UBound(StatusData, 1)
         ProductID = Trim$(StatusData(r, 4))
         If Len(ProductID) > 0 And Not LifecycleDict.Exists(ProductID) Then
             Set TempLifecycle = New cProductLifecycle
             With TempLifecycle
-                .ProductID = ProductID
-                .Status = Trim$(StatusData(r, 5))
+                .ProductID = ProductID: .Status = Trim$(StatusData(r, 5))
                 Dim PhaseOutDate As Variant: PhaseOutDate = StatusData(r, 6)
                 Dim PhaseOutPercent As Variant: PhaseOutPercent = StatusData(r, 7)
                 .SupersededByProductID = Trim$(StatusData(r, 8))
-
                 If .Status = STATUS_PHASE_IN_OUT Or .Status = STATUS_DISCONTINUED Then
                     .IsPhasingOut = True
                     If IsDate(PhaseOutDate) Then .PhaseOutDate = CDate(PhaseOutDate)
@@ -388,17 +387,14 @@ Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As 
                 Dim SuccessorLifecycle As cProductLifecycle
                 Set SuccessorLifecycle = LifecycleDict.Item(TempLifecycle.SupersededByProductID)
                 With SuccessorLifecycle
-                    .IsPhasingIn = True
-                    .ReplacesProductID = TempLifecycle.ProductID
-                    .PhaseInDate = TempLifecycle.PhaseOutDate
-                    .PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
+                    .IsPhasingIn = True: .ReplacesProductID = TempLifecycle.ProductID
+                    .PhaseInDate = TempLifecycle.PhaseOutDate: .PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
                 End With
             Else
                 WriteToLog WS_Log, "Warning", "Product '" & TempLifecycle.ProductID & "' is set to be superseded by '" & TempLifecycle.SupersededByProductID & "', but the successor product was not found in '" & STATUS_SHEET & "'."
             End If
         End If
     Next productKey
-
     Set BuildLifecycleMap = LifecycleDict
 End Function
 
@@ -407,14 +403,10 @@ End Function
 ' =================================================================================================================
 Private Function GetHistoricalDataRow(ByVal ProductName As String, ByVal HistoryData As Variant, ByVal HistLCol As Long) As Variant
     Dim r As Long, c As Long
-    Dim Result() As Variant
-    ReDim Result(1 To HistLCol - 4)
-
+    Dim Result() As Variant: ReDim Result(1 To HistLCol - 4)
     For r = 2 To UBound(HistoryData, 1)
         If Trim$(HistoryData(r, 4)) = ProductName Then
-            For c = 5 To HistLCol
-                Result(c - 4) = HistoryData(r, c)
-            Next c
+            For c = 5 To HistLCol: Result(c - 4) = HistoryData(r, c): Next c
             GetHistoricalDataRow = Result
             Exit Function
         End If
@@ -561,6 +553,44 @@ Private Function CreateOutputWorkbook(ByVal TWB As Workbook) As Workbook
     WB.Sheets(SUMMARY_SHEET).Activate
     Set CreateOutputWorkbook = WB
 End Function
+
+' =================================================================================================================
+' Formatting and Logging Utility Procedures
+' =================================================================================================================
+' *** NEW ***: This procedure applies all the visual formatting to a sheet.
+Private Sub ApplySheetFormatting(ByVal WS As Worksheet)
+    If WS Is Nothing Then Exit Sub
+    
+    Dim LastRow As Long, LastCol As Long, HistLCol As Long
+    LastRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row
+    LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
+    HistLCol = GetLastHistoricalColumn(WS)
+    
+    If LastRow <= 1 Then Exit Sub ' Nothing to format
+    
+    With WS.Range(WS.Cells(1, 1), WS.Cells(LastRow, LastCol))
+        .Borders.LineStyle = xlContinuous
+    End With
+    
+    ' Format numbers and colors for data rows
+    With WS.Range(WS.Cells(2, 7), WS.Cells(LastRow, LastCol))
+        .NumberFormat = "0"
+    End With
+    
+    ' Light grey for historical data
+    If HistLCol > 6 Then
+        WS.Range(WS.Cells(2, 7), WS.Cells(LastRow, HistLCol)).Interior.Color = RGB(242, 242, 242)
+    End If
+    
+    ' Light green for forecast data
+    If LastCol > HistLCol Then
+        WS.Range(WS.Cells(2, HistLCol + 1), WS.Cells(LastRow, LastCol)).Interior.Color = RGB(226, 239, 218)
+    End If
+    
+    ' Darker colors for headers
+    WS.Range(WS.Cells(1, 7), WS.Cells(1, HistLCol)).Interior.Color = RGB(217, 217, 217) ' Darker Grey
+    WS.Range(WS.Cells(1, HistLCol + 1), WS.Cells(1, LastCol)).Interior.Color = RGB(198, 224, 180) ' Darker Green
+End Sub
 
 Private Sub InitializeLogSheet(ByVal WS As Worksheet)
     WS.Name = LOG_SHEET
