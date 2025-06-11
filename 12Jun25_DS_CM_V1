@@ -1,0 +1,84 @@
+'@Folder("Classes")
+Option Explicit
+
+'--- Private backing fields for properties ---
+
+Private pProductID As String
+Private pStatus As String
+Private pIsPhasingOut As Boolean
+Private pPhaseOutDate As Date
+Private pPhaseOutPercent As Double
+Private pSupersededByProductID As String
+Private pIsPhasingIn As Boolean
+Private pReplacesProductID As String
+Private pPhaseInDate As Date
+Private pPhaseInPercent As Double
+ 
+'--- Public Properties to access the private fields ---
+
+Public Property Get ProductID() As String
+    ProductID = pProductID
+End Property
+Public Property Let ProductID(Value As String)
+    pProductID = Value
+End Property
+ 
+Public Property Get Status() As String
+    Status = pStatus
+End Property
+Public Property Let Status(Value As String)
+    pStatus = Value
+End Property
+ 
+Public Property Get IsPhasingOut() As Boolean
+    IsPhasingOut = pIsPhasingOut
+End Property
+Public Property Let IsPhasingOut(Value As Boolean)
+    pIsPhasingOut = Value
+End Property
+ 
+Public Property Get PhaseOutDate() As Date
+    PhaseOutDate = pPhaseOutDate
+End Property
+Public Property Let PhaseOutDate(Value As Date)
+    pPhaseOutDate = Value
+End Property
+ 
+Public Property Get PhaseOutPercent() As Double
+    PhaseOutPercent = pPhaseOutPercent
+End Property
+Public Property Let PhaseOutPercent(Value As Double)
+    pPhaseOutPercent = Value
+End Property
+ 
+Public Property Get SupersededByProductID() As String
+    SupersededByProductID = pSupersededByProductID
+End Property
+Public Property Let SupersededByProductID(Value As String)
+    pSupersededByProductID = Value
+End Property
+ 
+Public Property Get IsPhasingIn() As Boolean
+    IsPhasingIn = pIsPhasingIn
+End Property
+Public Property Let IsPhasingIn(Value As Boolean)
+    pIsPhasingIn = Value
+End Property
+
+Public Property Let ReplacesProductID(Value As String)
+    pReplacesProductID = Value
+End Property
+ 
+Public Property Get PhaseInDate() As Date
+    PhaseInDate = pPhaseInDate
+End Property
+Public Property Let PhaseInDate(Value As Date)
+    pPhaseInDate = Value
+End Property
+ 
+Public Property Get PhaseInPercent() As Double
+    PhaseInPercent = pPhaseInPercent
+End Property
+Public Property Let PhaseInPercent(Value As Double)
+    pPhaseInPercent = Value
+End Property
