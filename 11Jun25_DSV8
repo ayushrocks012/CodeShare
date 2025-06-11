@@ -487,8 +487,10 @@ Private Function LoadDataToArray(ByVal WS As Worksheet) As Variant
     If LRow > 1 And LCol > 1 Then
         LoadDataToArray = WS.Range(WS.Cells(1, 1), WS.Cells(LRow, LCol)).Value
     Else
-        ' ***FIXED***: Completed the ReDim statement.
-        ReDim LoadDataToArray(1 To 1, 1 To 1) ' Return an empty array
+        ' ***FIXED***: Create a temporary array and assign it to the function's return value.
+        Dim TempArray(1 To 1, 1 To 1) As Variant
+        TempArray(1, 1) = ""
+        LoadDataToArray = TempArray
     End If
 End Function
 
