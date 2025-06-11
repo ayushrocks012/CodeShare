@@ -6,7 +6,7 @@ Option Explicit
 ' INSTRUCTIONS: This project requires a Class Module.
 ' 1. In the VBA Editor, go to: Insert -> Class Module.
 ' 2. In the Properties window, change the name of the new module from "Class1" to "cProductLifecycle".
-' 3. Copy the code from the "cProductLifecycle Class Module Code" text file and paste it into the new class module.
+' 3. Get the required code for the class from the previous text artifact and paste it into the new class module.
 ' =================================================================================================================
 
 
@@ -84,16 +84,12 @@ Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be call
     Set NewWB = CreateOutputWorkbook(TWB)
     
     If Not NewWB Is Nothing Then
-        Application.StatusBar = "Finalizing formatting..."
+        Application.StatusBar = "Formatting and saving final report..."
         Dim WS As Worksheet
         For Each WS In NewWB.Worksheets
-            If WS.Name <> LOG_SHEET Then
-                ApplySheetFormatting WS
-            End If
             WS.Cells.EntireColumn.AutoFit
         Next WS
         
-        Application.StatusBar = "Saving final report..."
         Dim FilePath As String
         FilePath = TWB.Path & "\Demand ForeCast - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
         NewWB.SaveAs FilePath
@@ -557,41 +553,6 @@ End Function
 ' =================================================================================================================
 ' Formatting and Logging Utility Procedures
 ' =================================================================================================================
-' *** NEW ***: This procedure applies all the visual formatting to a sheet.
-Private Sub ApplySheetFormatting(ByVal WS As Worksheet)
-    If WS Is Nothing Then Exit Sub
-    
-    Dim LastRow As Long, LastCol As Long, HistLCol As Long
-    LastRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row
-    LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
-    HistLCol = GetLastHistoricalColumn(WS)
-    
-    If LastRow <= 1 Then Exit Sub ' Nothing to format
-    
-    With WS.Range(WS.Cells(1, 1), WS.Cells(LastRow, LastCol))
-        .Borders.LineStyle = xlContinuous
-    End With
-    
-    ' Format numbers and colors for data rows
-    With WS.Range(WS.Cells(2, 7), WS.Cells(LastRow, LastCol))
-        .NumberFormat = "0"
-    End With
-    
-    ' Light grey for historical data
-    If HistLCol > 6 Then
-        WS.Range(WS.Cells(2, 7), WS.Cells(LastRow, HistLCol)).Interior.Color = RGB(242, 242, 242)
-    End If
-    
-    ' Light green for forecast data
-    If LastCol > HistLCol Then
-        WS.Range(WS.Cells(2, HistLCol + 1), WS.Cells(LastRow, LastCol)).Interior.Color = RGB(226, 239, 218)
-    End If
-    
-    ' Darker colors for headers
-    WS.Range(WS.Cells(1, 7), WS.Cells(1, HistLCol)).Interior.Color = RGB(217, 217, 217) ' Darker Grey
-    WS.Range(WS.Cells(1, HistLCol + 1), WS.Cells(1, LastCol)).Interior.Color = RGB(198, 224, 180) ' Darker Green
-End Sub
-
 Private Sub InitializeLogSheet(ByVal WS As Worksheet)
     WS.Name = LOG_SHEET
     With WS.Range("A1:C1")
