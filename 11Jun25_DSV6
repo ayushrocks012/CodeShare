@@ -1,11 +1,32 @@
 Option Explicit
 
 ' =================================================================================================================
-' --- MODULE-LEVEL CONSTANTS ---
-' Using constants makes the code easier to maintain. If a sheet name or status changes,
-' you only need to update it in one place.
+' --- CLASS MODULE CODE: cProductLifecycle ---
+' INSTRUCTIONS: In the VBA Editor, you must create a new "Class Module" (Insert -> Class Module)
+' and name it "cProductLifecycle" in the Properties window. Copy the code below into that class module.
 ' =================================================================================================================
-' --- SHEET NAMES ---
+' Public ProductID As String
+' Public Status As String
+' ' Phasing Out Details (for this product)
+' Public IsPhasingOut As Boolean
+' Public PhaseOutDate As Date
+' Public PhaseOutPercent As Double
+' Public SupersededByProductID As String
+' ' Phasing In Details (how this product replaces another)
+' Public IsPhasingIn As Boolean
+' Public ReplacesProductID As String
+' Public PhaseInDate As Date
+' Public PhaseInPercent As Double ' Calculated as (1 - PhaseOutPercent of the product it replaces)
+' =================================================================================================================
+' --- END OF CLASS MODULE CODE ---
+' =================================================================================================================
+
+
+' =================================================================================================================
+' --- STANDARD MODULE CODE ---
+' The code below goes into a standard module (like the one you are currently using).
+' =================================================================================================================
+' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
 Private Const STATUS_SHEET As String = "Product Status"
 Private Const DEMAND_SHEET As String = "Demand Forecast"
@@ -20,27 +41,9 @@ Private Const STATUS_DISCONTINUED As String = "Discontinued"
 Private Const STATUS_NEW As String = "New"
 Private Const STATUS_UNKNOWN As String = "Unknown"
 
-' =================================================================================================================
-' *** NEW *** Custom Data Type to hold the full lifecycle of a product
-' =================================================================================================================
-Private Type ProductLifecycle
-    ProductID As String
-    Status As String
-    ' Phasing Out Details (for this product)
-    IsPhasingOut As Boolean
-    PhaseOutDate As Date
-    PhaseOutPercent As Double
-    SupersededByProductID As String
-    ' Phasing In Details (how this product replaces another)
-    IsPhasingIn As Boolean
-    ReplacesProductID As String
-    PhaseInDate As Date
-    PhaseInPercent As Double ' Calculated as (1 - PhaseOutPercent of the product it replaces)
-End Type
 
 ' =================================================================================================================
 ' Main Procedure: UpdateForeCast_Click
-' Description: This is the primary macro that orchestrates the entire forecast update process.
 ' =================================================================================================================
 Sub UpdateForeCast_Click()
     ' --- 1. SETUP & INITIALIZATION ---
@@ -206,10 +209,12 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
         CurrProduct = WS_CurrentFamily.Range("D" & ProductRow).Value
         If InStr(CurrProduct, "-") > 0 Then CurrGroupID = Split(CurrProduct, "-")(0) & Split(CurrProduct, "-")(1) Else CurrGroupID = CurrProduct
 
-        Dim CurrentLifecycle As ProductLifecycle
+        ' ***FIXED***: Use a Class Object (cProductLifecycle) instead of a Type
+        Dim CurrentLifecycle As cProductLifecycle
         If LifecycleMap.Exists(CurrProduct) Then
-            CurrentLifecycle = LifecycleMap.Item(CurrProduct)
+            Set CurrentLifecycle = LifecycleMap.Item(CurrProduct)
         Else
+            Set CurrentLifecycle = New cProductLifecycle
             CurrentLifecycle.ProductID = CurrProduct
             CurrentLifecycle.Status = STATUS_UNKNOWN
             WriteToLog WS_Log, "Warning", "Product '" & CurrProduct & "' from a family sheet was not found in the '" & STATUS_SHEET & "'. Status set to '" & STATUS_UNKNOWN & "'."
@@ -243,8 +248,7 @@ End Sub
 ' =================================================================================================================
 ' Helper Function: CalculateForecastValue
 ' =================================================================================================================
-' ***FIXED***: Removed 'ByVal' from the Lifecycle parameter, as it's a User-Defined Type.
-Private Function CalculateForecastValue(Lifecycle As ProductLifecycle, ByVal ForecastDate As Date, ByVal ProdGroupSum As Double, ByVal FamilySum As Double, ByVal FamilyDemand As Double) As Double
+Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, ByVal ForecastDate As Date, ByVal ProdGroupSum As Double, ByVal FamilySum As Double, ByVal FamilyDemand As Double) As Double
     Dim BaseForecast As Double: BaseForecast = 0
     If FamilySum > 0 Then BaseForecast = (ProdGroupSum * FamilyDemand) / FamilySum
 
@@ -348,12 +352,12 @@ Private Sub AppendToSummarySheet(ByVal WS_Family As Worksheet, ByVal WS_Summary 
 End Sub
 
 ' =================================================================================================================
-' *** REWRITTEN *** Lifecycle Mapping Function
+' Lifecycle Mapping Function
 ' =================================================================================================================
 Private Function BuildLifecycleMap(ByVal WS_ProductStatus As Worksheet, ByVal WS_Log As Worksheet) As Object
     Dim LRow As Long, r As Long
-    Dim ProductID As String, Status As String, PhaseOutDate As Variant, PhaseOutPercent As Variant, SupersededByID As String
-    Dim TempLifecycle As ProductLifecycle
+    Dim ProductID As String, SupersededByID As String
+    Dim TempLifecycle As cProductLifecycle
     Dim LifecycleDict As Object: Set LifecycleDict = CreateObject("Scripting.Dictionary")
     
     LRow = WS_ProductStatus.Cells(Rows.Count, "A").End(xlUp).Row
@@ -361,36 +365,39 @@ Private Function BuildLifecycleMap(ByVal WS_ProductStatus As Worksheet, ByVal WS
     ' First Pass: Get the primary status and phase-out details for every product.
     For r = 2 To LRow
         ProductID = Trim(WS_ProductStatus.Range("D" & r).Value)
-        If Len(ProductID) > 0 Then
-            TempLifecycle.ProductID = ProductID
-            TempLifecycle.Status = Trim(WS_ProductStatus.Range("E" & r).Value)
-            PhaseOutDate = WS_ProductStatus.Range("F" & r).Value
-            PhaseOutPercent = WS_ProductStatus.Range("G" & r).Value
-            SupersededByID = Trim(WS_ProductStatus.Range("H" & r).Value)
+        If Len(ProductID) > 0 And Not LifecycleDict.Exists(ProductID) Then
+            Set TempLifecycle = New cProductLifecycle
+            With TempLifecycle
+                .ProductID = ProductID
+                .Status = Trim(WS_ProductStatus.Range("E" & r).Value)
+                Dim PhaseOutDate As Variant: PhaseOutDate = WS_ProductStatus.Range("F" & r).Value
+                Dim PhaseOutPercent As Variant: PhaseOutPercent = WS_ProductStatus.Range("G" & r).Value
+                .SupersededByProductID = Trim(WS_ProductStatus.Range("H" & r).Value)
 
-            If TempLifecycle.Status = STATUS_PHASE_IN_OUT Or TempLifecycle.Status = STATUS_DISCONTINUED Then
-                TempLifecycle.IsPhasingOut = True
-                If IsDate(PhaseOutDate) Then TempLifecycle.PhaseOutDate = CDate(PhaseOutDate)
-                If IsNumeric(PhaseOutPercent) Then TempLifecycle.PhaseOutPercent = CDbl(PhaseOutPercent)
-                TempLifecycle.SupersededByProductID = SupersededByID
-            End If
-            
+                If .Status = STATUS_PHASE_IN_OUT Or .Status = STATUS_DISCONTINUED Then
+                    .IsPhasingOut = True
+                    If IsDate(PhaseOutDate) Then .PhaseOutDate = CDate(PhaseOutDate)
+                    If IsNumeric(PhaseOutPercent) Then .PhaseOutPercent = CDbl(PhaseOutPercent)
+                End If
+            End With
             LifecycleDict.Add ProductID, TempLifecycle
         End If
     Next r
 
     ' Second Pass: Link the chains. Find the products that are phasing IN.
     For Each ProductID In LifecycleDict.Keys
-        TempLifecycle = LifecycleDict.Item(ProductID)
+        Set TempLifecycle = LifecycleDict.Item(ProductID)
         If TempLifecycle.IsPhasingOut And Len(TempLifecycle.SupersededByProductID) > 0 Then
             If LifecycleDict.Exists(TempLifecycle.SupersededByProductID) Then
-                Dim SuccessorLifecycle As ProductLifecycle
-                SuccessorLifecycle = LifecycleDict.Item(TempLifecycle.SupersededByProductID)
-                SuccessorLifecycle.IsPhasingIn = True
-                SuccessorLifecycle.ReplacesProductID = TempLifecycle.ProductID
-                SuccessorLifecycle.PhaseInDate = TempLifecycle.PhaseOutDate
-                SuccessorLifecycle.PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
-                LifecycleDict.Item(TempLifecycle.SupersededByProductID) = SuccessorLifecycle
+                Dim SuccessorLifecycle As cProductLifecycle
+                Set SuccessorLifecycle = LifecycleDict.Item(TempLifecycle.SupersededByProductID)
+                With SuccessorLifecycle
+                    .IsPhasingIn = True
+                    .ReplacesProductID = TempLifecycle.ProductID
+                    .PhaseInDate = TempLifecycle.PhaseOutDate
+                    .PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
+                End With
+                ' No need to put it back in the dictionary, as we are modifying the object by reference
             Else
                 WriteToLog WS_Log, "Warning", "Product '" & TempLifecycle.ProductID & "' is set to be superseded by '" & TempLifecycle.SupersededByProductID & "', but the successor product was not found in '" & STATUS_SHEET & "'."
             End If
@@ -447,22 +454,25 @@ Private Function GetHistoricalFamilySum(ByVal FamilyName As String, ByVal WS_His
         HSFamily = LCase(Trim(WS_Hist.Range("A" & r).Value))
         If HSFamily = LCase(FamilyName) Then
             HSProduct = Trim(WS_Hist.Range("D" & r).Value)
-            Dim HSLifecycle As ProductLifecycle
-            If LifecycleMap.Exists(HSProduct) Then HSLifecycle = LifecycleMap.Item(HSProduct)
+            Dim HSLifecycle As cProductLifecycle
+            If LifecycleMap.Exists(HSProduct) Then Set HSLifecycle = LifecycleMap.Item(HSProduct)
             
-            For c = 5 To WS_Hist.Cells(1, Columns.Count).End(xlToLeft).Column
-                Dim IncludeSale As Boolean: IncludeSale = False
-                If HSLifecycle.Status <> STATUS_DISCONTINUED Then
-                    IncludeSale = True
-                Else
-                    If HSLifecycle.PhaseOutDate > 0 And IsDate(WS_Hist.Cells(1, c).Value) Then
-                         If WS_Hist.Cells(1, c).Value < HSLifecycle.PhaseOutDate Then IncludeSale = True
-                    Else
+            If Not HSLifecycle Is Nothing Then
+                For c = 5 To WS_Hist.Cells(1, Columns.Count).End(xlToLeft).Column
+                    Dim IncludeSale As Boolean: IncludeSale = False
+                    If HSLifecycle.Status <> STATUS_DISCONTINUED Then
                         IncludeSale = True
+                    Else
+                        If HSLifecycle.PhaseOutDate > 0 And IsDate(WS_Hist.Cells(1, c).Value) Then
+                             If WS_Hist.Cells(1, c).Value < HSLifecycle.PhaseOutDate Then IncludeSale = True
+                        Else
+                            IncludeSale = True
+                        End If
                     End If
-                End If
-                If IncludeSale Then TotalSum = TotalSum + Val(WS_Hist.Cells(r, c).Value)
-            Next c
+                    If IncludeSale Then TotalSum = TotalSum + Val(WS_Hist.Cells(r, c).Value)
+                Next c
+            End If
+            Set HSLifecycle = Nothing
         End If
     Next r
     GetHistoricalFamilySum = TotalSum
