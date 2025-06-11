@@ -1,4 +1,4 @@
-'@Folder("Forecasting") 'Suggested by Rubberduck for better organization
+'@Folder("Forecasting") 
 Option Explicit
 
 ' =================================================================================================================
@@ -6,7 +6,7 @@ Option Explicit
 ' INSTRUCTIONS: This project requires a Class Module.
 ' 1. In the VBA Editor, go to: Insert -> Class Module.
 ' 2. In the Properties window, change the name of the new module from "Class1" to "cProductLifecycle".
-' 3. Copy the code for the class module and paste it into the new class module.
+' 3. Copy the code from the "cProductLifecycle Class Module Code" text file and paste it into the new class module.
 ' =================================================================================================================
 
 
@@ -84,12 +84,17 @@ Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be call
     Set NewWB = CreateOutputWorkbook(TWB)
     
     If Not NewWB Is Nothing Then
-        Application.StatusBar = "Formatting and saving final report..."
+        Application.StatusBar = "Finalizing formatting..."
+        ' ***ADDED***: Loop through final workbook to apply formatting and autofit.
         Dim WS As Worksheet
         For Each WS In NewWB.Worksheets
+            If WS.Name <> LOG_SHEET Then
+                ApplySheetFormatting WS
+            End If
             WS.Cells.EntireColumn.AutoFit
         Next WS
         
+        Application.StatusBar = "Saving final report..."
         Dim FilePath As String
         FilePath = TWB.Path & "\Demand ForeCast - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
         NewWB.SaveAs FilePath
@@ -183,32 +188,25 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
     FamilyLCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
     MonthCount = GetHistoricalMonthCount(WS_DemandForecast, HistoryData)
     
-    ' Prepare headers
     Dim DemandForecastLCol As Long, HeaderRow As Variant
     DemandForecastLCol = WS_DemandForecast.Cells(1, WS_DemandForecast.Columns.Count).End(xlToLeft).Column
-    HeaderRow = GetCombinedHeaderRow(WS_DemandForecast, HistoryData, MonthCount, DemandForecastLCol)
+    HeaderRow = GetCombinedHeaderRow(StatusData, WS_DemandForecast, HistoryData, MonthCount, DemandForecastLCol)
     
-    ' Add new products from status data to the current family sheet
     AddNewProductsToFamilySheet WS_CurrentFamily, StatusData
     FamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row
     
-    ' --- BUILD OUTPUT ARRAY ---
     Dim OutputArray() As Variant
     ReDim OutputArray(1 To FamilyLRow, 1 To UBound(HeaderRow))
     
-    ' Populate static columns and headers in the output array
     Dim r As Long, c As Long
     For c = 1 To UBound(HeaderRow): OutputArray(1, c) = HeaderRow(c): Next c
     For r = 2 To FamilyLRow
-        For c = 1 To 4 ' A to D
-            OutputArray(r, c) = WS_CurrentFamily.Cells(r, c).Value
-        Next c
+        For c = 1 To 4: OutputArray(r, c) = WS_CurrentFamily.Cells(r, c).Value: Next c
     Next r
     
     HistLCol = 6 + MonthCount
     Dim DemandData As Variant, DemandDataRow As Variant
     
-    ' --- MAIN CALCULATION LOOP (IN-MEMORY) ---
     For r = 2 To FamilyLRow
         Dim CurrProduct As String, CurrProductFamily As String, CurrGroupID As String
         CurrProductFamily = OutputArray(r, 1)
@@ -240,10 +238,9 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
         End If
     Next r
     
-    ' --- WRITE OUTPUT TO SHEET ---
     WS_CurrentFamily.Cells.Clear
     WS_CurrentFamily.Range("A1").Resize(UBound(OutputArray, 1), UBound(OutputArray, 2)).Value = OutputArray
-    FormatFamilySheet WS_CurrentFamily, FamilyLRow, UBound(OutputArray, 2)
+    FormatFamilySheetTotals WS_CurrentFamily
 End Sub
 
 ' =================================================================================================================
@@ -308,22 +305,24 @@ Private Sub AddNewProductsToFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByV
 End Sub
 
 ' =================================================================================================================
-' Helper Procedure: FormatFamilySheet
+' Helper Procedure: FormatFamilySheetTotals
 ' =================================================================================================================
-Private Sub FormatFamilySheet(ByVal WS As Worksheet, ByVal LastRow As Long, ByVal LastCol As Long)
+Private Sub FormatFamilySheetTotals(ByVal WS As Worksheet)
+    Dim LastRow As Long, LastCol As Long
+    LastRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row
+    LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
     If LastRow < 2 Then Exit Sub
+    
     Dim TotalRow As Long, i As Long
     TotalRow = LastRow + 1
     For i = 7 To LastCol
         WS.Cells(TotalRow, i).Value = Application.WorksheetFunction.Sum(WS.Range(WS.Cells(2, i), WS.Cells(LastRow, i)))
     Next i
-    WS.Range(WS.Cells(1, 1), WS.Cells(TotalRow, LastCol)).Borders.LineStyle = xlContinuous
-    WS.Range(WS.Cells(2, 7), WS.Cells(TotalRow, LastCol)).NumberFormat = "0"
-    WS.Range(WS.Cells(TotalRow, 1), WS.Cells(TotalRow, LastCol)).Font.Bold = True
-    WS.Range(WS.Cells(TotalRow, 7), WS.Cells(TotalRow, LastCol)).Interior.Color = RGB(228, 158, 221)
-    Dim HistLCol As Long
-    HistLCol = GetLastHistoricalColumn(WS)
-    If HistLCol > 6 Then WS.Range(WS.Cells(2, 7), WS.Cells(LastRow, HistLCol)).Interior.Color = RGB(208, 208, 208)
+    
+    With WS.Range(WS.Cells(TotalRow, 1), WS.Cells(TotalRow, LastCol))
+        .Font.Bold = True
+        .Interior.Color = RGB(228, 158, 221)
+    End With
 End Sub
 
 ' =================================================================================================================
@@ -331,21 +330,24 @@ End Sub
 ' =================================================================================================================
 Private Sub AppendToSummarySheet(ByVal WS_Family As Worksheet, ByVal WS_Summary As Worksheet)
     Dim FamilyLRow As Long, FamilyLCol As Long
-    Dim SummaryLRow As Long, SummaryLastRow As Long
-    FamilyLRow = WS_Family.Cells(WS_Family.Rows.Count, "A").End(xlUp).Row - 1
+    Dim SummaryLRow As Long
+    
+    FamilyLRow = WS_Family.Cells(WS_Family.Rows.Count, "A").End(xlUp).Row
+    'If the family sheet has a total row, exclude it. Otherwise, use the last row.
+    If WS_Family.Cells(FamilyLRow, 1).Font.Bold Then FamilyLRow = FamilyLRow - 1
     If FamilyLRow < 2 Then Exit Sub
+    
     FamilyLCol = WS_Family.Cells(1, WS_Family.Columns.Count).End(xlToLeft).Column
     SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
-    If IsEmpty(WS_Summary.Range("G1").Value) Then
-        WS_Family.Range("G1", WS_Family.Cells(1, FamilyLCol)).Copy WS_Summary.Range("G1")
+    
+    If IsEmpty(WS_Summary.Range("A1").Value) Then
+        WS_Family.Rows(1).Copy WS_Summary.Rows(1)
+        SummaryLRow = 1
     End If
+    
     Dim FamilyData As Variant
     FamilyData = WS_Family.Range("A2", WS_Family.Cells(FamilyLRow, FamilyLCol)).Value
     WS_Summary.Range("A" & SummaryLRow + 1).Resize(UBound(FamilyData, 1), UBound(FamilyData, 2)).Value = FamilyData
-    SummaryLastRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
-    If SummaryLastRow > 1 Then
-      WS_Summary.Range("A1", WS_Summary.Cells(SummaryLastRow, FamilyLCol)).Sort Key1:=WS_Summary.Range("D2"), Order1:=xlAscending, Header:=xlYes
-    End If
 End Sub
 
 ' =================================================================================================================
@@ -417,7 +419,6 @@ Private Function GetHistoricalDataRow(ByVal ProductName As String, ByVal History
             Exit Function
         End If
     Next r
-    ' If not found, return the empty (zeroed) array
     GetHistoricalDataRow = Result
 End Function
 
@@ -487,16 +488,15 @@ Private Function LoadDataToArray(ByVal WS As Worksheet) As Variant
     If LRow > 1 And LCol > 1 Then
         LoadDataToArray = WS.Range(WS.Cells(1, 1), WS.Cells(LRow, LCol)).Value
     Else
-        ' ***FIXED***: Create a temporary array and assign it to the function's return value.
         Dim TempArray(1 To 1, 1 To 1) As Variant
         TempArray(1, 1) = ""
         LoadDataToArray = TempArray
     End If
 End Function
 
-Private Function GetCombinedHeaderRow(ByVal WS_Demand As Worksheet, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
+Private Function GetCombinedHeaderRow(ByVal StatusData As Variant, ByVal WS_Demand As Worksheet, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
     Dim HistHeaders() As Variant, DemandHeaders() As Variant
-    Dim r As Long, c As Long
+    Dim c As Long
     ReDim HistHeaders(1 To MonthCount)
     For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 4): Next c
     
@@ -504,7 +504,8 @@ Private Function GetCombinedHeaderRow(ByVal WS_Demand As Worksheet, ByVal Histor
     
     Dim Combined() As Variant
     ReDim Combined(1 To 6 + MonthCount + (DemandLCol - 1))
-    Combined(1) = "Family": Combined(2) = "Local Item Nbr": Combined(3) = "Desc": Combined(4) = "I-S-D": Combined(5) = "Active/Discontinued": Combined(6) = "Phase Out Month"
+    Combined(1) = StatusData(1, 1): Combined(2) = StatusData(1, 2): Combined(3) = StatusData(1, 3): Combined(4) = StatusData(1, 4)
+    Combined(5) = "Active/Discontinued": Combined(6) = "Phase Out Month"
     For c = 1 To UBound(HistHeaders): Combined(c + 6) = HistHeaders(c): Next c
     For c = 1 To UBound(DemandHeaders, 2): Combined(c + 6 + MonthCount) = DemandHeaders(1, c): Next c
     GetCombinedHeaderRow = Combined
