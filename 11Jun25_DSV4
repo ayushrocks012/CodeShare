@@ -1,0 +1,616 @@
+Option Explicit
+
+' =================================================================================================================
+' Main Procedure: UpdateForeCast_Click
+' Description: This is the primary macro that orchestrates the entire forecast update process.
+'              It calls helper subroutines to perform specific tasks like initialization,
+'              sheet creation, data processing, and finalization.
+' =================================================================================================================
+Sub UpdateForeCast_Click()
+    ' Turn off screen updating to speed up macro execution.
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+
+    ' --- 1. DECLARATIONS ---
+    Dim TWB As Workbook
+    Dim NewWB As Workbook
+    Dim MainSheet As Worksheet, WS_Summary As Worksheet, WS_ProductStatus As Worksheet
+    Dim WS_DemandForecast As Worksheet, WS_HistoricalSales As Worksheet
+
+    ' --- 2. INITIALIZATION ---
+    ' Set the main workbook and worksheets.
+    Set TWB = ThisWorkbook
+    On Error Resume Next
+    Set MainSheet = TWB.Sheets("Main")
+    Set WS_ProductStatus = TWB.Sheets("Product Status")
+    Set WS_DemandForecast = TWB.Sheets("Demand Forecast")
+    Set WS_HistoricalSales = TWB.Sheets("Historical Sales")
+    On Error GoTo 0
+
+    ' Validate that all necessary sheets exist.
+    If MainSheet Is Nothing Or WS_ProductStatus Is Nothing Or WS_DemandForecast Is Nothing Or WS_HistoricalSales Is Nothing Then
+        MsgBox "One of the required worksheets ('Main', 'Product Status', 'Demand Forecast', 'Historical Sales') is missing. Aborting.", vbCritical
+        GoTo Cleanup
+    End If
+    
+    ' Add the Summary worksheet.
+    Set WS_Summary = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
+    WS_Summary.Name = "Summary"
+
+    ' --- 3. CORE PROCESSING ---
+    ' Create a sheet for each product family and populate it with product data.
+    CreateFamilySheets TWB, WS_ProductStatus, WS_DemandForecast, WS_Summary
+
+    ' Process each family sheet to calculate historical and forecast data.
+    ProcessForecastData TWB, WS_ProductStatus, WS_DemandForecast, WS_HistoricalSales, WS_Summary
+
+    ' --- 4. FINALIZATION ---
+    ' Move the generated sheets to a new workbook.
+    Set NewWB = CreateOutputWorkbook(TWB)
+    
+    ' Save and close the new workbook.
+    If Not NewWB Is Nothing Then
+        ' ***ADDED***: Loop through every sheet in the new workbook and autofit it for presentation.
+        Dim WS As Worksheet
+        For Each WS In NewWB.Worksheets
+            WS.Cells.EntireColumn.AutoFit
+        Next WS
+        
+        Dim FilePath As String
+        FilePath = TWB.Path & "\Demand ForeCast - " & Format(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
+        NewWB.SaveAs FilePath
+        NewWB.Close SaveChanges:=False
+    End If
+
+    ' --- 5. CLEANUP ---
+Cleanup:
+    ' Restore application settings and notify user.
+    If Not MainSheet Is Nothing Then MainSheet.Activate
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    MsgBox "Forecast Update Completed.", vbInformation
+End Sub
+
+' =================================================================================================================
+' Helper Procedure: CreateFamilySheets
+' Description: Creates a new worksheet for each product family found in the Demand Forecast sheet.
+'              It also sets up the headers for these new sheets and the summary sheet.
+' =================================================================================================================
+Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal WS_ProductStatus As Worksheet, ByVal WS_DemandForecast As Worksheet, ByVal WS_Summary As Worksheet)
+    Dim DemandForecastLRow As Long, ProductStatusLRow As Long
+    Dim CurrFamilyRow As Long, CurrProductRow As Long
+    Dim CurrFamily As String, CurrProductFamily As String
+    Dim WS_NewFamily As Worksheet
+
+    DemandForecastLRow = WS_DemandForecast.Cells(Rows.Count, "A").End(xlUp).Row
+    ProductStatusLRow = WS_ProductStatus.Cells(Rows.Count, "A").End(xlUp).Row
+    
+    ' Set up headers for the Summary sheet once.
+    SetupSummaryHeaders WS_ProductStatus, WS_Summary
+
+    ' Loop through each family in the demand forecast.
+    For CurrFamilyRow = 2 To DemandForecastLRow
+        CurrFamily = Trim(WS_DemandForecast.Range("A" & CurrFamilyRow).Value)
+        
+        If Len(CurrFamily) > 0 And Not SheetExists(TWB, CurrFamily) Then
+            ' Create the new family sheet.
+            Set WS_NewFamily = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
+            WS_NewFamily.Name = CurrFamily
+            
+            ' Copy headers to the new family sheet.
+            WS_ProductStatus.Range("A1:D1").Copy WS_NewFamily.Range("A1")
+            WS_NewFamily.Range("E1").Value = "Active/Discontinued"
+            WS_NewFamily.Range("F1").Value = "Phase Out Month"
+            
+            ' Populate the new family sheet with its products from the Product Status sheet.
+            For CurrProductRow = 2 To ProductStatusLRow
+                CurrProductFamily = LCase(Trim(WS_ProductStatus.Range("A" & CurrProductRow).Value))
+                If CurrProductFamily = LCase(CurrFamily) Then
+                    Dim NextFreeRow As Long
+                    NextFreeRow = WS_NewFamily.Cells(Rows.Count, "A").End(xlUp).Row + 1
+                    WS_ProductStatus.Range("A" & CurrProductRow & ":D" & CurrProductRow).Copy WS_NewFamily.Range("A" & NextFreeRow)
+                End If
+            Next CurrProductRow
+        End If
+    Next CurrFamilyRow
+End Sub
+
+' =================================================================================================================
+' Helper Procedure: SetupSummaryHeaders
+' Description: Sets up the initial STATIC headers for the "Summary" worksheet. Date headers are added later.
+' =================================================================================================================
+Private Sub SetupSummaryHeaders(ByVal WS_ProductStatus As Worksheet, ByVal WS_Summary As Worksheet)
+    WS_ProductStatus.Range("A1:D1").Copy WS_Summary.Range("A1")
+    WS_Summary.Range("E1").Value = "Active/Discontinued"
+    WS_Summary.Range("F1").Value = "Phase Out Month"
+End Sub
+
+' =================================================================================================================
+' Helper Procedure: ProcessForecastData
+' Description: Iterates through each product family sheet to perform the main forecast calculations.
+' =================================================================================================================
+Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal WS_ProductStatus As Worksheet, ByVal WS_DemandForecast As Worksheet, ByVal WS_HistoricalSales As Worksheet, ByVal WS_Summary As Worksheet)
+    Dim WS_CurrentFamily As Worksheet
+    Dim CurrFamily As String
+    Dim DemandForecastLRow As Long
+    Dim CurrFamilyRow As Long
+
+    DemandForecastLRow = WS_DemandForecast.Cells(Rows.Count, "A").End(xlUp).Row
+
+    For CurrFamilyRow = 2 To DemandForecastLRow
+        CurrFamily = Trim(WS_DemandForecast.Range("A" & CurrFamilyRow).Value)
+        
+        If SheetExists(TWB, CurrFamily) Then
+            Set WS_CurrentFamily = TWB.Sheets(CurrFamily)
+            CalculateAndFormatFamilySheet WS_CurrentFamily, WS_ProductStatus, WS_DemandForecast, WS_HistoricalSales
+            AppendToSummarySheet WS_CurrentFamily, WS_Summary
+            Set WS_CurrentFamily = Nothing ' Reset for next loop iteration
+        End If
+    Next CurrFamilyRow
+End Sub
+
+' =================================================================================================================
+' Helper Procedure: CalculateAndFormatFamilySheet
+' Description: Performs all calculations and formatting for a single family worksheet.
+' =================================================================================================================
+Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal WS_ProductStatus As Worksheet, ByVal WS_DemandForecast As Worksheet, ByVal WS_HistoricalSales As Worksheet)
+    Dim FamilyLRow As Long, FamilyLCol As Long, HistLCol As Long, FamilyCol As Long
+    Dim ProductRow As Long
+    Dim ProdGroupSum As Double, FamilySum As Double
+    Dim DemandData As Variant, HistoricData As Variant
+    Dim MonthCount As Long
+    
+    ' --- SETUP AND HEADER MANAGEMENT ---
+    FamilyLCol = WS_CurrentFamily.Cells(1, Columns.Count).End(xlToLeft).Column
+    MonthCount = GetHistoricalMonthCount(WS_DemandForecast, WS_HistoricalSales)
+    
+    ' Clear old data and copy new headers
+    If FamilyLCol >= 7 Then
+        WS_CurrentFamily.Range(WS_CurrentFamily.Cells(1, 7), WS_CurrentFamily.Cells(1, FamilyLCol)).EntireColumn.Delete
+    End If
+    WS_HistoricalSales.Range(WS_HistoricalSales.Cells(1, 5), WS_HistoricalSales.Cells(1, MonthCount + 4)).Copy WS_CurrentFamily.Range("G1")
+    
+    FamilyLCol = WS_CurrentFamily.Cells(1, Columns.Count).End(xlToLeft).Column
+    Dim DemandForecastLCol As Long
+    DemandForecastLCol = WS_DemandForecast.Cells(1, Columns.Count).End(xlToLeft).Column
+    WS_DemandForecast.Range(WS_DemandForecast.Cells(1, 2), WS_DemandForecast.Cells(1, DemandForecastLCol)).Copy WS_CurrentFamily.Cells(1, FamilyLCol + 1)
+    
+    FamilyLCol = WS_CurrentFamily.Cells(1, Columns.Count).End(xlToLeft).Column
+    HistLCol = 6 + MonthCount ' Recalculate based on new structure (A-F are static, G onwards are months)
+    
+    AddNewProductsToFamilySheet WS_CurrentFamily, WS_ProductStatus
+    FamilyLRow = WS_CurrentFamily.Cells(Rows.Count, "A").End(xlUp).Row
+
+    ' --- MAIN CALCULATION LOOP ---
+    For ProductRow = 2 To FamilyLRow
+        Dim CurrProduct As String, CurrProductFamily As String, CurrGroupID As String
+        CurrProductFamily = WS_CurrentFamily.Range("A" & ProductRow).Value
+        CurrProduct = WS_CurrentFamily.Range("D" & ProductRow).Value
+        If InStr(CurrProduct, "-") > 0 Then
+            CurrGroupID = Split(CurrProduct, "-")(0) & Split(CurrProduct, "-")(1)
+        Else
+            CurrGroupID = CurrProduct
+        End If
+
+        Dim StatusDetails As Variant
+        StatusDetails = GetProductStatus(CurrProduct, WS_ProductStatus)
+        Dim ActiveType As String, PhaseOutMonth As Date, PhaseOutPercent As Double, IsSuperseding As Boolean
+        ActiveType = StatusDetails(0)
+
+        If IsDate(StatusDetails(1)) Then
+            PhaseOutMonth = CDate(StatusDetails(1))
+        Else
+            PhaseOutMonth = 0 ' Represents a non-date
+        End If
+
+        If IsNumeric(StatusDetails(2)) And StatusDetails(2) <> "" Then
+            PhaseOutPercent = CDbl(StatusDetails(2))
+        Else
+            PhaseOutPercent = 0
+        End If
+        
+        IsSuperseding = StatusDetails(3)
+
+        WS_CurrentFamily.Cells(ProductRow, 5).Value = ActiveType
+        If PhaseOutMonth > 0 Then WS_CurrentFamily.Cells(ProductRow, 6).Value = PhaseOutMonth
+
+        HistoricData = GetHistoricalDataForProduct(CurrProduct, WS_HistoricalSales, MonthCount + 4)
+        WS_CurrentFamily.Range(WS_CurrentFamily.Cells(ProductRow, 7), WS_CurrentFamily.Cells(ProductRow, HistLCol)).Value = HistoricData
+        
+        ProdGroupSum = GetHistoricalSum(CurrProductFamily, CurrGroupID, WS_HistoricalSales, MonthCount + 4)
+        FamilySum = GetHistoricalFamilySum(CurrProductFamily, WS_HistoricalSales, WS_ProductStatus, MonthCount + 4)
+        
+        Dim DemandDataRow As Variant
+        DemandDataRow = Application.Match(CurrProductFamily, WS_DemandForecast.Columns(1), 0)
+        
+        If IsNumeric(DemandDataRow) Then
+            DemandData = WS_DemandForecast.Range(WS_DemandForecast.Cells(DemandDataRow, 2), WS_DemandForecast.Cells(DemandDataRow, DemandForecastLCol)).Value
+
+            For FamilyCol = (HistLCol + 1) To FamilyLCol
+                Dim ForecastValue As Double
+                ForecastValue = CalculateForecastValue(ActiveType, IsSuperseding, PhaseOutMonth, PhaseOutPercent, WS_CurrentFamily.Cells(1, FamilyCol).Value, ProdGroupSum, FamilySum, DemandData(1, FamilyCol - HistLCol))
+                WS_CurrentFamily.Cells(ProductRow, FamilyCol).Value = ForecastValue
+            Next FamilyCol
+        End If
+    Next ProductRow
+
+    FormatFamilySheet WS_CurrentFamily, FamilyLRow, FamilyLCol
+End Sub
+
+
+' =================================================================================================================
+' Helper Function: CalculateForecastValue
+' Description: Calculates the forecast value for a single product for a single month based on its status.
+' =================================================================================================================
+Private Function CalculateForecastValue(ByVal ActiveType As String, ByVal isSuperseding As Boolean, ByVal PhaseOutMonth As Date, ByVal PhaseOutPercent As Double, ByVal ForecastDate As Date, ByVal ProdGroupSum As Double, ByVal FamilySum As Double, ByVal FamilyDemand As Double) As Double
+    Dim BaseForecast As Double
+    BaseForecast = 0
+    If FamilySum > 0 Then
+        BaseForecast = (ProdGroupSum * FamilyDemand) / FamilySum
+    End If
+
+    Select Case ActiveType
+        Case "Active"
+            If Not isSuperseding Then
+                CalculateForecastValue = BaseForecast
+            Else ' This logic is for the NEW product that is phasing IN.
+                If ForecastDate < PhaseOutMonth Then
+                    CalculateForecastValue = 0
+                ElseIf Month(ForecastDate) = Month(PhaseOutMonth) And Year(ForecastDate) = Year(PhaseOutMonth) Then
+                    CalculateForecastValue = BaseForecast * (1 - PhaseOutPercent) ' Using (1-percent) from old product
+                Else ' ForecastDate > PhaseOutMonth
+                    CalculateForecastValue = BaseForecast
+                End If
+            End If
+        Case "PhaseIn-PhaseOut" ' This logic is for phasing OUT an old product.
+            If ForecastDate < PhaseOutMonth Then
+                CalculateForecastValue = BaseForecast
+            ElseIf Month(ForecastDate) = Month(PhaseOutMonth) And Year(ForecastDate) = Year(PhaseOutMonth) Then
+                CalculateForecastValue = BaseForecast * PhaseOutPercent
+            Else ' ForecastDate > PhaseOutMonth
+                CalculateForecastValue = 0
+            End If
+        Case "Discontinued"
+            If PhaseOutMonth = 0 Or ForecastDate < PhaseOutMonth Then
+                CalculateForecastValue = BaseForecast
+            Else
+                CalculateForecastValue = 0
+            End If
+        Case Else
+            CalculateForecastValue = 0 ' Default case for "New", "Unknown", etc.
+    End Select
+End Function
+
+
+' =================================================================================================================
+' Helper Procedure: AddNewProductsToFamilySheet
+' Description: Scans the Product Status sheet for "New" products and adds them to the family sheet if not present.
+' =================================================================================================================
+Private Sub AddNewProductsToFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal WS_ProductStatus As Worksheet)
+    Dim ProductStatusLRow As Long, FamilyLRow As Long
+    Dim CurrProdRow As Long
+    Dim CurrProduct As String, CurrProductFamily As String, ActiveType As String
+    
+    ProductStatusLRow = WS_ProductStatus.Cells(Rows.Count, "A").End(xlUp).Row
+    
+    For CurrProdRow = 2 To ProductStatusLRow
+        CurrProductFamily = LCase(Trim(WS_ProductStatus.Range("A" & CurrProdRow).Value))
+        ActiveType = Trim(WS_ProductStatus.Range("E" & CurrProdRow).Value)
+        CurrProduct = Trim(WS_ProductStatus.Range("D" & CurrProdRow).Value)
+        
+        If CurrProductFamily = LCase(WS_CurrentFamily.Name) And ActiveType = "New" Then
+            Dim Found As Range
+            Set Found = WS_CurrentFamily.Range("D:D").Find(What:=CurrProduct, LookIn:=xlValues, LookAt:=xlWhole)
+            If Found Is Nothing Then
+                FamilyLRow = WS_CurrentFamily.Cells(Rows.Count, "A").End(xlUp).Row + 1
+                WS_ProductStatus.Range("A" & CurrProdRow & ":D" & CurrProdRow).Copy WS_CurrentFamily.Range("A" & FamilyLRow)
+            End If
+        End If
+    Next CurrProdRow
+End Sub
+
+
+' =================================================================================================================
+' Helper Procedure: FormatFamilySheet
+' Description: Applies final formatting (totals, borders, colors, etc.) to a family worksheet.
+' =================================================================================================================
+Private Sub FormatFamilySheet(ByVal WS As Worksheet, ByVal LastRow As Long, ByVal LastCol As Long)
+    If LastRow < 2 Then Exit Sub ' Nothing to format
+    Dim TotalRow As Long
+    TotalRow = LastRow + 1
+    
+    Dim i As Long
+    For i = 7 To LastCol
+        WS.Cells(TotalRow, i).Value = Application.WorksheetFunction.Sum(WS.Range(WS.Cells(2, i), WS.Cells(LastRow, i)))
+    Next i
+    
+    ' ***REMOVED***: Autofit is now handled at the very end for the whole workbook.
+    WS.Range(WS.Cells(1, 1), WS.Cells(TotalRow, LastCol)).Borders.LineStyle = xlContinuous
+    
+    WS.Range(WS.Cells(2, 7), WS.Cells(TotalRow, LastCol)).NumberFormat = "0"
+    
+    With WS.Range(WS.Cells(TotalRow, 1), WS.Cells(TotalRow, LastCol))
+        .Font.Bold = True
+    End With
+    WS.Range(WS.Cells(TotalRow, 7), WS.Cells(TotalRow, LastCol)).Interior.Color = RGB(228, 158, 221)
+    
+    Dim HistLCol As Long
+    HistLCol = GetLastHistoricalColumn(WS)
+    
+    If HistLCol > 6 Then
+        WS.Range(WS.Cells(2, 7), WS.Cells(LastRow, HistLCol)).Interior.Color = RGB(208, 208, 208)
+    End If
+End Sub
+
+
+' =================================================================================================================
+' Helper Procedure: AppendToSummarySheet
+' Description: Copies the processed data from a family sheet to the main "Summary" sheet.
+' =================================================================================================================
+Private Sub AppendToSummarySheet(ByVal WS_Family As Worksheet, ByVal WS_Summary As Worksheet)
+    Dim FamilyLRow As Long, FamilyLCol As Long
+    Dim SummaryLRow As Long, SummaryLastRow As Long
+    
+    ' Get last data row from family sheet (excluding total row)
+    FamilyLRow = WS_Family.Cells(Rows.Count, "A").End(xlUp).Row - 1
+    If FamilyLRow < 2 Then Exit Sub ' Nothing to copy
+    
+    FamilyLCol = WS_Family.Cells(1, Columns.Count).End(xlToLeft).Column
+    SummaryLRow = WS_Summary.Cells(Rows.Count, "A").End(xlUp).Row
+    
+    If IsEmpty(WS_Summary.Range("G1").Value) Then
+        WS_Family.Range(WS_Family.Cells(1, 7), WS_Family.Cells(1, FamilyLCol)).Copy WS_Summary.Range("G1")
+    End If
+    
+    ' Append the data rows from the family sheet to the next available row in Summary.
+    WS_Family.Range(WS_Family.Cells(2, 1), WS_Family.Cells(FamilyLRow, FamilyLCol)).Copy WS_Summary.Range("A" & SummaryLRow + 1)
+    
+    ' ***REMOVED***: Autofit is now handled at the very end for the whole workbook.
+    SummaryLastRow = WS_Summary.Cells(Rows.Count, "A").End(xlUp).Row
+    If SummaryLastRow > 1 Then
+      WS_Summary.Range("A1", WS_Summary.Cells(SummaryLastRow, FamilyLCol)).Sort Key1:=WS_Summary.Range("D2"), Order1:=xlAscending, Header:=xlYes
+    End If
+End Sub
+
+
+' =================================================================================================================
+' Helper Function: GetProductStatus
+' Description: Retrieves the lifecycle status details for a given product from the "Product Status" sheet.
+' Returns: A variant array containing [ActiveType, PhaseOutMonth, PhaseOutPercent, IsSuperseding]
+' =================================================================================================================
+Private Function GetProductStatus(ByVal ProductName As String, ByVal WS_ProductStatus As Worksheet) As Variant
+    Dim Result(0 To 3) As Variant
+    Dim FoundRow As Variant
+    Dim i As Long, ProductStatusLRow As Long
+    
+    ProductStatusLRow = WS_ProductStatus.Cells(Rows.Count, "A").End(xlUp).Row
+    
+    Result(0) = "Unknown": Result(1) = 0: Result(2) = 0: Result(3) = False ' Default values
+    
+    On Error Resume Next
+    FoundRow = Application.Match(ProductName, WS_ProductStatus.Columns("D"), 0)
+    On Error GoTo 0
+    
+    If IsNumeric(FoundRow) Then
+        Result(0) = WS_ProductStatus.Range("E" & FoundRow).Value ' ActiveType
+        Result(1) = WS_ProductStatus.Range("F" & FoundRow).Value ' PhaseOutMonth
+        Result(2) = WS_ProductStatus.Range("G" & FoundRow).Value ' PhaseOutPercent
+        
+        If Result(0) = "Active" Then
+            For i = 2 To ProductStatusLRow
+                If WS_ProductStatus.Range("H" & i).Value = ProductName Then
+                    Result(3) = True
+                    Result(1) = WS_ProductStatus.Range("F" & i).Value ' Phase-out details from superseding product's row
+                    Result(2) = WS_ProductStatus.Range("G" & i).Value
+                    Exit For
+                End If
+            Next i
+        End If
+    End If
+    
+    GetProductStatus = Result
+End Function
+
+
+' =================================================================================================================
+' Helper Function: GetHistoricalDataForProduct
+' Description: Retrieves the row of historical sales data for a specific product.
+' =================================================================================================================
+Private Function GetHistoricalDataForProduct(ByVal ProductName As String, ByVal WS_Hist As Worksheet, ByVal HistLCol As Long) As Variant
+    Dim FoundRow As Variant
+    On Error Resume Next
+    FoundRow = Application.Match(ProductName, WS_Hist.Columns("D"), 0)
+    On Error GoTo 0
+    
+    If IsNumeric(FoundRow) Then
+        GetHistoricalDataForProduct = WS_Hist.Range(WS_Hist.Cells(FoundRow, 5), WS_Hist.Cells(FoundRow, HistLCol)).Value
+    Else
+        Dim DummyArray() As Variant
+        ReDim DummyArray(1 To 1, 1 To (HistLCol - 4))
+        GetHistoricalDataForProduct = DummyArray
+    End If
+End Function
+
+' =================================================================================================================
+' Helper Function: GetHistoricalSum
+' Description: Calculates the total historical sales for a product's group within a family.
+' =================================================================================================================
+Private Function GetHistoricalSum(ByVal FamilyName As String, ByVal GroupID As String, ByVal WS_Hist As Worksheet, ByVal HistLCol As Long) As Double
+    Dim TotalSum As Double
+    Dim i As Long, r As Long
+    Dim HistLRow As Long
+    Dim CurrentGroupID As String, CurrentFamily As String
+
+    HistLRow = WS_Hist.Cells(Rows.Count, "A").End(xlUp).Row
+    TotalSum = 0
+
+    For r = 2 To HistLRow
+        CurrentFamily = UCase(Trim(WS_Hist.Range("A" & r).Value))
+        Dim CurrentProduct As String
+        CurrentProduct = Trim(WS_Hist.Range("D" & r).Value)
+        If InStr(CurrentProduct, "-") > 0 Then
+            CurrentGroupID = Split(CurrentProduct, "-")(0) & Split(CurrentProduct, "-")(1)
+        Else
+            CurrentGroupID = CurrentProduct
+        End If
+        
+        If CurrentGroupID = GroupID And CurrentFamily = UCase(FamilyName) Then
+            For i = 5 To HistLCol
+                TotalSum = TotalSum + Val(WS_Hist.Cells(r, i).Value)
+            Next i
+        End If
+    Next r
+    
+    GetHistoricalSum = TotalSum
+End Function
+
+' =================================================================================================================
+' Helper Function: GetHistoricalFamilySum
+' Description: Calculates the total valid historical sales for an entire product family,
+'              excluding discontinued products after their phase-out month.
+' =================================================================================================================
+Private Function GetHistoricalFamilySum(ByVal FamilyName As String, ByVal WS_Hist As Worksheet, ByVal WS_Status As Worksheet, ByVal HistLCol As Long) As Double
+    Dim TotalSum As Double
+    Dim r As Long, c As Long
+    Dim HistLRow As Long
+    Dim HSProduct As String, HSActiveType As String, HSFamily As String
+    Dim HSPhaseOutMonth As Date
+
+    HistLRow = WS_Hist.Cells(Rows.Count, "A").End(xlUp).Row
+    TotalSum = 0
+
+    For r = 2 To HistLRow
+        HSFamily = LCase(Trim(WS_Hist.Range("A" & r).Value))
+        
+        If HSFamily = LCase(FamilyName) Then
+            HSProduct = Trim(WS_Hist.Range("D" & r).Value)
+            
+            Dim StatusDetails As Variant
+            StatusDetails = GetProductStatus(HSProduct, WS_Status)
+            HSActiveType = StatusDetails(0)
+            HSPhaseOutMonth = StatusDetails(1)
+
+            For c = 5 To HistLCol
+                Dim IncludeSale As Boolean: IncludeSale = False
+                
+                If HSActiveType <> "Discontinued" Then
+                    IncludeSale = True
+                Else 
+                    If HSPhaseOutMonth > 0 And IsDate(WS_Hist.Cells(1, c).Value) Then
+                         If WS_Hist.Cells(1, c).Value < HSPhaseOutMonth Then
+                            IncludeSale = True
+                        End If
+                    Else 
+                        IncludeSale = True ' If no phase out date, include all historical
+                    End If
+                End If
+
+                If IncludeSale Then TotalSum = TotalSum + Val(WS_Hist.Cells(r, c).Value)
+            Next c
+        End If
+    Next r
+    
+    GetHistoricalFamilySum = TotalSum
+End Function
+
+
+' =================================================================================================================
+' Utility Function: GetHistoricalMonthCount
+' Description: Calculates how many columns of historical data to use.
+' =================================================================================================================
+Private Function GetHistoricalMonthCount(ByVal WS_Demand As Worksheet, ByVal WS_Hist As Worksheet) As Long
+    Dim HistLCol As Long, CurrCol As Long
+    Dim Count As Long
+    
+    HistLCol = WS_Hist.Cells(1, Columns.Count).End(xlToLeft).Column
+    Count = 0
+    
+    For CurrCol = 5 To HistLCol
+        If IsDate(WS_Demand.Cells(1, 2).Value) And IsDate(WS_Hist.Cells(1, CurrCol).Value) Then
+            If CDate(WS_Demand.Cells(1, 2).Value) > CDate(WS_Hist.Cells(1, CurrCol).Value) Then
+                Count = Count + 1
+            Else
+                Exit For
+            End If
+        End If
+    Next CurrCol
+    
+    GetHistoricalMonthCount = Count
+End Function
+
+' =================================================================================================================
+' Utility Function: GetLastHistoricalColumn
+' Description: Finds the column index of the last historical data point on a family sheet.
+' =================================================================================================================
+Private Function GetLastHistoricalColumn(ByVal WS As Worksheet) As Long
+    Dim DemandForecastStartDate As Date
+    On Error Resume Next
+    DemandForecastStartDate = WS.Cells(1, 7).Value ' Assuming first forecast date is in G1 after refactor
+    On Error GoTo 0
+    If Not IsDate(DemandForecastStartDate) Then
+      GetLastHistoricalColumn = 6
+      Exit Function
+    End If
+    
+    Dim LastCol As Long, i As Long
+    LastCol = WS.Cells(1, Columns.Count).End(xlToLeft).Column
+    
+    GetLastHistoricalColumn = 6 ' Default before the first historical month
+    For i = 7 To LastCol
+        If IsDate(WS.Cells(1, i).Value) Then
+            If CDate(WS.Cells(1, i).Value) < DemandForecastStartDate Then
+                GetLastHistoricalColumn = i
+            Else
+                Exit For
+            End If
+        End If
+    Next i
+End Function
+
+' =================================================================================================================
+' Utility Function: SheetExists
+' Description: Checks if a worksheet with a given name exists in the workbook.
+' =================================================================================================================
+Private Function SheetExists(ByVal WB As Workbook, ByVal SheetName As String) As Boolean
+    Dim WS As Worksheet
+    On Error Resume Next
+    Set WS = WB.Sheets(SheetName)
+    On Error GoTo 0
+    SheetExists = Not WS Is Nothing
+End Function
+
+
+' =================================================================================================================
+' Utility Procedure: CreateOutputWorkbook
+' Description: Creates a new workbook and moves the generated Summary and Family sheets into it.
+' =================================================================================================================
+Private Function CreateOutputWorkbook(ByVal TWB As Workbook) As Workbook
+    Dim WB As Workbook, WS As Worksheet
+    Dim SheetNames As Object
+    Set SheetNames = CreateObject("System.Collections.ArrayList")
+    
+    ' Collect names of sheets to move
+    For Each WS In TWB.Worksheets
+        Select Case WS.Name
+            Case "Main", "Product Status", "Historical Sales", "Demand Forecast"
+                ' Do nothing
+            Case Else
+                SheetNames.Add WS.Name
+        End Select
+    Next WS
+    
+    If SheetNames.Count = 0 Then
+        Set CreateOutputWorkbook = Nothing
+        Exit Function
+    End If
+    
+    ' Move the collected sheets
+    TWB.Sheets(SheetNames.ToArray).Move
+    
+    ' The moved sheets are now the active workbook
+    Set WB = ActiveWorkbook
+    
+    WB.Sheets("Summary").Activate
+    
+    Set CreateOutputWorkbook = WB
+End Function
