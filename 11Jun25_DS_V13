@@ -20,17 +20,22 @@ Private Const STATUS_NEW As String = "New"
 Private Const STATUS_UNKNOWN As String = "Unknown"
 
 ' --- LOG LEVELS ---
+' *** MODIFIED: Renamed ERR to ERROR_LEVEL to avoid conflict with the VBA Err object. ***
 Private Enum LogLevel
     INFO
     WARN
-    ERR
+    ERROR_LEVEL
 End Enum
+
+' --- MODULE-LEVEL VARIABLES ---
+' Used for robust error handling to identify the last-run procedure.
+Private m_CurrentProcedure As String
 
 ' =================================================================================================================
 ' Main Procedure: UpdateForeCast_Click
 ' =================================================================================================================
 Public Sub UpdateForeCast_Click()
-    Const PROC_NAME As String = "UpdateForeCast_Click"
+    m_CurrentProcedure = "UpdateForeCast_Click"
     Dim TWB As Workbook, NewWB As Workbook
     Dim MainSheet As Worksheet, WS_Summary As Worksheet, WS_ProductStatus As Worksheet
     Dim WS_DemandForecast As Worksheet, WS_HistoricalSales As Worksheet, WS_Log As Worksheet
@@ -56,16 +61,16 @@ Public Sub UpdateForeCast_Click()
     On Error GoTo ErrorHandler
     Set WS_Log = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
     InitializeLogSheet WS_Log
-    WriteToLog WS_Log, LogLevel.INFO, "Log sheet initialized.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Log sheet initialized.", m_CurrentProcedure
 
     ' --- 2. INPUT VALIDATION ---
-    WriteToLog WS_Log, LogLevel.INFO, "Starting input validation...", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Starting input validation...", m_CurrentProcedure
     If Not ValidateAllInputs(WS_ProductStatus, WS_DemandForecast, WS_HistoricalSales, WS_Log) Then
-        WriteToLog WS_Log, LogLevel.ERR, "Input validation failed. Aborting process.", PROC_NAME
+        WriteToLog WS_Log, LogLevel.ERROR_LEVEL, "Input validation failed. Aborting process.", m_CurrentProcedure
         MsgBox "Input data validation failed. Please check the '" & LOG_SHEET & "' sheet for details. Aborting.", vbCritical
         GoTo Cleanup
     End If
-    WriteToLog WS_Log, LogLevel.INFO, "Input validation successful.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Input validation successful.", m_CurrentProcedure
 
     ' --- Continue Setup ---
     On Error Resume Next
@@ -73,16 +78,16 @@ Public Sub UpdateForeCast_Click()
     On Error GoTo ErrorHandler
     Set WS_Summary = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
     WS_Summary.Name = SUMMARY_SHEET
-    WriteToLog WS_Log, LogLevel.INFO, "Summary sheet created.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Summary sheet created.", m_CurrentProcedure
 
     ' --- 3. CORE PROCESSING (IN-MEMORY) ---
     Application.StatusBar = "Loading data into memory..."
-    WriteToLog WS_Log, LogLevel.INFO, "Loading data into memory...", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Loading data into memory...", m_CurrentProcedure
     Dim StatusData As Variant, HistoryData As Variant
     StatusData = LoadDataToArray(WS_ProductStatus)
     HistoryData = LoadDataToArray(WS_HistoricalSales)
-    WriteToLog WS_Log, LogLevel.INFO, "Loaded " & UBound(StatusData, 1) - 1 & " products from Status sheet.", PROC_NAME
-    WriteToLog WS_Log, LogLevel.INFO, "Loaded " & UBound(HistoryData, 1) - 1 & " historical sales records.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Loaded " & UBound(StatusData, 1) - 1 & " products from Status sheet.", m_CurrentProcedure
+    WriteToLog WS_Log, LogLevel.INFO, "Loaded " & UBound(HistoryData, 1) - 1 & " historical sales records.", m_CurrentProcedure
 
     Application.StatusBar = "Building product lifecycle map..."
     Dim LifecycleMap As Object
@@ -96,7 +101,7 @@ Public Sub UpdateForeCast_Click()
 
     ' --- 4. FINALIZATION ---
     Application.StatusBar = "Creating final report workbook..."
-    WriteToLog WS_Log, LogLevel.INFO, "Creating final report workbook...", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Creating final report workbook...", m_CurrentProcedure
     Set NewWB = CreateOutputWorkbook(TWB, WS_Summary, WS_Log)
     
     If Not NewWB Is Nothing Then
@@ -105,7 +110,7 @@ Public Sub UpdateForeCast_Click()
         FilePath = TWB.Path & "\Demand ForeCast - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
         NewWB.SaveAs FilePath
         NewWB.Close SaveChanges:=False
-        WriteToLog WS_Log, LogLevel.INFO, "Final report saved to: " & FilePath, PROC_NAME
+        WriteToLog WS_Log, LogLevel.INFO, "Final report saved to: " & FilePath, m_CurrentProcedure
     End If
 
     ' --- 5. CLEANUP ---
@@ -115,7 +120,7 @@ Cleanup:
     If Not MainSheet Is Nothing Then MainSheet.Activate
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
-    WriteToLog WS_Log, LogLevel.INFO, "Process completed in " & Format(Timer - StartTime, "0.00") & " seconds.", PROC_NAME
+    If Not WS_Log Is Nothing Then WriteToLog WS_Log, LogLevel.INFO, "Process completed in " & Format(Timer - StartTime, "0.00") & " seconds.", m_CurrentProcedure
     MsgBox "Forecast Update Completed. See '" & LOG_SHEET & "' for details.", vbInformation
     Exit Sub
 
@@ -123,11 +128,11 @@ ErrorHandler:
     Dim ErrMsg As String
     ErrMsg = "An unexpected error occurred!" & vbCrLf & _
              "Error Number: " & Err.Number & vbCrLf & _
-             "Procedure: " & Err.Source & vbCrLf & _
+             "Procedure: " & m_CurrentProcedure & vbCrLf & _
              "Description: " & Err.Description
     
     If Not WS_Log Is Nothing Then
-        WriteToLog WS_Log, LogLevel.ERR, "Error " & Err.Number & ": " & Err.Description, Err.Source
+        WriteToLog WS_Log, LogLevel.ERROR_LEVEL, "Error " & Err.Number & ": " & Err.Description, m_CurrentProcedure
     End If
     
     MsgBox ErrMsg, vbCritical, "Process Halted"
@@ -138,7 +143,7 @@ End Sub
 ' Validation Procedures
 ' =================================================================================================================
 Private Function ValidateAllInputs(ByVal WS_Status As Worksheet, ByVal WS_Demand As Worksheet, ByVal WS_History As Worksheet, ByVal WS_Log As Worksheet) As Boolean
-    Const PROC_NAME As String = "ValidateAllInputs"
+    m_CurrentProcedure = "ValidateAllInputs"
     Dim IsValid As Boolean: IsValid = True
     
     ' Validate Product Status Sheet
@@ -146,7 +151,7 @@ Private Function ValidateAllInputs(ByVal WS_Status As Worksheet, ByVal WS_Demand
     statusHeaders = Split("Family,I-S-D,Status,Superseding Product ID", ",")
     If Not ValidateHeaders(WS_Status, statusHeaders, WS_Log) Then IsValid = False
     If WS_Status.Cells(WS_Status.Rows.Count, "A").End(xlUp).Row < 2 Then
-        WriteToLog WS_Log, LogLevel.ERR, "'" & WS_Status.Name & "' sheet contains no data.", PROC_NAME
+        WriteToLog WS_Log, LogLevel.ERROR_LEVEL, "'" & WS_Status.Name & "' sheet contains no data.", m_CurrentProcedure
         IsValid = False
     End If
     
@@ -155,7 +160,7 @@ Private Function ValidateAllInputs(ByVal WS_Status As Worksheet, ByVal WS_Demand
     demandHeaders = Split("Family", ",")
     If Not ValidateHeaders(WS_Demand, demandHeaders, WS_Log) Then IsValid = False
     If WS_Demand.Cells(WS_Demand.Rows.Count, "A").End(xlUp).Row < 2 Then
-        WriteToLog WS_Log, LogLevel.ERR, "'" & WS_Demand.Name & "' sheet contains no data.", PROC_NAME
+        WriteToLog WS_Log, LogLevel.ERROR_LEVEL, "'" & WS_Demand.Name & "' sheet contains no data.", m_CurrentProcedure
         IsValid = False
     End If
 
@@ -164,14 +169,14 @@ Private Function ValidateAllInputs(ByVal WS_Status As Worksheet, ByVal WS_Demand
     historyHeaders = Split("Family,I-S-D", ",")
     If Not ValidateHeaders(WS_History, historyHeaders, WS_Log) Then IsValid = False
      If WS_History.Cells(WS_History.Rows.Count, "A").End(xlUp).Row < 2 Then
-        WriteToLog WS_Log, LogLevel.WARN, "'" & WS_History.Name & "' sheet contains no data. Forecasts for existing products will be zero.", PROC_NAME
+        WriteToLog WS_Log, LogLevel.WARN, "'" & WS_History.Name & "' sheet contains no data. Forecasts for existing products will be zero.", m_CurrentProcedure
     End If
 
     ValidateAllInputs = IsValid
 End Function
 
 Private Function ValidateHeaders(ByVal WS As Worksheet, ByVal requiredHeaders() As String, ByVal WS_Log As Worksheet) As Boolean
-    Const PROC_NAME As String = "ValidateHeaders"
+    m_CurrentProcedure = "ValidateHeaders"
     Dim Header As Variant, Found As Boolean, HeaderRange As Range
     Dim LastCol As Long
     
@@ -182,10 +187,10 @@ Private Function ValidateHeaders(ByVal WS As Worksheet, ByVal requiredHeaders() 
     For Each Header In requiredHeaders
         Found = (Not HeaderRange.Find(Header, LookIn:=xlValues, LookAt:=xlWhole) Is Nothing)
         If Not Found Then
-            WriteToLog WS_Log, LogLevel.ERR, "Required header '" & Header & "' not found in sheet '" & WS.Name & "'.", PROC_NAME
+            WriteToLog WS_Log, LogLevel.ERROR_LEVEL, "Required header '" & Header & "' not found in sheet '" & WS.Name & "'.", m_CurrentProcedure
             ValidateHeaders = False
         Else
-            WriteToLog WS_Log, LogLevel.INFO, "Header '" & Header & "' found in sheet '" & WS.Name & "'.", PROC_NAME
+            WriteToLog WS_Log, LogLevel.INFO, "Header '" & Header & "' found in sheet '" & WS.Name & "'.", m_CurrentProcedure
         End If
     Next Header
 End Function
@@ -195,8 +200,8 @@ End Function
 ' Core Processing Procedures
 ' =================================================================================================================
 Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal StatusData As Variant, ByVal WS_DemandForecast As Worksheet, ByVal WS_Summary As Worksheet, ByVal WS_Log As Worksheet)
-    Const PROC_NAME As String = "CreateFamilySheets"
-    WriteToLog WS_Log, LogLevel.INFO, "Starting...", PROC_NAME
+    m_CurrentProcedure = "CreateFamilySheets"
+    WriteToLog WS_Log, LogLevel.INFO, "Starting...", m_CurrentProcedure
     
     Dim DemandForecastLRow As Long, ProductStatusLRow As Long
     Dim CurrFamilyRow As Long, CurrProductRow As Long
@@ -218,7 +223,7 @@ Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal StatusData As Varian
             
             Set WS_NewFamily = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
             WS_NewFamily.Name = CurrFamily
-            WriteToLog WS_Log, LogLevel.INFO, "Created sheet for family: " & CurrFamily, PROC_NAME
+            WriteToLog WS_Log, LogLevel.INFO, "Created sheet for family: " & CurrFamily, m_CurrentProcedure
             
             WS_NewFamily.Range("A1:D1").Value = Array(StatusData(1, 1), StatusData(1, 2), StatusData(1, 3), StatusData(1, 4))
             WS_NewFamily.Range("E1").Value = "Active/Discontinued"
@@ -234,12 +239,12 @@ Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal StatusData As Varian
             Next CurrProductRow
         End If
     Next CurrFamilyRow
-    WriteToLog WS_Log, LogLevel.INFO, "Finished.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Finished.", m_CurrentProcedure
 End Sub
 
 Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal WS_DemandForecast As Worksheet, ByVal WS_Summary As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
-    Const PROC_NAME As String = "ProcessForecastData"
-    WriteToLog WS_Log, LogLevel.INFO, "Starting...", PROC_NAME
+    m_CurrentProcedure = "ProcessForecastData"
+    WriteToLog WS_Log, LogLevel.INFO, "Starting...", m_CurrentProcedure
 
     Dim WS_CurrentFamily As Worksheet, CurrFamily As String, DemandForecastLRow As Long, CurrFamilyRow As Long
     DemandForecastLRow = WS_DemandForecast.Cells(WS_DemandForecast.Rows.Count, "A").End(xlUp).Row
@@ -250,18 +255,18 @@ Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal StatusData As Varia
         
         If SheetExists(TWB, CurrFamily) Then
             Set WS_CurrentFamily = TWB.Sheets(CurrFamily)
-            WriteToLog WS_Log, LogLevel.INFO, "Begin processing for family: " & CurrFamily, PROC_NAME
+            WriteToLog WS_Log, LogLevel.INFO, "Begin processing for family: " & CurrFamily, m_CurrentProcedure
             CalculateAndFormatFamilySheet WS_CurrentFamily, StatusData, HistoryData, WS_DemandForecast, WS_Log, LifecycleMap
             AppendToSummarySheet WS_CurrentFamily, WS_Summary
-            WriteToLog WS_Log, LogLevel.INFO, "Finished processing for family: " & CurrFamily, PROC_NAME
+            WriteToLog WS_Log, LogLevel.INFO, "Finished processing for family: " & CurrFamily, m_CurrentProcedure
             Set WS_CurrentFamily = Nothing
         End If
     Next CurrFamilyRow
-    WriteToLog WS_Log, LogLevel.INFO, "Finished.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Finished.", m_CurrentProcedure
 End Sub
 
 Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal WS_DemandForecast As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
-    Const PROC_NAME As String = "CalculateAndFormatFamilySheet"
+    m_CurrentProcedure = "CalculateAndFormatFamilySheet"
     Dim FamilyLRow As Long, FamilyLCol As Long, HistLCol As Long
     Dim ProdGroupSum As Double, FamilySum As Double, TotalForecastCalculated As Double, OriginalFamilyDemand As Double
     Dim MonthCount As Long
@@ -276,7 +281,7 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
     FamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row
     
     If FamilyLRow < 2 Then
-        WriteToLog WS_Log, LogLevel.WARN, "No products found to process for family: " & WS_CurrentFamily.Name, PROC_NAME
+        WriteToLog WS_Log, LogLevel.WARN, "No products found to process for family: " & WS_CurrentFamily.Name, m_CurrentProcedure
         Exit Sub
     End If
     
@@ -373,8 +378,8 @@ Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, By
 End Function
 
 Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As Worksheet) As Object
-    Const PROC_NAME As String = "BuildLifecycleMap"
-    WriteToLog WS_Log, LogLevel.INFO, "Starting...", PROC_NAME
+    m_CurrentProcedure = "BuildLifecycleMap"
+    WriteToLog WS_Log, LogLevel.INFO, "Starting...", m_CurrentProcedure
     Dim r As Long, ProductID As String, productKey As Variant
     Dim TempLifecycle As cProductLifecycle, SuccessorLifecycle As cProductLifecycle
     Dim LifecycleDict As Object: Set LifecycleDict = CreateObject("Scripting.Dictionary")
@@ -409,12 +414,12 @@ Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As 
                     .PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
                 End With
             Else
-                WriteToLog WS_Log, LogLevel.WARN, "Product '" & TempLifecycle.ProductID & "' has SupersededByProductID '" & TempLifecycle.SupersededByProductID & "', but it was not found.", PROC_NAME
+                WriteToLog WS_Log, LogLevel.WARN, "Product '" & TempLifecycle.ProductID & "' has SupersededByProductID '" & TempLifecycle.SupersededByProductID & "', but it was not found.", m_CurrentProcedure
             End If
         End If
     Next productKey
     
-    WriteToLog WS_Log, LogLevel.INFO, "Finished building map for " & LifecycleDict.Count & " unique products.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Finished building map for " & LifecycleDict.Count & " unique products.", m_CurrentProcedure
     Set BuildLifecycleMap = LifecycleDict
 End Function
 
@@ -488,8 +493,8 @@ Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
 End Sub
 
 Private Function CreateOutputWorkbook(ByVal TWB As Workbook, ByVal WS_Summary As Worksheet, ByVal WS_Log As Worksheet) As Workbook
-    Const PROC_NAME As String = "CreateOutputWorkbook"
-    WriteToLog WS_Log, LogLevel.INFO, "Starting...", PROC_NAME
+    m_CurrentProcedure = "CreateOutputWorkbook"
+    WriteToLog WS_Log, LogLevel.INFO, "Starting...", m_CurrentProcedure
     
     Dim WB As Workbook, WS As Worksheet
     Dim SheetNames As Object: Set SheetNames = CreateObject("System.Collections.ArrayList")
@@ -511,7 +516,7 @@ Private Function CreateOutputWorkbook(ByVal TWB As Workbook, ByVal WS_Summary As
     Next WS
     
     If SheetNames.Count = 0 Then
-        WriteToLog WS_Log, LogLevel.WARN, "No family sheets were generated to create an output workbook.", PROC_NAME
+        WriteToLog WS_Log, LogLevel.WARN, "No family sheets were generated to create an output workbook.", m_CurrentProcedure
         Set CreateOutputWorkbook = Nothing
         Exit Function
     End If
@@ -523,7 +528,7 @@ Private Function CreateOutputWorkbook(ByVal TWB As Workbook, ByVal WS_Summary As
     WB.Sheets(SUMMARY_SHEET).Activate
     On Error GoTo 0
     
-    WriteToLog WS_Log, LogLevel.INFO, "Finished.", PROC_NAME
+    WriteToLog WS_Log, LogLevel.INFO, "Finished.", m_CurrentProcedure
     Set CreateOutputWorkbook = WB
 End Function
 
@@ -667,7 +672,7 @@ Private Sub WriteToLog(ByVal WS As Worksheet, ByVal Level As LogLevel, ByVal Mes
     Select Case Level
         Case LogLevel.INFO: LogType = "INFO"
         Case LogLevel.WARN: LogType = "WARN"
-        Case LogLevel.ERR: LogType = "ERROR"
+        Case LogLevel.ERROR_LEVEL: LogType = "ERROR" ' *** MODIFIED: Renamed from ERR ***
     End Select
     With WS
         .Cells(NextRow, "A").Value = Now
