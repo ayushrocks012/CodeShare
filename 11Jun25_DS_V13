@@ -30,6 +30,10 @@ End Enum
 ' Used for robust error handling to identify the last-run procedure.
 Private m_CurrentProcedure As String
 
+' --- FORWARD DECLARATIONS ---
+' *** MODIFIED: Added a forward declaration to prevent compile errors related to function order. ***
+Private Function ValidateHeaders(ByVal WS As Worksheet, ByVal requiredHeaders() As String, ByVal WS_Log As Worksheet) As Boolean
+
 ' =================================================================================================================
 ' Main Procedure: UpdateForeCast_Click
 ' =================================================================================================================
@@ -141,27 +145,6 @@ End Sub
 ' =================================================================================================================
 ' Validation Procedures
 ' =================================================================================================================
-' *** MODIFIED: Moved ValidateHeaders function before ValidateAllInputs to resolve compile error. ***
-Private Function ValidateHeaders(ByVal WS As Worksheet, ByVal requiredHeaders() As String, ByVal WS_Log As Worksheet) As Boolean
-    m_CurrentProcedure = "ValidateHeaders"
-    Dim Header As Variant, Found As Boolean, HeaderRange As Range
-    Dim LastCol As Long
-    
-    LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
-    Set HeaderRange = WS.Range("A1", WS.Cells(1, LastCol))
-    ValidateHeaders = True
-    
-    For Each Header In requiredHeaders
-        Found = (Not HeaderRange.Find(Header, LookIn:=xlValues, LookAt:=xlWhole) Is Nothing)
-        If Not Found Then
-            WriteToLog WS_Log, LogLevel.ERROR_LEVEL, "Required header '" & Header & "' not found in sheet '" & WS.Name & "'.", m_CurrentProcedure
-            ValidateHeaders = False
-        Else
-            WriteToLog WS_Log, LogLevel.INFO, "Header '" & Header & "' found in sheet '" & WS.Name & "'.", m_CurrentProcedure
-        End If
-    Next Header
-End Function
-
 Private Function ValidateAllInputs(ByVal WS_Status As Worksheet, ByVal WS_Demand As Worksheet, ByVal WS_History As Worksheet, ByVal WS_Log As Worksheet) As Boolean
     m_CurrentProcedure = "ValidateAllInputs"
     Dim IsValid As Boolean: IsValid = True
@@ -193,6 +176,26 @@ Private Function ValidateAllInputs(ByVal WS_Status As Worksheet, ByVal WS_Demand
     End If
 
     ValidateAllInputs = IsValid
+End Function
+
+Private Function ValidateHeaders(ByVal WS As Worksheet, ByVal requiredHeaders() As String, ByVal WS_Log As Worksheet) As Boolean
+    m_CurrentProcedure = "ValidateHeaders"
+    Dim Header As Variant, Found As Boolean, HeaderRange As Range
+    Dim LastCol As Long
+    
+    LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
+    Set HeaderRange = WS.Range("A1", WS.Cells(1, LastCol))
+    ValidateHeaders = True
+    
+    For Each Header In requiredHeaders
+        Found = (Not HeaderRange.Find(Header, LookIn:=xlValues, LookAt:=xlWhole) Is Nothing)
+        If Not Found Then
+            WriteToLog WS_Log, LogLevel.ERROR_LEVEL, "Required header '" & Header & "' not found in sheet '" & WS.Name & "'.", m_CurrentProcedure
+            ValidateHeaders = False
+        Else
+            WriteToLog WS_Log, LogLevel.INFO, "Header '" & Header & "' found in sheet '" & WS.Name & "'.", m_CurrentProcedure
+        End If
+    Next Header
 End Function
 
 ' =================================================================================================================
