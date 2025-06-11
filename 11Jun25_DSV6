@@ -1,3 +1,4 @@
+'@Folder("Forecasting") 'Suggested by Rubberduck for better organization
 Option Explicit
 
 ' =================================================================================================================
@@ -32,7 +33,7 @@ Private Const STATUS_UNKNOWN As String = "Unknown"
 ' =================================================================================================================
 ' Main Procedure: UpdateForeCast_Click
 ' =================================================================================================================
-Sub UpdateForeCast_Click()
+Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be called from a button.
     ' --- 1. SETUP & INITIALIZATION ---
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
