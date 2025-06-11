@@ -2,21 +2,91 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- CLASS MODULE CODE: cProductLifecycle ---
-' INSTRUCTIONS: In the VBA Editor, you must create a new "Class Module" (Insert -> Class Module)
-' and name it "cProductLifecycle" in the Properties window. Copy the code below into that class module.
+' INSTRUCTIONS: In the VBA Editor, go to your "cProductLifecycle" Class Module and
+' replace its entire contents with the code below.
 ' =================================================================================================================
-' Public ProductID As String
-' Public Status As String
-' ' Phasing Out Details (for this product)
-' Public IsPhasingOut As Boolean
-' Public PhaseOutDate As Date
-' Public PhaseOutPercent As Double
-' Public SupersededByProductID As String
-' ' Phasing In Details (how this product replaces another)
-' Public IsPhasingIn As Boolean
-' Public ReplacesProductID As String
-' Public PhaseInDate As Date
-' Public PhaseInPercent As Double ' Calculated as (1 - PhaseOutPercent of the product it replaces)
+' ' --- Private backing fields for properties ---
+' Private pProductID As String
+' Private pStatus As String
+' Private pIsPhasingOut As Boolean
+' Private pPhaseOutDate As Date
+' Private pPhaseOutPercent As Double
+' Private pSupersededByProductID As String
+' Private pIsPhasingIn As Boolean
+' Private pReplacesProductID As String
+' Private pPhaseInDate As Date
+' Private pPhaseInPercent As Double
+'
+' ' --- Public Properties to access the private fields ---
+' Public Property Get ProductID() As String
+'     ProductID = pProductID
+' End Property
+' Public Property Let ProductID(Value As String)
+'     pProductID = Value
+' End Property
+'
+' Public Property Get Status() As String
+'     Status = pStatus
+' End Property
+' Public Property Let Status(Value As String)
+'     pStatus = Value
+' End Property
+'
+' Public Property Get IsPhasingOut() As Boolean
+'     IsPhasingOut = pIsPhasingOut
+' End Property
+' Public Property Let IsPhasingOut(Value As Boolean)
+'     pIsPhasingOut = Value
+' End Property
+'
+' Public Property Get PhaseOutDate() As Date
+'     PhaseOutDate = pPhaseOutDate
+' End Property
+' Public Property Let PhaseOutDate(Value As Date)
+'     pPhaseOutDate = Value
+' End Property
+'
+' Public Property Get PhaseOutPercent() As Double
+'     PhaseOutPercent = pPhaseOutPercent
+' End Property
+' Public Property Let PhaseOutPercent(Value As Double)
+'     pPhaseOutPercent = Value
+' End Property
+'
+' Public Property Get SupersededByProductID() As String
+'     SupersededByProductID = pSupersededByProductID
+' End Property
+' Public Property Let SupersededByProductID(Value As String)
+'     pSupersededByProductID = Value
+' End Property
+'
+' Public Property Get IsPhasingIn() As Boolean
+'     IsPhasingIn = pIsPhasingIn
+' End Property
+' Public Property Let IsPhasingIn(Value As Boolean)
+'     pIsPhasingIn = Value
+' End Property
+'
+' Public Property Get ReplacesProductID() As String
+'     ReplacesProductID = pReplacesProductID
+' End Property
+' Public Property Let ReplacesProductID(Value As String)
+'     pReplacesProductID = Value
+' End Property
+'
+' Public Property Get PhaseInDate() As Date
+'     PhaseInDate = pPhaseInDate
+' End Property
+' Public Property Let PhaseInDate(Value As Date)
+'     pPhaseInDate = Value
+' End Property
+'
+' Public Property Get PhaseInPercent() As Double
+'     PhaseInPercent = pPhaseInPercent
+' End Property
+' Public Property Let PhaseInPercent(Value As Double)
+'     pPhaseInPercent = Value
+' End Property
 ' =================================================================================================================
 ' --- END OF CLASS MODULE CODE ---
 ' =================================================================================================================
@@ -24,7 +94,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' The code below goes into a standard module (like the one you are currently using).
+' The code below goes into a standard module.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -98,7 +168,7 @@ Sub UpdateForeCast_Click()
         Next WS
         
         Dim FilePath As String
-        FilePath = TWB.Path & "\Demand ForeCast - " & Format(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
+        FilePath = TWB.Path & "\Demand ForeCast - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
         NewWB.SaveAs FilePath
         NewWB.Close SaveChanges:=False
     End If
@@ -121,13 +191,14 @@ Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal WS_ProductStatus As 
     Dim CurrFamily As String, CurrProductFamily As String
     Dim WS_NewFamily As Worksheet
 
-    DemandForecastLRow = WS_DemandForecast.Cells(Rows.Count, "A").End(xlUp).Row
-    ProductStatusLRow = WS_ProductStatus.Cells(Rows.Count, "A").End(xlUp).Row
+    ' ***FIXED***: Use explicit worksheet references.
+    DemandForecastLRow = WS_DemandForecast.Cells(WS_DemandForecast.Rows.Count, "A").End(xlUp).Row
+    ProductStatusLRow = WS_ProductStatus.Cells(WS_ProductStatus.Rows.Count, "A").End(xlUp).Row
     
     SetupSummaryHeaders WS_ProductStatus, WS_Summary
 
     For CurrFamilyRow = 2 To DemandForecastLRow
-        CurrFamily = Trim(WS_DemandForecast.Range("A" & CurrFamilyRow).Value)
+        CurrFamily = Trim$(WS_DemandForecast.Range("A" & CurrFamilyRow).Value)
         
         If Len(CurrFamily) > 0 And Not SheetExists(TWB, CurrFamily) Then
             Set WS_NewFamily = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
@@ -138,10 +209,10 @@ Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal WS_ProductStatus As 
             WS_NewFamily.Range("F1").Value = "Phase Out Month"
             
             For CurrProductRow = 2 To ProductStatusLRow
-                CurrProductFamily = LCase(Trim(WS_ProductStatus.Range("A" & CurrProductRow).Value))
-                If CurrProductFamily = LCase(CurrFamily) Then
+                CurrProductFamily = LCase$(Trim$(WS_ProductStatus.Range("A" & CurrProductRow).Value))
+                If CurrProductFamily = LCase$(CurrFamily) Then
                     Dim NextFreeRow As Long
-                    NextFreeRow = WS_NewFamily.Cells(Rows.Count, "A").End(xlUp).Row + 1
+                    NextFreeRow = WS_NewFamily.Cells(WS_NewFamily.Rows.Count, "A").End(xlUp).Row + 1
                     WS_ProductStatus.Range("A" & CurrProductRow & ":D" & CurrProductRow).Copy WS_NewFamily.Range("A" & NextFreeRow)
                 End If
             Next CurrProductRow
@@ -163,10 +234,10 @@ End Sub
 ' =================================================================================================================
 Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal WS_ProductStatus As Worksheet, ByVal WS_DemandForecast As Worksheet, ByVal WS_HistoricalSales As Worksheet, ByVal WS_Summary As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
     Dim WS_CurrentFamily As Worksheet, CurrFamily As String, DemandForecastLRow As Long, CurrFamilyRow As Long
-    DemandForecastLRow = WS_DemandForecast.Cells(Rows.Count, "A").End(xlUp).Row
+    DemandForecastLRow = WS_DemandForecast.Cells(WS_DemandForecast.Rows.Count, "A").End(xlUp).Row
 
     For CurrFamilyRow = 2 To DemandForecastLRow
-        CurrFamily = Trim(WS_DemandForecast.Range("A" & CurrFamilyRow).Value)
+        CurrFamily = Trim$(WS_DemandForecast.Range("A" & CurrFamilyRow).Value)
         Application.StatusBar = "Processing family: " & CurrFamily & "..."
         
         If SheetExists(TWB, CurrFamily) Then
@@ -186,22 +257,23 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
     Dim ProductRow As Long, ProdGroupSum As Double, FamilySum As Double
     Dim DemandData As Variant, HistoricData As Variant, MonthCount As Long
     
-    FamilyLCol = WS_CurrentFamily.Cells(1, Columns.Count).End(xlToLeft).Column
+    ' ***FIXED***: Use explicit worksheet references.
+    FamilyLCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
     MonthCount = GetHistoricalMonthCount(WS_DemandForecast, WS_HistoricalSales)
     
     If FamilyLCol >= 7 Then WS_CurrentFamily.Range(WS_CurrentFamily.Cells(1, 7), WS_CurrentFamily.Cells(1, FamilyLCol)).EntireColumn.Delete
     WS_HistoricalSales.Range(WS_HistoricalSales.Cells(1, 5), WS_HistoricalSales.Cells(1, MonthCount + 4)).Copy WS_CurrentFamily.Range("G1")
     
-    FamilyLCol = WS_CurrentFamily.Cells(1, Columns.Count).End(xlToLeft).Column
+    FamilyLCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
     Dim DemandForecastLCol As Long
-    DemandForecastLCol = WS_DemandForecast.Cells(1, Columns.Count).End(xlToLeft).Column
+    DemandForecastLCol = WS_DemandForecast.Cells(1, WS_DemandForecast.Columns.Count).End(xlToLeft).Column
     WS_DemandForecast.Range(WS_DemandForecast.Cells(1, 2), WS_DemandForecast.Cells(1, DemandForecastLCol)).Copy WS_CurrentFamily.Cells(1, FamilyLCol + 1)
     
-    FamilyLCol = WS_CurrentFamily.Cells(1, Columns.Count).End(xlToLeft).Column
+    FamilyLCol = WS_CurrentFamily.Cells(1, WS_CurrentFamily.Columns.Count).End(xlToLeft).Column
     HistLCol = 6 + MonthCount
     
     AddNewProductsToFamilySheet WS_CurrentFamily, WS_ProductStatus
-    FamilyLRow = WS_CurrentFamily.Cells(Rows.Count, "A").End(xlUp).Row
+    FamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row
 
     For ProductRow = 2 To FamilyLRow
         Dim CurrProduct As String, CurrProductFamily As String, CurrGroupID As String
@@ -253,7 +325,7 @@ Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, By
 
     Dim FinalForecast As Double: FinalForecast = 0
 
-    ' Part 1: Determine the base value based on this product's OWN lifecycle (is it active, phasing out, etc.)
+    ' Part 1: Determine the base value based on this product's OWN lifecycle
     Select Case Lifecycle.Status
         Case STATUS_ACTIVE, STATUS_NEW
             FinalForecast = BaseForecast
@@ -269,8 +341,6 @@ Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, By
             End If
         Case STATUS_DISCONTINUED
              If Lifecycle.PhaseOutDate > 0 And ForecastDate >= Lifecycle.PhaseOutDate Then FinalForecast = 0 Else FinalForecast = BaseForecast
-        Case Else
-            FinalForecast = 0
     End Select
 
     ' Part 2: Adjust the value if this product is phasing IN (replacing another product)
@@ -278,10 +348,8 @@ Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, By
         If ForecastDate < Lifecycle.PhaseInDate Then
             FinalForecast = 0 ' Not its turn yet
         ElseIf Month(ForecastDate) = Month(Lifecycle.PhaseInDate) And Year(ForecastDate) = Year(Lifecycle.PhaseInDate) Then
-            ' During the transition month, it gets the remainder of the forecast
             FinalForecast = BaseForecast * Lifecycle.PhaseInPercent
         End If
-        ' If ForecastDate > PhaseInDate, it keeps its full calculated value from Part 1.
     End If
 
     CalculateForecastValue = FinalForecast
@@ -293,18 +361,18 @@ End Function
 Private Sub AddNewProductsToFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal WS_ProductStatus As Worksheet)
     Dim ProductStatusLRow As Long, FamilyLRow As Long, CurrProdRow As Long
     Dim CurrProduct As String, CurrProductFamily As String, ActiveType As String
-    ProductStatusLRow = WS_ProductStatus.Cells(Rows.Count, "A").End(xlUp).Row
+    ProductStatusLRow = WS_ProductStatus.Cells(WS_ProductStatus.Rows.Count, "A").End(xlUp).Row
     
     For CurrProdRow = 2 To ProductStatusLRow
-        CurrProductFamily = LCase(Trim(WS_ProductStatus.Range("A" & CurrProdRow).Value))
-        ActiveType = Trim(WS_ProductStatus.Range("E" & CurrProdRow).Value)
-        CurrProduct = Trim(WS_ProductStatus.Range("D" & CurrProdRow).Value)
+        CurrProductFamily = LCase$(Trim$(WS_ProductStatus.Range("A" & CurrProdRow).Value))
+        ActiveType = Trim$(WS_ProductStatus.Range("E" & CurrProdRow).Value)
+        CurrProduct = Trim$(WS_ProductStatus.Range("D" & CurrProdRow).Value)
         
-        If CurrProductFamily = LCase(WS_CurrentFamily.Name) And ActiveType = STATUS_NEW Then
+        If CurrProductFamily = LCase$(WS_CurrentFamily.Name) And ActiveType = STATUS_NEW Then
             Dim Found As Range
             Set Found = WS_CurrentFamily.Range("D:D").Find(What:=CurrProduct, LookIn:=xlValues, LookAt:=xlWhole)
             If Found Is Nothing Then
-                FamilyLRow = WS_CurrentFamily.Cells(Rows.Count, "A").End(xlUp).Row + 1
+                FamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row + 1
                 WS_ProductStatus.Range("A" & CurrProdRow & ":D" & CurrProdRow).Copy WS_CurrentFamily.Range("A" & FamilyLRow)
             End If
         End If
@@ -336,15 +404,15 @@ End Sub
 Private Sub AppendToSummarySheet(ByVal WS_Family As Worksheet, ByVal WS_Summary As Worksheet)
     Dim FamilyLRow As Long, FamilyLCol As Long
     Dim SummaryLRow As Long, SummaryLastRow As Long
-    FamilyLRow = WS_Family.Cells(Rows.Count, "A").End(xlUp).Row - 1
+    FamilyLRow = WS_Family.Cells(WS_Family.Rows.Count, "A").End(xlUp).Row - 1
     If FamilyLRow < 2 Then Exit Sub
-    FamilyLCol = WS_Family.Cells(1, Columns.Count).End(xlToLeft).Column
-    SummaryLRow = WS_Summary.Cells(Rows.Count, "A").End(xlUp).Row
+    FamilyLCol = WS_Family.Cells(1, WS_Family.Columns.Count).End(xlToLeft).Column
+    SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
     If IsEmpty(WS_Summary.Range("G1").Value) Then
         WS_Family.Range(WS_Family.Cells(1, 7), WS_Family.Cells(1, FamilyLCol)).Copy WS_Summary.Range("G1")
     End If
     WS_Family.Range(WS_Family.Cells(2, 1), WS_Family.Cells(FamilyLRow, FamilyLCol)).Copy WS_Summary.Range("A" & SummaryLRow + 1)
-    SummaryLastRow = WS_Summary.Cells(Rows.Count, "A").End(xlUp).Row
+    SummaryLastRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
     If SummaryLastRow > 1 Then
       WS_Summary.Range("A1", WS_Summary.Cells(SummaryLastRow, FamilyLCol)).Sort Key1:=WS_Summary.Range("D2"), Order1:=xlAscending, Header:=xlYes
     End If
@@ -355,25 +423,24 @@ End Sub
 ' =================================================================================================================
 Private Function BuildLifecycleMap(ByVal WS_ProductStatus As Worksheet, ByVal WS_Log As Worksheet) As Object
     Dim LRow As Long, r As Long
-    Dim ProductID As String, SupersededByID As String
-    ' ***FIXED***: Declare a specific Variant variable for the For Each loop.
-    Dim productKey As Variant
+    Dim ProductID As String
+    Dim productKey As Variant ' ***FIXED***: Use a Variant for the loop variable
     Dim TempLifecycle As cProductLifecycle
     Dim LifecycleDict As Object: Set LifecycleDict = CreateObject("Scripting.Dictionary")
     
-    LRow = WS_ProductStatus.Cells(Rows.Count, "A").End(xlUp).Row
+    LRow = WS_ProductStatus.Cells(WS_ProductStatus.Rows.Count, "A").End(xlUp).Row
 
     ' First Pass: Get the primary status and phase-out details for every product.
     For r = 2 To LRow
-        ProductID = Trim(WS_ProductStatus.Range("D" & r).Value)
+        ProductID = Trim$(WS_ProductStatus.Range("D" & r).Value)
         If Len(ProductID) > 0 And Not LifecycleDict.Exists(ProductID) Then
             Set TempLifecycle = New cProductLifecycle
             With TempLifecycle
                 .ProductID = ProductID
-                .Status = Trim(WS_ProductStatus.Range("E" & r).Value)
+                .Status = Trim$(WS_ProductStatus.Range("E" & r).Value)
                 Dim PhaseOutDate As Variant: PhaseOutDate = WS_ProductStatus.Range("F" & r).Value
                 Dim PhaseOutPercent As Variant: PhaseOutPercent = WS_ProductStatus.Range("G" & r).Value
-                .SupersededByProductID = Trim(WS_ProductStatus.Range("H" & r).Value)
+                .SupersededByProductID = Trim$(WS_ProductStatus.Range("H" & r).Value)
 
                 If .Status = STATUS_PHASE_IN_OUT Or .Status = STATUS_DISCONTINUED Then
                     .IsPhasingOut = True
@@ -386,7 +453,6 @@ Private Function BuildLifecycleMap(ByVal WS_ProductStatus As Worksheet, ByVal WS
     Next r
 
     ' Second Pass: Link the chains. Find the products that are phasing IN.
-    ' ***FIXED***: Use the Variant variable 'productKey' in the For Each loop.
     For Each productKey In LifecycleDict.Keys
         Set TempLifecycle = LifecycleDict.Item(productKey)
         If TempLifecycle.IsPhasingOut And Len(TempLifecycle.SupersededByProductID) > 0 Then
@@ -429,13 +495,13 @@ End Function
 Private Function GetHistoricalSum(ByVal FamilyName As String, ByVal GroupID As String, ByVal WS_Hist As Worksheet, ByVal HistLCol As Long) As Double
     Dim TotalSum As Double, i As Long, r As Long, HistLRow As Long
     Dim CurrentGroupID As String, CurrentFamily As String
-    HistLRow = WS_Hist.Cells(Rows.Count, "A").End(xlUp).Row: TotalSum = 0
+    HistLRow = WS_Hist.Cells(WS_Hist.Rows.Count, "A").End(xlUp).Row: TotalSum = 0
     For r = 2 To HistLRow
-        CurrentFamily = UCase(Trim(WS_Hist.Range("A" & r).Value))
+        CurrentFamily = UCase$(Trim$(WS_Hist.Range("A" & r).Value))
         Dim CurrentProduct As String
-        CurrentProduct = Trim(WS_Hist.Range("D" & r).Value)
+        CurrentProduct = Trim$(WS_Hist.Range("D" & r).Value)
         If InStr(CurrentProduct, "-") > 0 Then CurrentGroupID = Split(CurrentProduct, "-")(0) & Split(CurrentProduct, "-")(1) Else CurrentGroupID = CurrentProduct
-        If CurrentGroupID = GroupID And CurrentFamily = UCase(FamilyName) Then
+        If CurrentGroupID = GroupID And CurrentFamily = UCase$(FamilyName) Then
             For i = 5 To HistLCol
                 TotalSum = TotalSum + Val(WS_Hist.Cells(r, i).Value)
             Next i
@@ -450,16 +516,16 @@ End Function
 Private Function GetHistoricalFamilySum(ByVal FamilyName As String, ByVal WS_Hist As Worksheet, ByVal LifecycleMap As Object) As Double
     Dim TotalSum As Double, r As Long, c As Long, HistLRow As Long
     Dim HSProduct As String, HSFamily As String
-    HistLRow = WS_Hist.Cells(Rows.Count, "A").End(xlUp).Row: TotalSum = 0
+    HistLRow = WS_Hist.Cells(WS_Hist.Rows.Count, "A").End(xlUp).Row: TotalSum = 0
     For r = 2 To HistLRow
-        HSFamily = LCase(Trim(WS_Hist.Range("A" & r).Value))
-        If HSFamily = LCase(FamilyName) Then
-            HSProduct = Trim(WS_Hist.Range("D" & r).Value)
+        HSFamily = LCase$(Trim$(WS_Hist.Range("A" & r).Value))
+        If HSFamily = LCase$(FamilyName) Then
+            HSProduct = Trim$(WS_Hist.Range("D" & r).Value)
             Dim HSLifecycle As cProductLifecycle
             If LifecycleMap.Exists(HSProduct) Then Set HSLifecycle = LifecycleMap.Item(HSProduct)
             
             If Not HSLifecycle Is Nothing Then
-                For c = 5 To WS_Hist.Cells(1, Columns.Count).End(xlToLeft).Column
+                For c = 5 To WS_Hist.Cells(1, WS_Hist.Columns.Count).End(xlToLeft).Column
                     Dim IncludeSale As Boolean: IncludeSale = False
                     If HSLifecycle.Status <> STATUS_DISCONTINUED Then
                         IncludeSale = True
@@ -484,7 +550,7 @@ End Function
 ' =================================================================================================================
 Private Function GetHistoricalMonthCount(ByVal WS_Demand As Worksheet, ByVal WS_Hist As Worksheet) As Long
     Dim HistLCol As Long, CurrCol As Long, Count As Long
-    HistLCol = WS_Hist.Cells(1, Columns.Count).End(xlToLeft).Column: Count = 0
+    HistLCol = WS_Hist.Cells(1, WS_Hist.Columns.Count).End(xlToLeft).Column: Count = 0
     For CurrCol = 5 To HistLCol
         If IsDate(WS_Demand.Cells(1, 2).Value) And IsDate(WS_Hist.Cells(1, CurrCol).Value) Then
             If CDate(WS_Demand.Cells(1, 2).Value) > CDate(WS_Hist.Cells(1, CurrCol).Value) Then Count = Count + 1 Else Exit For
@@ -502,7 +568,7 @@ Private Function GetLastHistoricalColumn(ByVal WS As Worksheet) As Long
     DemandForecastStartDate = WS.Cells(1, 7).Value
     On Error GoTo 0
     If Not IsDate(DemandForecastStartDate) Then GetLastHistoricalColumn = 6: Exit Function
-    LastCol = WS.Cells(1, Columns.Count).End(xlToLeft).Column
+    LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
     GetLastHistoricalColumn = 6
     For i = 7 To LastCol
         If IsDate(WS.Cells(1, i).Value) Then
@@ -554,7 +620,7 @@ End Sub
 
 Private Sub WriteToLog(ByVal WS As Worksheet, ByVal LogType As String, ByVal Message As String)
     Dim NextRow As Long
-    NextRow = WS.Cells(Rows.Count, "A").End(xlUp).Row + 1
+    NextRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row + 1
     WS.Cells(NextRow, "A").Value = Now
     WS.Cells(NextRow, "B").Value = LogType
     WS.Cells(NextRow, "C").Value = Message
