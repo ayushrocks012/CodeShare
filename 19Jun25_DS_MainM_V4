@@ -3,11 +3,8 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14: Architectural Refactoring
-'      - Refactored the main procedure into a clear, step-by-step workflow (Initialize, Load, Process, Finalize).
-'      - Modularized forecast logic: separated "finding sheets" from "processing sheets".
-'      - Modularized formatting logic: broke down FormatEnhancedSheet into smaller, single-purpose subs.
-'      - Encapsulated successor-linking logic into the cProductLifecycle class.
+' V14.1: Bug Fix
+'      - Re-introduced the GetUniqueAffiliates helper function that was accidentally removed during refactoring.
 '
 ' Author:      Ayush Goyal
 ' Date:        19-Jun-2025
@@ -28,7 +25,6 @@ Private dictLifecycleMap As Object, dictAffiliates As Object
 Public Sub UpdateForecast_V7()
     Dim tStart As Double: tStart = Timer
     
-    'REFACTOR #1: Main procedure is now a clean, readable workflow.
     If Not InitializeRun() Then GoTo Main_Exit
     If Not LoadAndValidateData() Then GoTo Main_Exit
     
@@ -184,24 +180,19 @@ End Sub
 '================================================================================================================
 
 Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngHistMonthCount As Long)
-    'REFACTOR #2: This procedure now orchestrates the processing for a single affiliate.
     Dim wsSummary As Worksheet, wsTier As Worksheet
     Dim colTierSheets As Collection
     Dim tTierStart As Double
     
-    'Create the temporary summary sheet
     Set wsSummary = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count)): wsSummary.Name = "TempSummary"
     
-    'Create all the necessary tier sheets
     CreateTierSheets strAffiliate, wsSummary
     
-    'Get a collection of the sheets we just created
     Set colTierSheets = GetAffiliateTierSheets(strAffiliate)
     
     Dim dictTierSumCache As Object: Set dictTierSumCache = CreateObject("Scripting.Dictionary")
     Dim dictSubTierSumCache As Object: Set dictSubTierSumCache = CreateObject("Scripting.Dictionary")
     
-    'Loop through the collection and process each tier sheet
     For Each wsTier In colTierSheets
         tTierStart = Timer
         If wsTier.Cells(wsTier.Rows.Count, "A").End(xlUp).Row > 1 Then
@@ -213,7 +204,6 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
         LogPerformance tTierStart, "Tier Processed: " & wsTier.Name
     Next wsTier
     
-    'Generate the final report file for this affiliate
     GenerateAffiliateReport strAffiliate, wsSummary
 End Sub
 
@@ -331,7 +321,6 @@ Private Function BuildLifecycleMap(ByVal arrStatusData As Variant) As Object
     
     On Error GoTo BuildMap_ErrorHandler
     
-    'First loop: Create all product objects and add them to the map.
     For r = 2 To UBound(arrStatusData, 1)
         If Len(Trim$(arrStatusData(r, COL_ISD))) > 0 And Len(Trim$(arrStatusData(r, COL_AFFILIATE))) > 0 Then
             varCompositeKey = Trim$(arrStatusData(r, COL_AFFILIATE)) & "|" & Trim$(arrStatusData(r, COL_ISD))
@@ -347,8 +336,6 @@ Private Function BuildLifecycleMap(ByVal arrStatusData As Variant) As Object
         End If
     Next r
 
-    'REFACTOR #3: Second loop: Tell each object to link to its successor.
-    'The logic is now encapsulated within the cProductLifecycle class.
     For Each varCompositeKey In dictMap.Keys
         Set objTempLifecycle = dictMap.Item(varCompositeKey)
         objTempLifecycle.LinkSuccessor dictMap
@@ -416,7 +403,6 @@ AddNew_ErrorHandler:
 End Sub
 
 Private Function GetAffiliateTierSheets(ByVal strAffiliate As String) As Collection
-    'REFACTOR #2: New function to find and return all tier sheets for an affiliate.
     Dim colSheets As New Collection
     Dim ws As Worksheet
     Dim strPattern As String: strPattern = SanitizeSheetName(strAffiliate & " - ")
@@ -527,6 +513,46 @@ Private Sub CleanupMemory()
     On Error GoTo 0
 End Sub
 
+Private Sub CacheDemandDataRows(ByVal arrDemand As Variant)
+    On Error Resume Next
+    Set dictDemandCache = CreateObject("Scripting.Dictionary")
+    If Not IsArray(arrDemand) Then GoTo Cache_Exit
+    
+    Dim r As Long, strKey As String
+    For r = 2 To UBound(arrDemand, 1)
+        If UBound(arrDemand, 2) >= COL_TIER Then
+            strKey = LCase$(Trim$(arrDemand(r, COL_AFFILIATE))) & "|" & LCase$(Trim$(arrDemand(r, COL_TIER)))
+            If Not dictDemandCache.Exists(strKey) Then
+                dictDemandCache.Add strKey, r
+            End If
+        End If
+    Next r
+
+Cache_Exit:
+    On Error GoTo 0
+End Sub
+
+Private Function GetDemandDataRow(ByVal strAffiliate As String, ByVal strTier As String) As Long
+    Dim strKey As String: strKey = LCase$(strAffiliate) & "|" & LCase$(strTier)
+    If dictDemandCache.Exists(strKey) Then GetDemandDataRow = dictDemandCache.Item(strKey) Else GetDemandDataRow = 0
+End Function
+
+'BUG FIX: Re-added this function that was accidentally deleted.
+Private Function GetUniqueAffiliates(ByVal arrDemandData As Variant) As Object
+    Dim dict As Object, r As Long
+    Set dict = CreateObject("Scripting.Dictionary")
+    If IsArray(arrDemandData) Then
+        For r = 2 To UBound(arrDemandData, 1)
+            If Not IsEmpty(arrDemandData(r, COL_AFFILIATE)) Then
+                If Not dict.Exists(arrDemandData(r, COL_AFFILIATE)) Then
+                    dict.Add arrDemandData(r, COL_AFFILIATE), 1
+                End If
+            End If
+        Next r
+    End If
+    Set GetUniqueAffiliates = dict
+End Function
+
 Private Function GetHistoricalDataRow(ByVal strAffiliate As String, ByVal strProduct As String, ByVal lngHistColCount As Long) As Variant
     Dim r As Long, c As Long, arrResult() As Variant
     ReDim arrResult(1 To lngHistColCount - 6)
@@ -595,7 +621,7 @@ End Sub
 Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSummary As Worksheet) As Workbook
     Dim wbReport As Workbook, ws As Worksheet
     Dim colSheetsToCopy As Collection: Set colSheetsToCopy = GetAffiliateTierSheets(strAffiliate)
-    colSheetsToCopy.Add wsSummary, Before:=1 'Add summary sheet to the beginning of the collection
+    colSheetsToCopy.Add wsSummary, Before:=1
     
     If colSheetsToCopy.Count < 2 And wsSummary.Cells(wsSummary.Rows.Count, "A").End(xlUp).Row < 2 Then Set CreateOutputWorkbook = Nothing: Exit Function
     
@@ -702,7 +728,6 @@ End Sub
 '================================================================================================================
 
 Private Sub FormatEnhancedSheet(ByVal ws As Worksheet)
-    'REFACTOR #7: This procedure now orchestrates calls to smaller formatting subs.
     If ws.Cells(1, 1).Value = "" Then Exit Sub
     
     Dim lngLastRow As Long, lngLastCol As Long, lngTotalRow As Long
@@ -723,7 +748,6 @@ Private Sub FormatEnhancedSheet(ByVal ws As Worksheet)
 End Sub
 
 Private Function ApplyTotalRow(ByVal ws As Worksheet, ByVal lngLastRow As Long, ByVal lngLastCol As Long) As Long
-    'REFACTOR #7: New sub dedicated to adding and calculating the total row.
     Dim lngTotalRow As Long: lngTotalRow = lngLastRow
     If LCase$(ws.Cells(lngLastRow, "A").Value) <> "total" Then lngTotalRow = lngLastRow + 1
     
@@ -738,7 +762,6 @@ Private Function ApplyTotalRow(ByVal ws As Worksheet, ByVal lngLastRow As Long, 
 End Function
 
 Private Sub ApplyTableStyles(ByVal ws As Worksheet, ByVal lngTotalRow As Long, ByVal lngLastCol As Long)
-    'REFACTOR #7: New sub dedicated to applying fonts, colors, and borders.
     Dim rngHeader As Range, rngTotal As Range, rngFull As Range
     Dim r As Long, lngHistLCol As Long
     
@@ -759,12 +782,10 @@ Private Sub ApplyTableStyles(ByVal ws As Worksheet, ByVal lngTotalRow As Long, B
         .Font.Bold = True: .Interior.Color = RGB(221, 235, 247)
     End With
     
-    'Zebra striping
     For r = 2 To lngTotalRow - 1
         If r Mod 2 = 0 Then ws.Range(ws.Cells(r, 1), ws.Cells(r, lngLastCol)).Interior.Color = RGB(242, 242, 242)
     Next r
     
-    'Historical data shading and border
     lngHistLCol = GetLastHistoricalColumn(ws)
     If lngHistLCol > 8 Then
         ws.Range(ws.Cells(2, 9), ws.Cells(lngTotalRow - 1, lngHistLCol)).Interior.Color = RGB(220, 220, 220)
@@ -773,13 +794,11 @@ Private Sub ApplyTableStyles(ByVal ws As Worksheet, ByVal lngTotalRow As Long, B
         End With
     End If
     
-    'Outer borders
     rngFull.Borders.LineStyle = xlContinuous
     rngFull.Borders.Weight = xlThin
 End Sub
 
 Private Sub ApplyNumberFormats(ByVal ws As Worksheet, ByVal lngTotalRow As Long, ByVal lngLastCol As Long)
-    'REFACTOR #7: New sub dedicated to applying number formatting.
     With ws
         .Range(.Cells(2, 9), .Cells(lngTotalRow, lngLastCol)).NumberFormat = "_(* #,##0_);_(* (#,##0);_(* ""-""??_);_(@_)"
         .Range(.Cells(1, 9), .Cells(1, lngLastCol)).NumberFormat = "mmm-yy"
@@ -846,7 +865,6 @@ Private Function GetLastHistoricalColumn(ByVal ws As Worksheet) As Long
 End Function
 
 Private Function SanitizeSheetName(ByVal strName As String) As String
-    'ROBUSTNESS: Removes characters that are invalid in sheet names and truncates to 31 characters.
     Dim strSanitized As String
     strSanitized = strName
     strSanitized = Replace(strSanitized, ":", "-")
