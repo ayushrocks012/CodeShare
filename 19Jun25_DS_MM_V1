@@ -3,7 +3,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' V3.4: Added robust handling for MonthCount = 0 to permanently fix "Subscript out of range" error.
+' V3.5: Corrected logic for getting DemandStartDate to read from header row (1,3) instead of data rows.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -202,7 +202,7 @@ Private Sub CalculateAndFormatTierSheet(ByVal WS_CurrentTier As Worksheet, ByVal
     Dim TierLRow As Long, HistLCol As Long, MonthCount As Long
     Dim SubTierSum As Double, TierSum As Double
     
-    MonthCount = GetHistoricalMonthCount(AffiliateName, DemandDataVariant, HistoryData)
+    MonthCount = GetHistoricalMonthCount(DemandDataVariant, HistoryData)
     
     Dim DemandLCol As Long, HeaderRow As Variant
     DemandLCol = UBound(DemandDataVariant, 2)
@@ -466,20 +466,21 @@ Private Function CreateOutputWorkbookForAffiliate(ByVal TWB As Workbook, ByVal A
     Set CreateOutputWorkbookForAffiliate = WB
 End Function
 
-Private Function GetHistoricalMonthCount(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant) As Long
-    Dim r As Long, HistLCol As Long, CurrCol As Long, Count As Long, DemandStartDate As Date
+Private Function GetHistoricalMonthCount(ByVal DemandData As Variant, ByVal HistoryData As Variant) As Long
+    '--- FIX: Simplified function to get the global forecast start date correctly ---
+    Dim HistLCol As Long, CurrCol As Long, Count As Long, DemandStartDate As Date
     HistLCol = UBound(HistoryData, 2)
     
-    For r = 2 To UBound(DemandData, 1)
-        If LCase$(Trim$(DemandData(r, 1))) = LCase$(AffiliateName) Then
-            If IsDate(DemandData(r, 3)) Then 'Forecast dates start in Col C
-                DemandStartDate = CDate(DemandData(r, 3))
-                Exit For
-            End If
-        End If
-    Next r
-    If DemandStartDate = 0 Then Exit Function
+    ' The forecast start date is global and in the header row, column C (index 3)
+    If IsDate(DemandData(1, 3)) Then
+        DemandStartDate = CDate(DemandData(1, 3))
+    Else
+        ' If there's no valid date in the header, we can't count historical months.
+        GetHistoricalMonthCount = 0
+        Exit Function
+    End If
 
+    ' Now count the historical months before this single start date
     For CurrCol = 7 To HistLCol 'Historical dates start in Col G
         If IsDate(HistoryData(1, CurrCol)) Then
             If CDate(HistoryData(1, CurrCol)) < DemandStartDate Then Count = Count + 1 Else Exit For
@@ -513,11 +514,11 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     Combined(1) = "Affiliate": Combined(2) = "Forecast Tier": Combined(3) = "Forecast Sub-Tier": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
     
     'This loop will not run if MonthCount is 0, which is correct
-    For c = 1 To UBound(HistHeaders)
-        If UBound(HistHeaders) > 0 Then 'Extra check for safety
+    If MonthCount > 0 Then
+        For c = 1 To UBound(HistHeaders)
             Combined(c + 8) = HistHeaders(c)
-        End If
-    Next c
+        Next c
+    End If
     
     For c = 3 To DemandLCol: Combined(c + 8 + MonthCount - 2) = DemandHeaders(c): Next c
     GetCombinedHeaderRow = Combined
