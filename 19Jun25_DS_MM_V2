@@ -3,7 +3,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' V3.7: Corrected summary sheet totals and restored advanced V2 formatting.
+' V3.8: Fixed forecast date header formatting to ensure "mmm-yy" is applied correctly.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -496,6 +496,7 @@ Private Function GetHistoricalMonthCount(ByVal DemandData As Variant, ByVal Hist
     GetHistoricalMonthCount = Count
 End Function
 
+'--- FIX: Ensured forecast date headers are treated as dates for correct formatting ---
 Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long, ByVal WS_Log As Worksheet) As Variant
     WriteToLog WS_Log, "Info", "GetCombinedHeaderRow called for Affiliate: " & AffiliateName & " with MonthCount: " & MonthCount
 
@@ -506,12 +507,8 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     End If
     
     Dim DemandHeaders() As Variant
-    For r = 1 To UBound(DemandData, 1) ' Search from header row
-        If LCase$(Trim$(DemandData(r, 1))) = LCase$(AffiliateName) Or r = 1 Then
-            DemandHeaders = Application.WorksheetFunction.Index(DemandData, 1, 0)
-            Exit For
-        End If
-    Next r
+    'Get header row (row 1) from the Demand Forecast Data
+    DemandHeaders = Application.WorksheetFunction.Index(DemandData, 1, 0)
     
     Dim Combined() As Variant: ReDim Combined(1 To 8 + MonthCount + (DemandLCol - 2))
     Combined(1) = "Affiliate": Combined(2) = "Forecast Tier": Combined(3) = "Forecast Sub-Tier": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
@@ -520,42 +517,40 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
         For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
     End If
     
-    For c = 3 To DemandLCol: Combined(c + 8 + MonthCount - 2) = DemandHeaders(c): Next c
+    ' Loop through the demand headers, ensuring dates are handled correctly
+    For c = 3 To DemandLCol
+        Dim headerValue As Variant
+        headerValue = DemandHeaders(c)
+        ' Check if the value is numeric (which dates are) and convert to ensure it's a date type
+        If IsNumeric(headerValue) Then
+            Combined(c + 8 + MonthCount - 2) = CDate(headerValue)
+        Else
+            Combined(c + 8 + MonthCount - 2) = headerValue
+        End If
+    Next c
+    
     GetCombinedHeaderRow = Combined
 End Function
 
-'--- FIX: Corrected logic to NOT copy the total row from tier sheets ---
 Private Sub AppendToSummarySheet(ByVal WS_Tier As Worksheet, ByVal WS_Summary As Worksheet)
     Dim TierLRow As Long, TierLCol As Long, SummaryLRow As Long
     
-    'Find the last row, which includes the "TOTAL" row
     TierLRow = WS_Tier.Cells(WS_Tier.Rows.Count, "A").End(xlUp).Row
-    
-    'If the last row is the total row, only copy data up to the row before it
-    If LCase$(Trim$(WS_Tier.Cells(TierLRow, 1).Value)) = "total" Then
-        TierLRow = TierLRow - 1
-    End If
-    
-    'If there are no data rows (only a header), exit the sub
+    If LCase$(Trim$(WS_Tier.Cells(TierLRow, 1).Value)) = "total" Then TierLRow = TierLRow - 1
     If TierLRow < 2 Then Exit Sub
     
     TierLCol = WS_Tier.Cells(1, WS_Tier.Columns.Count).End(xlToLeft).Column
     SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
     
-    'Copy headers if the summary sheet is empty
     If IsEmpty(WS_Summary.Range("I1").Value) Then
         WS_Tier.Range("I1", WS_Tier.Cells(1, TierLCol)).Copy WS_Summary.Range("I1")
     End If
     
-    'Define the data range, EXCLUDING the header and total row
     Dim DataRange As Range
     Set DataRange = WS_Tier.Range("A2", WS_Tier.Cells(TierLRow, TierLCol))
-    
-    'Copy the data to the summary sheet
     WS_Summary.Range("A" & SummaryLRow + 1).Resize(DataRange.Rows.Count, DataRange.Columns.Count).Value = DataRange.Value
 End Sub
 
-'--- FIX: Replaced with advanced formatting from V2, adapted for new V3 column structure ---
 Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
     If WS.Cells(1, 1).Value = "" Then Exit Sub
     Dim LastRow As Long, LastCol As Long, TotalRow As Long, r As Long, i As Long, HistLCol As Long
@@ -565,7 +560,6 @@ Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
     TotalRow = LastRow
     If LCase$(WS.Cells(LastRow, 1).Value) <> "total" Then TotalRow = LastRow + 1
 
-    ' --- 1. ADD TOTALS ---
     WS.Cells(TotalRow, 1).Value = "TOTAL"
     For i = 9 To LastCol 'Totals start at column I
         On Error Resume Next
@@ -573,7 +567,6 @@ Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
         On Error GoTo 0
     Next i
 
-    ' --- 2. ENHANCED AESTHETICS (from V2) ---
     Dim HeaderRange As Range, DataRange As Range, TotalRange As Range, FullRange As Range
     Set HeaderRange = WS.Range(WS.Cells(1, 1), WS.Cells(1, LastCol))
     If LCase$(WS.Cells(LastRow, 1).Value) = "total" Then
@@ -606,10 +599,8 @@ Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
     Next r
     
     HistLCol = GetLastHistoricalColumn(WS)
-    ' Add grey background to historical data
     If HistLCol > 8 Then
         WS.Range(WS.Cells(2, 9), WS.Cells(LastRow, HistLCol)).Interior.Color = RGB(220, 220, 220)
-        ' Add vertical border after last historical month
         With WS.Range(WS.Cells(1, HistLCol), WS.Cells(TotalRow, HistLCol)).Borders(xlEdgeRight)
             .LineStyle = xlContinuous
             .Color = RGB(47, 85, 151) ' Dark Blue
@@ -621,11 +612,9 @@ Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
     FullRange.Borders.Weight = xlThin
     FullRange.Borders.Color = RGB(210, 210, 210)
     
-    ' Number formatting
     WS.Range(WS.Cells(2, 9), WS.Cells(TotalRow, LastCol)).NumberFormat = "_(* #,##0_);_(* (#,##0);_(* ""-""??_);_(@_)"
     WS.Range(WS.Cells(1, 9), WS.Cells(1, LastCol)).NumberFormat = "mmm-yy"
     
-    ' --- 3. SORTING, COLUMN WIDTH AND FREEZE PANES ---
     WS.Cells.EntireColumn.AutoFit
     If WS.Name = SUMMARY_SHEET_PREFIX Then
         WS.Range("A1", WS.Cells(TotalRow, LastCol)).Sort Key1:=WS.Range("F2"), Order1:=xlAscending, Key2:=WS.Range("B2"), Order2:=xlAscending, Header:=xlYes
