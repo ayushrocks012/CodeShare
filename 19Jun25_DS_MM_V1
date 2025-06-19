@@ -3,7 +3,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' V3.2: Complete version for Multiple Affiliates and updated terminology. Corrected compiler error.
+' V3.3: Fixed "Subscript out of range" error when MonthCount is zero. Added logging for troubleshooting.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -206,7 +206,7 @@ Private Sub CalculateAndFormatTierSheet(ByVal WS_CurrentTier As Worksheet, ByVal
     
     Dim DemandLCol As Long, HeaderRow As Variant
     DemandLCol = UBound(DemandDataVariant, 2)
-    HeaderRow = GetCombinedHeaderRow(AffiliateName, DemandDataVariant, HistoryData, MonthCount, DemandLCol)
+    HeaderRow = GetCombinedHeaderRow(AffiliateName, DemandDataVariant, HistoryData, MonthCount, DemandLCol, WS_Log) 'Pass Log sheet
     
     AddNewProductsToTierSheet WS_CurrentTier, AffiliateName, StatusData
     TierLRow = WS_CurrentTier.Cells(WS_CurrentTier.Rows.Count, "A").End(xlUp).Row
@@ -282,7 +282,7 @@ Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As 
         ProductID = Trim$(StatusData(r, 6))
         CompositeKey = AffiliateName & "|" & ProductID
         
-        If Len(ProductID) > 0 And Not LifecycleDict.Exists(CompositeKey) Then
+        If Len(ProductID) > 0 And Not LifecycleDict.Exists(CStr(CompositeKey)) Then
             Set TempLifecycle = New cProductLifecycle
             With TempLifecycle
                 .Affiliate = AffiliateName
@@ -488,9 +488,14 @@ Private Function GetHistoricalMonthCount(ByVal AffiliateName As String, ByVal De
     GetHistoricalMonthCount = Count
 End Function
 
-Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
-    Dim HistHeaders() As Variant, r As Long, c As Long: ReDim HistHeaders(1 To MonthCount)
+Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long, ByVal WS_Log As Worksheet) As Variant
+    '--- TROUBLESHOOTING ---
+    WriteToLog WS_Log, "Info", "GetCombinedHeaderRow called for Affiliate: " & AffiliateName & " with MonthCount: " & MonthCount
+
+    Dim HistHeaders() As Variant, r As Long, c As Long
+    '--- FIX: Check if MonthCount > 0 before ReDim ---
     If MonthCount > 0 Then
+        ReDim HistHeaders(1 To MonthCount)
         For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
     End If
     
@@ -504,9 +509,11 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     
     Dim Combined() As Variant: ReDim Combined(1 To 8 + MonthCount + (DemandLCol - 2))
     Combined(1) = "Affiliate": Combined(2) = "Forecast Tier": Combined(3) = "Forecast Sub-Tier": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
+    
     If MonthCount > 0 Then
         For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
     End If
+    
     For c = 3 To DemandLCol: Combined(c + 8 + MonthCount - 2) = DemandHeaders(c): Next c
     GetCombinedHeaderRow = Combined
 End Function
