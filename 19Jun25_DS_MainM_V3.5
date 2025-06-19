@@ -1,0 +1,919 @@
+'@Folder("Forecasting")
+Option Explicit
+
+'================================================================================================================
+' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
+' V13: Production Hardening & Robustness Pass
+'      - Added graceful exit for user interruption (Esc key).
+'      - Implemented comprehensive data validation at startup:
+'        - Checks for ReadOnly workbook state.
+'        - Validates that required sheets exist and contain data.
+'        - Validates key data columns (ISD, Affiliate) and logs warnings for blanks.
+'        - Detects and logs duplicate product keys.
+'      - Added sanitization for sheet names to prevent errors.
+'      - Added explicit IsNumeric and IsDate checks to prevent type mismatch errors.
+'
+' Author:      [Your Name]
+' Date:        [Current Date]
+'================================================================================================================
+
+'--- 64-BIT COMPATIBILITY NOTE ---
+' The current code does not use Windows API calls, so Long is sufficient.
+' If API calls involving pointers or handles are added in the future,
+' declare those variables as LongPtr and use conditional compilation.
+' Example: #If VBA7 Then Declare PtrSafe Function... #Else Declare Function... #End If
+
+'--- PRIVATE MODULE-LEVEL VARIABLES ---
+Private wsLog As Worksheet
+Private lngWarningCount As Long
+Private dictDemandCache As Object 'For caching demand row lookups to boost performance.
+Private arrStatusData As Variant, arrHistoryData As Variant, arrDemandData As Variant
+Private dictLifecycleMap As Object, dictAffiliates As Object
+
+'================================================================================================================
+' 1. Main Public Orchestrator
+'================================================================================================================
+
+Public Sub UpdateForecast_V7()
+    Dim wbThis As Workbook
+    Dim tStart As Double: tStart = Timer
+    Dim tCheckpoint As Double
+    
+    'ROBUSTNESS: Handle user pressing Esc key
+    Application.EnableCancelKey = xlErrorHandler
+    On Error GoTo Main_ErrorHandler
+    
+    'ROBUSTNESS: Check for read-only state before starting
+    If ThisWorkbook.ReadOnly Then
+        MsgBox "This workbook is in Read-Only mode. Please save a copy or enable editing to run the forecast.", vbCritical, "Process Halted"
+        Exit Sub
+    End If
+    
+    tCheckpoint = Timer
+    Set wbThis = InitializeEnvironment()
+    LogPerformance tCheckpoint, "Initialize Environment"
+    
+    LoadAllData wbThis
+    LogPerformance tCheckpoint, "Load All Source Data"
+
+    Set dictLifecycleMap = BuildLifecycleMap(arrStatusData)
+    LogPerformance tCheckpoint, "Build Lifecycle Map"
+
+    Set dictAffiliates = GetUniqueAffiliates(arrDemandData)
+    CacheDemandDataRows arrDemandData
+    LogPerformance tCheckpoint, "Cache Demand & Affiliate Data"
+
+    ProcessAllAffiliates wbThis, dictLifecycleMap
+    LogPerformance tCheckpoint, "Process All Affiliates (Full Calculation)"
+
+Main_Exit:
+    CleanupEnvironment tStart, IIf(Not dictAffiliates Is Nothing, dictAffiliates.Count, 0)
+    Exit Sub
+    
+Main_ErrorHandler:
+    'ROBUSTNESS: Handle user interruption gracefully.
+    If Err.Number = 18 Then
+        MsgBox "Forecast process was cancelled by the user.", vbExclamation, "Process Cancelled"
+    Else
+        WriteToLog "FATAL", "UpdateForecast_V7", "A critical error occurred: " & Err.Description & " (Error No. " & Err.Number & ")"
+    End If
+    Resume Main_Exit
+End Sub
+
+'================================================================================================================
+' 2. Architectural Stages (Setup, Load, Process, Cleanup)
+'================================================================================================================
+
+Private Function InitializeEnvironment() As Workbook
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    Application.StatusBar = "Initializing environment..."
+    
+    lngWarningCount = 0
+    Set InitializeEnvironment = ThisWorkbook
+    
+    On Error Resume Next
+    ThisWorkbook.Sheets(SHEET_LOG).Delete
+    On Error GoTo 0
+    
+    Set wsLog = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    InitializeLogSheet wsLog
+End Function
+
+Private Sub LoadAllData(ByVal wb As Workbook)
+    On Error GoTo Load_ErrorHandler
+    Application.StatusBar = "Loading all source data into memory..."
+    
+    arrStatusData = LoadDataToArray(wb.Sheets(SHEET_STATUS))
+    arrHistoryData = LoadDataToArray(wb.Sheets(SHEET_HISTORY))
+    arrDemandData = LoadDataToArray(wb.Sheets(SHEET_DEMAND))
+    
+    'ROBUSTNESS: Validate that all data sheets were loaded successfully.
+    If Not IsArray(arrStatusData) Or UBound(arrStatusData, 1) < 2 Then
+        Err.Raise vbObjectError + 515, "LoadAllData", "The '" & SHEET_STATUS & "' sheet is missing, empty, or invalid."
+    End If
+    If Not IsArray(arrHistoryData) Or UBound(arrHistoryData, 1) < 2 Then
+        Err.Raise vbObjectError + 516, "LoadAllData", "The '" & SHEET_HISTORY & "' sheet is missing, empty, or invalid."
+    End If
+    If Not IsArray(arrDemandData) Or UBound(arrDemandData, 1) < 2 Then
+        Err.Raise vbObjectError + 517, "LoadAllData", "The '" & SHEET_DEMAND & "' sheet is missing, empty, or invalid."
+    End If
+    
+    WriteToLog "Info", "LoadAllData", "All source data loaded successfully."
+    Exit Sub
+    
+Load_ErrorHandler:
+    Dim strErrorMsg As String
+    strErrorMsg = "Failed to load source sheets. " & vbCrLf & vbCrLf & Err.Description
+    WriteToLog "FATAL", "LoadAllData", strErrorMsg
+    MsgBox strErrorMsg, vbCritical, "Process Halted"
+    'Raise an error to stop the execution and trigger the main cleanup.
+    Err.Raise Err.Number, "LoadAllData", Err.Description
+End Sub
+
+Private Sub ProcessAllAffiliates(ByVal wb As Workbook, ByVal dictLifecycle As Object)
+    Dim varAffiliateKey As Variant, strCurrentAffiliate As String
+    Dim wsSummary As Worksheet
+    Dim lngAffiliateCounter As Long, lngTotalAffiliates As Long
+    
+    lngTotalAffiliates = dictAffiliates.Count
+    If lngTotalAffiliates = 0 Then
+        WriteToLog "Warning", "ProcessAllAffiliates", "No affiliates found in Demand Forecast sheet. Nothing to process."
+        Exit Sub
+    End If
+    
+    Dim lngHistMonthCount As Long
+    lngHistMonthCount = GetHistoricalMonthCount(arrDemandData, arrHistoryData)
+    
+    For Each varAffiliateKey In dictAffiliates.Keys
+        lngAffiliateCounter = lngAffiliateCounter + 1
+        strCurrentAffiliate = CStr(varAffiliateKey)
+        On Error GoTo Affiliate_ErrorHandler
+        
+        If Not DEBUG_MODE Then
+            Application.StatusBar = "Processing Affiliate: " & strCurrentAffiliate & " (" & lngAffiliateCounter & " of " & lngTotalAffiliates & ")..."
+        End If
+        WriteToLog "Info", "ProcessAllAffiliates", "Starting process for affiliate: " & strCurrentAffiliate
+        
+        Set wsSummary = wb.Sheets.Add(After:=wb.Sheets(wb.Sheets.Count)): wsSummary.Name = "TempSummary"
+        CreateTierSheets wb, strCurrentAffiliate, wsSummary
+        
+        ProcessForecastForAffiliate wb, strCurrentAffiliate, wsSummary, dictLifecycle, lngHistMonthCount
+        
+        GenerateAffiliateReport wb, strCurrentAffiliate, wsSummary
+        
+        GoTo Next_Affiliate
+        
+Affiliate_ErrorHandler:
+        lngWarningCount = lngWarningCount + 1
+        WriteToLog "Error", "ProcessAllAffiliates", "Failed to process affiliate '" & strCurrentAffiliate & "'. Error: " & Err.Description
+        
+Next_Affiliate:
+        CleanupAffiliateSheets wb, strCurrentAffiliate
+        On Error GoTo 0
+    Next varAffiliateKey
+End Sub
+
+Private Sub GenerateAffiliateReport(ByVal wb As Workbook, ByVal strAffiliate As String, ByVal wsSummary As Worksheet)
+    On Error GoTo Report_ErrorHandler
+    
+    Dim wbReport As Workbook
+    Set wbReport = CreateOutputWorkbook(wb, strAffiliate, wsSummary)
+    
+    If Not wbReport Is Nothing Then
+        If Not DEBUG_MODE Then
+            Dim strFilePath As String
+            strFilePath = GetOutputFilePath(wb.Path, strAffiliate)
+            Application.StatusBar = "Saving final report for " & strAffiliate & "..."
+            wbReport.SaveAs strFilePath
+            wbReport.Close SaveChanges:=False
+            WriteToLog "Info", "GenerateAffiliateReport", "Report saved for " & strAffiliate & " to " & strFilePath
+        Else
+            WriteToLog "Debug", "GenerateAffiliateReport", "DEBUG MODE: Report for " & strAffiliate & " created but not saved/closed."
+        End If
+    End If
+    
+    Exit Sub
+    
+Report_ErrorHandler:
+    lngWarningCount = lngWarningCount + 1
+    WriteToLog "Error", "GenerateAffiliateReport", "Could not generate or save report for '" & strAffiliate & "'. Error: " & Err.Description
+End Sub
+
+Private Sub CleanupEnvironment(ByVal dteStartTime As Double, ByVal lngAffiliateCount As Long)
+    CleanupMemory
+    
+    'Reset all application settings, even if an error occurred.
+    Application.StatusBar = False
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+    'Reset the cancel key behavior
+    Application.EnableCancelKey = xlInterrupt
+    
+    Dim strMessage As String
+    strMessage = "Forecast process completed in " & Format$(Timer - dteStartTime, "#,##0.00") & " seconds." & vbCrLf & vbCrLf
+    strMessage = strMessage & "Affiliates Processed: " & lngAffiliateCount & vbCrLf
+    strMessage = strMessage & "Warnings: " & lngWarningCount & " (see Log sheet for details)"
+    
+    MsgBox strMessage, IIf(lngWarningCount > 0, vbExclamation, vbInformation), "Forecast Update Complete"
+End Sub
+
+'================================================================================================================
+' 3. Core Logic & Calculation Functions
+'================================================================================================================
+
+Private Sub ProcessForecastForAffiliate(ByVal wb As Workbook, ByVal strAffiliate As String, ByVal wsSummary As Worksheet, ByVal dictLifecycle As Object, ByVal lngHistMonthCount As Long)
+    Dim wsTier As Worksheet
+    Dim objTierSheets As Object: Set objTierSheets = CreateObject("System.Collections.ArrayList")
+    Dim lngSheetCounter As Long, lngTotalSheets As Long
+    
+    Dim dictTierSumCache As Object: Set dictTierSumCache = CreateObject("Scripting.Dictionary")
+    Dim dictSubTierSumCache As Object: Set dictSubTierSumCache = CreateObject("Scripting.Dictionary")
+    
+    For Each wsTier In wb.Worksheets
+        If InStr(1, wsTier.Name, strAffiliate & " - ") > 0 Then
+            objTierSheets.Add wsTier.Name
+        End If
+    Next wsTier
+    lngTotalSheets = objTierSheets.Count
+    
+    For Each wsTier In wb.Worksheets
+        If InStr(1, wsTier.Name, strAffiliate & " - ") > 0 Then
+            lngSheetCounter = lngSheetCounter + 1
+            Dim strTierName As String: strTierName = Replace(wsTier.Name, strAffiliate & " - ", "")
+            
+            Dim tTierStart As Double: tTierStart = Timer
+            Application.StatusBar = "Processing Tier: " & strTierName & " (" & lngSheetCounter & " of " & lngTotalSheets & ")..."
+            
+            If wsTier.Cells(wsTier.Rows.Count, "A").End(xlUp).Row > 1 Then
+                CalculateAndFormatTierSheet wsTier, strAffiliate, dictLifecycle, lngHistMonthCount, dictTierSumCache, dictSubTierSumCache
+                AppendToSummarySheet wsTier, wsSummary
+            Else
+                WriteToLog "Info", "ProcessForecastForAffiliate", "Skipping empty tier sheet: " & wsTier.Name
+            End If
+            
+            LogPerformance tTierStart, "Tier Processed: " & strTierName
+        End If
+    Next wsTier
+End Sub
+
+Private Sub CalculateAndFormatTierSheet(ByVal wsTier As Worksheet, ByVal strAffiliate As String, ByVal dictLifecycle As Object, ByVal lngHistMonthCount As Long, ByVal dictTierSumCache As Object, ByVal dictSubTierSumCache As Object)
+    Dim arrOutput() As Variant
+    Dim strCurrentProductID As String
+    
+    On Error GoTo Calc_ErrorHandler
+    
+    arrOutput = BuildTierOutputArray(wsTier, strAffiliate, dictLifecycle, strCurrentProductID, lngHistMonthCount, dictTierSumCache, dictSubTierSumCache)
+    If Not IsArray(arrOutput) Then Exit Sub
+    
+    wsTier.Cells.Clear
+    wsTier.Range("A1").Resize(UBound(arrOutput, 1), UBound(arrOutput, 2)).Value = arrOutput
+    
+    If Not DEBUG_MODE Then
+        FormatEnhancedSheet wsTier
+    End If
+    
+    Exit Sub
+    
+Calc_ErrorHandler:
+    lngWarningCount = lngWarningCount + 1
+    Dim strContext As String
+    If strCurrentProductID <> "" Then strContext = " (last processed product: " & strCurrentProductID & ")"
+    WriteToLog "Error", "CalculateAndFormatTierSheet", "Failed on sheet '" & wsTier.Name & "'" & strContext & ". Error: " & Err.Description
+End Sub
+
+Private Function BuildTierOutputArray(ByVal wsTier As Worksheet, ByVal strAffiliate As String, ByVal dictLifecycle As Object, ByRef strErrorProductID As String, ByVal lngMonthCount As Long, ByVal dictTierSumCache As Object, ByVal dictSubTierSumCache As Object) As Variant
+    Dim lngTierLRow As Long
+    Dim r As Long, c As Long
+    
+    Dim arrHeaderRow As Variant: arrHeaderRow = GetCombinedHeaderRow(lngMonthCount)
+    
+    AddNewProductsToTierSheet wsTier, strAffiliate
+    lngTierLRow = wsTier.Cells(wsTier.Rows.Count, COL_AFFILIATE).End(xlUp).Row
+    If lngTierLRow < 2 Then Exit Function
+    
+    Dim arrOutput() As Variant: ReDim arrOutput(1 To lngTierLRow, 1 To UBound(arrHeaderRow))
+    
+    For c = 1 To UBound(arrHeaderRow): arrOutput(1, c) = arrHeaderRow(c): Next c
+    For r = 2 To lngTierLRow
+        For c = 1 To 6: arrOutput(r, c) = wsTier.Cells(r, c).Value: Next c
+    Next r
+    
+    For r = 2 To lngTierLRow
+        Dim strProduct As String
+        strProduct = arrOutput(r, COL_ISD)
+        strErrorProductID = strProduct
+        
+        Dim strCompositeKey As String: strCompositeKey = strAffiliate & "|" & strProduct
+        Dim objLifecycle As cProductLifecycle
+        If dictLifecycle.Exists(strCompositeKey) Then Set objLifecycle = dictLifecycle.Item(strCompositeKey) Else Set objLifecycle = New cProductLifecycle
+        
+        arrOutput(r, COL_STATUS) = GetStatusString(objLifecycle.Status)
+        If objLifecycle.PhaseOutDate > 0 Then arrOutput(r, COL_PHASE_OUT_DATE) = objLifecycle.PhaseOutDate
+        Dim arrHistoricSales As Variant: arrHistoricSales = GetHistoricalDataRow(strAffiliate, strProduct, lngMonthCount + 6)
+        For c = 1 To UBound(arrHistoricSales): arrOutput(r, c + 8) = arrHistoricSales(c): Next c
+        
+        PopulateForecastValues arrOutput, r, objLifecycle, strAffiliate, arrOutput(r, COL_TIER), dictLifecycle, lngMonthCount, dictTierSumCache, dictSubTierSumCache
+        
+        Set objLifecycle = Nothing
+    Next r
+    
+    strErrorProductID = ""
+    BuildTierOutputArray = arrOutput
+End Function
+
+Private Sub PopulateForecastValues(ByRef arrOutput As Variant, ByVal lngRow As Long, ByVal objLifecycle As cProductLifecycle, ByVal strAffiliate As String, ByVal strTier As String, ByVal dictLifecycle As Object, ByVal lngMonthCount As Long, ByVal dictTierSumCache As Object, ByVal dictSubTierSumCache As Object)
+    Dim lngDemandRow As Long, c As Long
+    Dim dblSubTierSum As Double, dblTierSum As Double
+    Dim strSubTierKey As String, strTierKey As String
+    
+    strSubTierKey = strAffiliate & "|" & strTier & "|" & arrOutput(lngRow, COL_SUB_TIER)
+    If dictSubTierSumCache.Exists(strSubTierKey) Then
+        dblSubTierSum = dictSubTierSumCache.Item(strSubTierKey)
+    Else
+        dblSubTierSum = GetHistoricalSubTierSum(strAffiliate, strTier, arrOutput(lngRow, COL_SUB_TIER), lngMonthCount + 6)
+        dictSubTierSumCache.Add strSubTierKey, dblSubTierSum
+    End If
+    
+    strTierKey = strAffiliate & "|" & strTier
+    If dictTierSumCache.Exists(strTierKey) Then
+        dblTierSum = dictTierSumCache.Item(strTierKey)
+    Else
+        dblTierSum = GetHistoricalTierSum(strAffiliate, strTier, dictLifecycle, lngMonthCount + 6)
+        dictTierSumCache.Add strTierKey, dblTierSum
+    End If
+    
+    lngDemandRow = GetDemandDataRow(strAffiliate, strTier)
+    
+    If lngDemandRow > 0 Then
+        Dim lngForecastStartCol As Long
+        lngForecastStartCol = 8 + lngMonthCount + 1
+        
+        For c = lngForecastStartCol To UBound(arrOutput, 2)
+            arrOutput(lngRow, c) = CalculateForecastValue(objLifecycle, arrOutput(1, c), dblSubTierSum, dblTierSum, arrDemandData(lngDemandRow, (c - lngForecastStartCol) + COL_DEMAND_START))
+        Next c
+    End If
+End Sub
+
+Private Function CalculateForecastValue(ByVal objLifecycle As cProductLifecycle, ByVal dteForecastDate As Date, ByVal dblSubTierSum As Double, ByVal dblTierSum As Double, ByVal dblTierDemand As Double) As Double
+    Dim dblBaseForecast As Double
+    If dblTierSum > 0 Then
+        'ROBUSTNESS: Ensure tier demand is numeric before calculation
+        If IsNumeric(dblTierDemand) Then
+            dblBaseForecast = (dblSubTierSum * CDbl(dblTierDemand)) / dblTierSum
+        End If
+    End If
+    CalculateForecastValue = dblBaseForecast * objLifecycle.GetForecastMultiplier(dteForecastDate)
+End Function
+
+Private Function BuildLifecycleMap(ByVal arrStatusData As Variant) As Object
+    Dim r As Long, strProductID As String, strSupersededByKey As String
+    Dim varCompositeKey As Variant, objTempLifecycle As cProductLifecycle, dictMap As Object
+    Set dictMap = CreateObject("Scripting.Dictionary")
+    
+    On Error GoTo BuildMap_ErrorHandler
+    
+    For r = 2 To UBound(arrStatusData, 1)
+        'ROBUSTNESS: Validate that key fields are not empty before creating a key.
+        If Len(Trim$(arrStatusData(r, COL_ISD))) > 0 And Len(Trim$(arrStatusData(r, COL_AFFILIATE))) > 0 Then
+            varCompositeKey = Trim$(arrStatusData(r, COL_AFFILIATE)) & "|" & Trim$(arrStatusData(r, COL_ISD))
+            
+            'ROBUSTNESS: Log a warning if a duplicate product key is found.
+            If dictMap.Exists(CStr(varCompositeKey)) Then
+                WriteToLog "Warning", "BuildLifecycleMap", "Duplicate product key found and ignored in 'Product Status' sheet, row " & r & ": '" & varCompositeKey & "'"
+            Else
+                Set objTempLifecycle = New cProductLifecycle
+                objTempLifecycle.Init arrStatusData, r
+                dictMap.Add CStr(varCompositeKey), objTempLifecycle
+            End If
+        Else
+            WriteToLog "Warning", "BuildLifecycleMap", "Missing Affiliate or I-S-D in 'Product Status' sheet, row " & r & ". Row skipped."
+        End If
+    Next r
+
+    For Each varCompositeKey In dictMap.Keys
+        Set objTempLifecycle = dictMap.Item(varCompositeKey)
+        If objTempLifecycle.IsPhasingOut And Len(objTempLifecycle.SupersededByProductID) > 0 Then
+            strSupersededByKey = objTempLifecycle.Affiliate & "|" & objTempLifecycle.SupersededByProductID
+            If dictMap.Exists(strSupersededByKey) Then
+                Dim objSuccessor As cProductLifecycle
+                Set objSuccessor = dictMap.Item(strSupersededByKey)
+                objSuccessor.IsPhasingIn = True
+                objSuccessor.PhaseInDate = objTempLifecycle.PhaseOutDate
+                objSuccessor.PhaseInPercent = 1 - objTempLifecycle.PhaseOutPercent
+            Else
+                lngWarningCount = lngWarningCount + 1
+                WriteToLog "Warning", "BuildLifecycleMap", "Product '" & objTempLifecycle.ProductID & "' superseded by '" & objTempLifecycle.SupersededByProductID & "', but successor not found for affiliate '" & objTempLifecycle.Affiliate & "'."
+            End If
+        End If
+    Next varCompositeKey
+    
+    Set BuildLifecycleMap = dictMap
+    Exit Function
+    
+BuildMap_ErrorHandler:
+    WriteToLog "FATAL", "BuildLifecycleMap", "Error building lifecycle map: " & Err.Description
+    Err.Raise vbObjectError + 514, "BuildLifecycleMap", "Could not build lifecycle map."
+End Function
+
+'================================================================================================================
+' 4. Utility & Helper Functions
+'================================================================================================================
+
+Private Sub AddNewProductsToTierSheet(ByVal wsTier As Worksheet, ByVal strAffiliate As String)
+    Dim lngStatusLRow As Long, lngTierLRow As Long, r As Long
+    Dim strTierName As String, strProduct As String, strStatus As String
+    Dim dictExistingProducts As Object
+    
+    On Error GoTo AddNew_ErrorHandler
+    
+    Set dictExistingProducts = CreateObject("Scripting.Dictionary")
+    lngTierLRow = wsTier.Cells(wsTier.Rows.Count, COL_ISD).End(xlUp).Row
+    If lngTierLRow > 1 Then
+        Dim arrExisting As Variant
+        arrExisting = wsTier.Range("F2:F" & lngTierLRow).Value
+        
+        If IsArray(arrExisting) Then
+            For r = 1 To UBound(arrExisting, 1)
+                If Not dictExistingProducts.Exists(arrExisting(r, 1)) Then
+                    dictExistingProducts.Add arrExisting(r, 1), 1
+                End If
+            Next r
+        ElseIf Not IsEmpty(arrExisting) Then
+            If Not dictExistingProducts.Exists(arrExisting) Then
+                dictExistingProducts.Add arrExisting, 1
+            End If
+        End If
+    End If
+    
+    lngStatusLRow = UBound(arrStatusData, 1)
+    strTierName = Replace(wsTier.Name, strAffiliate & " - ", "")
+    
+    For r = 2 To lngStatusLRow
+        If LCase$(Trim$(arrStatusData(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrStatusData(r, COL_TIER))) = LCase$(strTierName) Then
+            strStatus = Trim$(arrStatusData(r, COL_STATUS))
+            If strStatus = GetStatusString(psNew) Then
+                strProduct = Trim$(arrStatusData(r, COL_ISD))
+                
+                If Not dictExistingProducts.Exists(strProduct) Then
+                    lngTierLRow = wsTier.Cells(wsTier.Rows.Count, "A").End(xlUp).Row + 1
+                    wsTier.Range("A" & lngTierLRow).Resize(1, 6).Value = Array(arrStatusData(r, 1), arrStatusData(r, 2), arrStatusData(r, 3), arrStatusData(r, 4), arrStatusData(r, 5), arrStatusData(r, 6))
+                    dictExistingProducts.Add strProduct, 1
+                End If
+            End If
+        End If
+    Next r
+    Exit Sub
+    
+AddNew_ErrorHandler:
+    lngWarningCount = lngWarningCount + 1
+    WriteToLog "Error", "AddNewProductsToTierSheet", "Failed to add new products to '" & wsTier.Name & "'. Error: " & Err.Description
+End Sub
+
+Private Sub CacheDemandDataRows(ByVal arrDemand As Variant)
+    On Error Resume Next
+    Set dictDemandCache = CreateObject("Scripting.Dictionary")
+    If Not IsArray(arrDemand) Then GoTo Cache_Exit
+    
+    Dim r As Long, strKey As String
+    For r = 2 To UBound(arrDemand, 1)
+        If UBound(arrDemand, 2) >= COL_TIER Then
+            strKey = LCase$(Trim$(arrDemand(r, COL_AFFILIATE))) & "|" & LCase$(Trim$(arrDemand(r, COL_TIER)))
+            If Not dictDemandCache.Exists(strKey) Then
+                dictDemandCache.Add strKey, r
+            End If
+        End If
+    Next r
+
+Cache_Exit:
+    On Error GoTo 0
+End Sub
+
+Private Function GetDemandDataRow(ByVal strAffiliate As String, ByVal strTier As String) As Long
+    Dim strKey As String: strKey = LCase$(strAffiliate) & "|" & LCase$(strTier)
+    If dictDemandCache.Exists(strKey) Then GetDemandDataRow = dictDemandCache.Item(strKey) Else GetDemandDataRow = 0
+End Function
+
+Private Function GetUniqueAffiliates(ByVal arrDemandData As Variant) As Object
+    Dim dictAffiliates As Object, r As Long
+    Set dictAffiliates = CreateObject("Scripting.Dictionary")
+    If IsArray(arrDemandData) Then
+        For r = 2 To UBound(arrDemandData, 1)
+            If Not IsEmpty(arrDemandData(r, COL_AFFILIATE)) Then
+                If Not dictAffiliates.Exists(arrDemandData(r, COL_AFFILIATE)) Then
+                    dictAffiliates.Add arrDemandData(r, COL_AFFILIATE), 1
+                End If
+            End If
+        Next r
+    End If
+    Set GetUniqueAffiliates = dictAffiliates
+End Function
+
+Private Sub CreateTierSheets(ByVal wb As Workbook, ByVal strAffiliate As String, ByVal wsSummary As Worksheet)
+    Dim lngDemandLRow As Long, lngStatusLRow As Long, lngTierRow As Long, lngProductRow As Long
+    Dim strTier As String, strProductTier As String, strProductAffiliate As String, wsNewTier As Worksheet
+    
+    On Error GoTo TierSheet_ErrorHandler
+    
+    lngDemandLRow = UBound(arrDemandData, 1)
+    lngStatusLRow = UBound(arrStatusData, 1)
+    SetupOutputSheetHeaders wsSummary
+    
+    For lngTierRow = 2 To lngDemandLRow
+        If LCase$(Trim$(arrDemandData(lngTierRow, COL_AFFILIATE))) = LCase$(strAffiliate) Then
+            If UBound(arrDemandData, 2) >= COL_TIER Then
+                strTier = Trim$(arrDemandData(lngTierRow, COL_TIER))
+                If Len(strTier) > 0 Then
+                    'ROBUSTNESS: Sanitize the tier name to create a valid sheet name.
+                    Dim strSheetName As String: strSheetName = SanitizeSheetName(strAffiliate & " - " & strTier)
+                    
+                    On Error Resume Next
+                    wb.Sheets(strSheetName).Delete
+                    On Error GoTo TierSheet_ErrorHandler
+                    
+                    Set wsNewTier = wb.Sheets.Add(After:=wb.Sheets(wb.Sheets.Count))
+                    wsNewTier.Name = strSheetName
+                    SetupOutputSheetHeaders wsNewTier
+                    
+                    Dim lngNextFreeRow As Long: lngNextFreeRow = 2
+                    For lngProductRow = 2 To lngStatusLRow
+                        If UBound(arrStatusData, 2) >= COL_ISD Then
+                            strProductAffiliate = LCase$(Trim$(arrStatusData(lngProductRow, COL_AFFILIATE)))
+                            strProductTier = LCase$(Trim$(arrStatusData(lngProductRow, COL_TIER)))
+                            If strProductAffiliate = LCase$(strAffiliate) And strProductTier = LCase$(strTier) Then
+                                wsNewTier.Range("A" & lngNextFreeRow).Resize(1, 6).Value = Array(arrStatusData(lngProductRow, 1), arrStatusData(lngProductRow, 2), arrStatusData(lngProductRow, 3), arrStatusData(lngProductRow, 4), arrStatusData(lngProductRow, 5), arrStatusData(lngProductRow, 6))
+                                lngNextFreeRow = lngNextFreeRow + 1
+                            End If
+                        End If
+                    Next lngProductRow
+                End If
+            End If
+        End If
+    Next lngTierRow
+    Exit Sub
+    
+TierSheet_ErrorHandler:
+    lngWarningCount = lngWarningCount + 1
+    WriteToLog "Error", "CreateTierSheets", "Could not create tier sheets for '" & strAffiliate & "'. Error: " & Err.Description
+End Sub
+
+Private Function GetHistoricalDataRow(ByVal strAffiliate As String, ByVal strProduct As String, ByVal lngHistColCount As Long) As Variant
+    Dim r As Long, c As Long, arrResult() As Variant
+    ReDim arrResult(1 To lngHistColCount - 6)
+    For r = 2 To UBound(arrHistoryData, 1)
+        If Trim$(arrHistoryData(r, COL_AFFILIATE)) = strAffiliate And Trim$(arrHistoryData(r, COL_ISD)) = strProduct Then
+            For c = COL_HISTORY_START To lngHistColCount: arrResult(c - (COL_HISTORY_START - 1)) = arrHistoryData(r, c): Next c
+            GetHistoricalDataRow = arrResult
+            Exit Function
+        End If
+    Next r
+    GetHistoricalDataRow = arrResult
+End Function
+
+Private Function GetHistoricalTierSum(ByVal strAffiliate As String, ByVal strTier As String, ByVal dictLifecycle As Object, ByVal lngHistLCol As Long) As Double
+    Dim dblTotalSum As Double, r As Long, c As Long, strHSProduct As String, strCompositeKey As String, varValue As Variant
+    For r = 2 To UBound(arrHistoryData, 1)
+        If LCase$(Trim$(arrHistoryData(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistoryData(r, COL_TIER))) = LCase$(strTier) Then
+            strHSProduct = Trim$(arrHistoryData(r, COL_ISD))
+            strCompositeKey = Trim$(arrHistoryData(r, COL_AFFILIATE)) & "|" & strHSProduct
+            Dim objLifecycle As cProductLifecycle
+            If dictLifecycle.Exists(strCompositeKey) Then
+                Set objLifecycle = dictLifecycle.Item(strCompositeKey)
+                If objLifecycle.Status <> psDiscontinued Then
+                    For c = COL_HISTORY_START To lngHistLCol
+                        varValue = arrHistoryData(r, c)
+                        If IsNumeric(varValue) Then dblTotalSum = dblTotalSum + CDbl(varValue)
+                    Next c
+                Else
+                    For c = COL_HISTORY_START To lngHistLCol
+                        varValue = arrHistoryData(r, c)
+                        If objLifecycle.PhaseOutDate > 0 And IsDate(arrHistoryData(1, c)) Then
+                            If CDate(arrHistoryData(1, c)) < objLifecycle.PhaseOutDate Then
+                                If IsNumeric(varValue) Then dblTotalSum = dblTotalSum + CDbl(varValue)
+                            End If
+                        End If
+                    Next c
+                End If
+                Set objLifecycle = Nothing
+            End If
+        End If
+    Next r
+    GetHistoricalTierSum = dblTotalSum
+End Function
+
+Private Function GetHistoricalSubTierSum(ByVal strAffiliate As String, ByVal strTier As String, ByVal strSubTier As String, ByVal lngHistLCol As Long) As Double
+    Dim dblTotalSum As Double, r As Long, c As Long, varValue As Variant
+    For r = 2 To UBound(arrHistoryData, 1)
+        If LCase$(Trim$(arrHistoryData(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistoryData(r, COL_TIER))) = LCase$(strTier) And LCase$(Trim$(arrHistoryData(r, COL_SUB_TIER))) = LCase$(strSubTier) Then
+            For c = COL_HISTORY_START To lngHistLCol
+                varValue = arrHistoryData(r, c)
+                If IsNumeric(varValue) Then dblTotalSum = dblTotalSum + CDbl(varValue)
+            Next c
+        End If
+    Next r
+    GetHistoricalSubTierSum = dblTotalSum
+End Function
+
+Private Sub CleanupAffiliateSheets(ByVal wb As Workbook, ByVal strAffiliate As String)
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Dim ws As Worksheet
+    For Each ws In wb.Worksheets
+        If ws.Name = "TempSummary" Or InStr(1, ws.Name, SanitizeSheetName(strAffiliate & " - ")) > 0 Then
+            ws.Delete
+        End If
+    Next ws
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+End Sub
+
+Private Sub CleanupMemory()
+    On Error Resume Next
+    Erase arrStatusData
+    Erase arrHistoryData
+    Erase arrDemandData
+    Set dictLifecycleMap = Nothing
+    Set dictAffiliates = Nothing
+    Set dictDemandCache = Nothing
+    On Error GoTo 0
+End Sub
+
+Private Function GetOutputFilePath(ByVal strBasePath As String, ByVal strAffiliate As String) As String
+    GetOutputFilePath = strBasePath & "\Demand ForeCast - " & strAffiliate & " - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
+End Function
+
+Private Sub SetupOutputSheetHeaders(ByVal ws As Worksheet)
+    ws.Range("A1:H1").Value = Array("Affiliate", "Forecast Tier", "Forecast Sub-Tier", "Local Item Nbr", "Desc", "I-S-D", "Active/Discontinued", "Phase Out Month")
+End Sub
+
+Private Function CreateOutputWorkbook(ByVal wb As Workbook, ByVal strAffiliate As String, ByVal wsSummary As Worksheet) As Workbook
+    Dim wbReport As Workbook, ws As Worksheet, objSheetNames As Object: Set objSheetNames = CreateObject("System.Collections.ArrayList")
+    
+    If Not DEBUG_MODE Then
+        FormatEnhancedSheet wsSummary
+    End If
+    
+    objSheetNames.Add wsSummary.Name
+    For Each ws In wb.Worksheets
+        If InStr(1, ws.Name, SanitizeSheetName(strAffiliate & " - ")) > 0 Then objSheetNames.Add ws.Name
+    Next ws
+    If objSheetNames.Count < 2 And wsSummary.Cells(wsSummary.Rows.Count, "A").End(xlUp).Row < 2 Then Set CreateOutputWorkbook = Nothing: Exit Function
+    
+    wb.Sheets(objSheetNames.ToArray).Copy
+    Set wbReport = ActiveWorkbook
+    On Error Resume Next
+    wbReport.Sheets("TempSummary").Name = SHEET_SUMMARY_PREFIX
+    On Error GoTo 0
+    
+    For Each ws In wbReport.Worksheets
+        Dim lRow As Long, lCol As Long
+        lRow = ws.Cells.Find(What:="*", SearchOrder:=xlByRows, SearchDirection:=xlPrevious).Row
+        lCol = ws.Cells.Find(What:="*", SearchOrder:=xlByColumns, SearchDirection:=xlPrevious).Column
+        If lRow > 0 And lCol > 0 Then
+             With ws.Range(ws.Cells(1, 1), ws.Cells(lRow, lCol))
+                .Value = .Value
+             End With
+        End If
+    Next ws
+    
+    Application.CutCopyMode = False
+    
+    wbReport.Sheets(SHEET_SUMMARY_PREFIX).Activate
+    ActiveWindow.FreezePanes = True
+    
+    Set CreateOutputWorkbook = wbReport
+End Function
+
+Private Function GetHistoricalMonthCount(ByVal arrDemand As Variant, ByVal arrHistory As Variant) As Long
+    Dim lngHistLCol As Long, lngCurrCol As Long, lngCount As Long, dteStartDate As Date
+    lngHistLCol = UBound(arrHistory, 2)
+    
+    'ROBUSTNESS: Check for a valid start date in the demand forecast header.
+    If UBound(arrDemand, 2) < COL_DEMAND_START Or Not IsDate(arrDemand(1, COL_DEMAND_START)) Then
+        WriteToLog "Warning", "GetHistoricalMonthCount", "The demand forecast start date is missing or invalid. Historical month count set to 0."
+        GetHistoricalMonthCount = 0
+        Exit Function
+    End If
+    
+    dteStartDate = CDate(arrDemand(1, COL_DEMAND_START))
+
+    For lngCurrCol = COL_HISTORY_START To lngHistLCol
+        If IsDate(arrHistory(1, lngCurrCol)) Then
+            'ROBUSTNESS: Avoid errors from different regional date settings by comparing date values.
+            If CDate(arrHistory(1, lngCurrCol)) < dteStartDate Then
+                lngCount = lngCount + 1
+            Else
+                Exit For
+            End If
+        End If
+    Next lngCurrCol
+    GetHistoricalMonthCount = lngCount
+End Function
+
+Private Function GetCombinedHeaderRow(ByVal lngMonthCount As Long) As Variant
+    Dim arrHistHeaders() As Variant, c As Long
+    
+    If lngMonthCount > 0 Then
+        ReDim arrHistHeaders(1 To lngMonthCount)
+        For c = 1 To lngMonthCount: arrHistHeaders(c) = arrHistoryData(1, c + (COL_HISTORY_START - 1)): Next c
+    End If
+    Dim arrDemandHeaders() As Variant
+    arrDemandHeaders = Application.WorksheetFunction.Index(arrDemandData, 1, 0)
+    Dim lngDemandLCol As Long: lngDemandLCol = UBound(arrDemandData, 2)
+    Dim arrCombined() As Variant: ReDim arrCombined(1 To 8 + lngMonthCount + (lngDemandLCol - 2))
+    arrCombined(1) = "Affiliate": arrCombined(2) = "Forecast Tier": arrCombined(3) = "Forecast Sub-Tier": arrCombined(4) = "Local Item Nbr"
+    arrCombined(5) = "Desc": arrCombined(6) = "I-S-D": arrCombined(7) = "Active/Discontinued": arrCombined(8) = "Phase Out Month"
+    If lngMonthCount > 0 Then
+        For c = 1 To UBound(arrHistHeaders): arrCombined(c + 8) = arrHistHeaders(c): Next c
+    End If
+    For c = 3 To lngDemandLCol
+        Dim varHeaderValue As Variant: varHeaderValue = arrDemandHeaders(c)
+        If IsDate(varHeaderValue) Then arrCombined(c + 8 + lngMonthCount - 2) = CDate(varHeaderValue) Else arrCombined(c + 8 + lngMonthCount - 2) = varHeaderValue
+    Next c
+    GetCombinedHeaderRow = arrCombined
+End Function
+
+Private Sub AppendToSummarySheet(ByVal wsTier As Worksheet, ByVal wsSummary As Worksheet)
+    Dim lngTierLRow As Long, lngTierLCol As Long, lngSummaryLRow As Long
+    lngTierLRow = wsTier.Cells(wsTier.Rows.Count, "A").End(xlUp).Row
+    If LCase$(Trim$(wsTier.Cells(lngTierLRow, "A").Value)) = "total" Then lngTierLRow = lngTierLRow - 1
+    If lngTierLRow < 2 Then Exit Sub
+    lngTierLCol = wsTier.Cells(1, wsTier.Columns.Count).End(xlToLeft).Column
+    lngSummaryLRow = wsSummary.Cells(wsSummary.Rows.Count, "A").End(xlUp).Row
+    If IsEmpty(wsSummary.Range("I1").Value) Then
+        wsTier.Range("I1", wsTier.Cells(1, lngTierLCol)).Copy wsSummary.Range("I1")
+    End If
+    Dim rngData As Range
+    Set rngData = wsTier.Range("A2", wsTier.Cells(lngTierLRow, lngTierLCol))
+    wsSummary.Range("A" & lngSummaryLRow + 1).Resize(rngData.Rows.Count, rngData.Columns.Count).Value = rngData.Value
+End Sub
+
+Private Sub FormatEnhancedSheet(ByVal ws As Worksheet)
+    If ws.Cells(1, 1).Value = "" Then Exit Sub
+    
+    With ws
+        Dim lngLastRow As Long, lngLastCol As Long, lngTotalRow As Long, r As Long, i As Long, lngHistLCol As Long
+        lngLastRow = .Cells(.Rows.Count, "A").End(xlUp).Row
+        lngLastCol = .Cells(1, .Columns.Count).End(xlToLeft).Column
+        lngTotalRow = lngLastRow
+        If LCase$(.Cells(lngLastRow, "A").Value) <> "total" Then lngTotalRow = lngLastRow + 1
+        
+        .Cells(lngTotalRow, "A").Value = "TOTAL"
+        For i = 9 To lngLastCol
+            On Error Resume Next
+            .Cells(lngTotalRow, i).Value = Application.WorksheetFunction.Sum(.Range(.Cells(2, i), .Cells(lngLastRow, i)))
+            On Error GoTo 0
+        Next i
+        
+        Dim rngHeader As Range, rngTotal As Range, rngFull As Range
+        Set rngHeader = .Range(.Cells(1, 1), .Cells(1, lngLastCol))
+        Set rngTotal = .Range(.Cells(lngTotalRow, 1), .Cells(lngTotalRow, lngLastCol))
+        Set rngFull = .Range(.Cells(1, 1), .Cells(lngTotalRow, lngLastCol))
+        
+        rngFull.Interior.ColorIndex = xlNone
+        rngFull.Borders.LineStyle = xlNone
+        rngFull.Font.Bold = False
+        
+        With rngHeader
+            .Font.Bold = True
+            .Font.Color = vbWhite
+            .Interior.Color = RGB(47, 85, 151)
+            .VerticalAlignment = xlCenter
+        End With
+        
+        With rngTotal
+            .Font.Bold = True
+            .Interior.Color = RGB(221, 235, 247)
+        End With
+        
+        For r = 2 To lngLastRow
+            If r Mod 2 = 0 Then .Range(.Cells(r, 1), .Cells(r, lngLastCol)).Interior.Color = RGB(242, 242, 242)
+        Next r
+        
+        lngHistLCol = GetLastHistoricalColumn(ws)
+        If lngHistLCol > 8 Then
+            .Range(.Cells(2, 9), .Cells(lngLastRow, lngHistLCol)).Interior.Color = RGB(220, 220, 220)
+            With .Range(.Cells(1, lngHistLCol), .Cells(lngTotalRow, lngHistLCol)).Borders(xlEdgeRight)
+                .LineStyle = xlContinuous
+                .Color = RGB(47, 85, 151)
+                .Weight = xlMedium
+            End With
+        End If
+        
+        With rngFull.Borders
+            .LineStyle = xlContinuous
+            .Weight = xlThin
+            .Color = RGB(210, 210, 210)
+        End With
+        
+        .Range(.Cells(2, 9), .Cells(lngTotalRow, lngLastCol)).NumberFormat = "_(* #,##0_);_(* (#,##0);_(* ""-""??_);_(@_)"
+        .Range(.Cells(1, 9), .Cells(1, lngLastCol)).NumberFormat = "mmm-yy"
+        .Cells.EntireColumn.AutoFit
+        
+        If .Name = SHEET_SUMMARY_PREFIX Then
+            .Range("A1", .Cells(lngTotalRow, lngLastCol)).Sort Key1:=.Range("F2"), Order1:=xlAscending, Key2:=.Range("B2"), Order2:=xlAscending, Header:=xlYes
+        End If
+    End With
+End Sub
+
+Private Function LoadDataToArray(ByVal ws As Worksheet) As Variant
+    If ws Is Nothing Then Exit Function
+    Dim lRow As Long, lCol As Long
+    lRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    lCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    If lRow > 1 And lCol > 0 Then LoadDataToArray = ws.Range(ws.Cells(1, 1), ws.Cells(lRow, lCol)).Value
+End Function
+
+Private Sub InitializeLogSheet(ByVal ws As Worksheet)
+    With ws
+        .Name = SHEET_LOG
+        With .Range("A1:D1")
+            .Value = Array("Timestamp", "Type", "Procedure", "Message")
+            .Font.Bold = True
+        End With
+        .Range("E1").Value = "Duration (s)"
+        .Range("E1").Font.Bold = True
+        .Columns("A:E").AutoFit
+    End With
+End Sub
+
+Private Sub WriteToLog(ByVal strType As String, ByVal strProcedure As String, ByVal strMessage As String, Optional dblDuration As Double = -1)
+    If wsLog Is Nothing Then Exit Sub
+    Dim lNextRow As Long
+    
+    With wsLog
+        lNextRow = .Cells(.Rows.Count, "A").End(xlUp).Row + 1
+        .Cells(lNextRow, "A").Value = Now
+        .Cells(lNextRow, "B").Value = strType
+        .Cells(lNextRow, "C").Value = strProcedure
+        .Cells(lNextRow, "D").Value = strMessage
+        If dblDuration >= 0 Then
+            .Cells(lNextRow, "E").Value = dblDuration
+        End If
+    End With
+End Sub
+
+Private Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
+    Dim dblElapsed As Double
+    dblElapsed = Timer - tCheckpoint
+    WriteToLog "Profile", strStageName, "Stage completed.", dblElapsed
+    tCheckpoint = Timer
+End Sub
+
+Private Function GetLastHistoricalColumn(ByVal ws As Worksheet) As Long
+    Dim lngLastCol As Long, i As Long, dteStartDate As Date
+    On Error Resume Next
+    dteStartDate = CDate(ThisWorkbook.Sheets(SHEET_DEMAND).Cells(1, COL_DEMAND_START).Value)
+    On Error GoTo 0
+    If dteStartDate = 0 Then GetLastHistoricalColumn = 8: Exit Function
+    lngLastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    GetLastHistoricalColumn = 8
+    For i = 9 To lngLastCol
+        If IsDate(ws.Cells(1, i).Value) Then
+            If CDate(ws.Cells(1, i).Value) < dteStartDate Then GetLastHistoricalColumn = i Else Exit For
+        End If
+    Next i
+End Function
+
+Private Function SanitizeSheetName(ByVal strName As String) As String
+    'ROBUSTNESS: Removes characters that are invalid in sheet names and truncates to 31 characters.
+    Dim strSanitized As String
+    strSanitized = strName
+    strSanitized = Replace(strSanitized, ":", "-")
+    strSanitized = Replace(strSanitized, "\", "-")
+    strSanitized = Replace(strSanitized, "/", "-")
+    strSanitized = Replace(strSanitized, "?", "")
+    strSanitized = Replace(strSanitized, "*", "")
+    strSanitized = Replace(strSanitized, "[", "(")
+    strSanitized = Replace(strSanitized, "]", ")")
+    
+    If Len(strSanitized) > 31 Then
+        strSanitized = Left$(strSanitized, 31)
+    End If
+    
+    SanitizeSheetName = strSanitized
+End Function
+
+Public Function GetStatusEnum(ByVal strStatus As String) As ProductStatus
+    Select Case UCase$(strStatus)
+        Case "ACTIVE": GetStatusEnum = psActive
+        Case "PHASEIN-PHASEOUT": GetStatusEnum = psPhaseInOut
+        Case "DISCONTINUED": GetStatusEnum = psDiscontinued
+        Case "NEW": GetStatusEnum = psNew
+        Case Else: GetStatusEnum = psUnknown
+    End Select
+End Function
+
+Public Function GetStatusString(ByVal enmStatus As ProductStatus) As String
+    Select Case enmStatus
+        Case psActive: GetStatusString = "Active"
+        Case psPhaseInOut: GetStatusString = "PhaseIn-PhaseOut"
+        Case psDiscontinued: GetStatusString = "Discontinued"
+        Case psNew: GetStatusString = "New"
+        Case Else: GetStatusString = "Unknown"
+    End Select
+End Function
