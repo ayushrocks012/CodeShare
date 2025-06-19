@@ -48,7 +48,6 @@ Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be call
         GoTo Cleanup
     End If
     
-    ' --- Create Log sheet ---
     On Error Resume Next
     TWB.Sheets(LOG_SHEET).Delete
     On Error GoTo 0
@@ -86,12 +85,39 @@ Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be call
             Dim LifecycleMap As Object
             Set LifecycleMap = BuildLifecycleMap(StatusData, WS_Log)
 
-            Application.StatusBar = "Creating family sheets for " & Affiliate & "..."
-            CreateFamilySheets TWB, Affiliate, StatusData, DemandData, WS_Summary
+            ' *** MODIFIED: New, more robust processing logic ***
+            Dim UniqueFamilies As Object, FamilyName As Variant
+            Set UniqueFamilies = GetUniqueValues(StatusData, 2) ' Get families from Status data (col B)
 
-            Application.StatusBar = "Processing forecast data for " & Affiliate & "..."
-            ProcessForecastData TWB, Affiliate, StatusData, HistoryData, DemandData, WS_Summary, WS_Log, LifecycleMap
+            For Each FamilyName In UniqueFamilies.Keys
+                ' Check if this family has a forecast in the affiliate's demand data
+                Dim r As Long, DemandRow As Long: DemandRow = 0
+                For r = 2 To UBound(DemandData, 1)
+                    If UCase$(Trim$(DemandData(r, 2))) = UCase$(Trim$(FamilyName)) Then
+                        DemandRow = r
+                        Exit For
+                    End If
+                Next r
+
+                If DemandRow > 0 Then ' A forecast exists for this family, so process it
+                    Application.StatusBar = "Processing family: " & FamilyName & " for " & Affiliate & "..."
+                    
+                    ' 1. Create the single family sheet
+                    Dim WS_Family As Worksheet
+                    Set WS_Family = CreateSingleFamilySheet(TWB, Affiliate, FamilyName, StatusData)
+
+                    ' 2. Calculate the forecast for that sheet
+                    CalculateAndFormatFamilySheet WS_Family, StatusData, HistoryData, DemandData, WS_Log, LifecycleMap
+
+                    ' 3. Append the results to the summary sheet
+                    AppendToSummarySheet WS_Family, WS_Summary
+                    Set WS_Family = Nothing
+                Else
+                    WriteToLog WS_Log, "Info", "No demand forecast found for family '" & FamilyName & "' in affiliate '" & Affiliate & "'. Skipping."
+                End If
+            Next FamilyName
             
+            ' --- E. FINALIZATION FOR THIS AFFILIATE ---
             Application.StatusBar = "Creating report workbook for " & Affiliate & "..."
             Dim NewWB As Workbook
             Set NewWB = CreateOutputWorkbook(TWB, Affiliate, WS_Summary)
@@ -123,80 +149,43 @@ Cleanup:
 End Sub
 
 ' =================================================================================================================
-' Helper Procedure: CreateFamilySheets
+' Helper Procedure: CreateSingleFamilySheet
 ' =================================================================================================================
-Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal StatusData As Variant, ByVal DemandData As Variant, ByVal WS_Summary As Worksheet)
-    Dim DemandForecastLRow As Long, ProductStatusLRow As Long
-    Dim CurrFamilyRow As Long, CurrProductRow As Long
-    Dim CurrFamily As String, CurrProductFamily As String
+Private Function CreateSingleFamilySheet(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal FamilyName As String, ByVal StatusData As Variant) As Worksheet
+    Dim ProductStatusLRow As Long, CurrProductRow As Long
+    Dim CurrProductFamily As String
     Dim WS_NewFamily As Worksheet
-
-    DemandForecastLRow = UBound(DemandData, 1)
-    ProductStatusLRow = UBound(StatusData, 1)
     
-    SetupSummaryHeaders WS_Summary, StatusData
+    ProductStatusLRow = UBound(StatusData, 1)
 
-    For CurrFamilyRow = 2 To DemandForecastLRow
-        CurrFamily = Trim$(DemandData(CurrFamilyRow, 2))
-        
-        If Len(CurrFamily) > 0 Then
-            Dim FamilySheetName As String
-            FamilySheetName = SanitizeSheetName(AffiliateName & "_" & CurrFamily)
-            
-            On Error Resume Next
-            TWB.Sheets(FamilySheetName).Delete
-            On Error GoTo 0
-            
-            Set WS_NewFamily = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
-            WS_NewFamily.Name = FamilySheetName
-            
-            WS_NewFamily.Range("A1:F1").Value = Array(StatusData(1, 1), StatusData(1, 2), StatusData(1, 3), StatusData(1, 4), StatusData(1, 5), StatusData(1, 6))
-            WS_NewFamily.Range("G1").Value = "Active/Discontinued"
-            WS_NewFamily.Range("H1").Value = "Phase Out Month"
-            
-            Dim NextFreeRow As Long: NextFreeRow = 2
-            For CurrProductRow = 2 To ProductStatusLRow
-                CurrProductFamily = LCase$(Trim$(StatusData(CurrProductRow, 2)))
-                If CurrProductFamily = LCase$(CurrFamily) Then
-                    WS_NewFamily.Range("A" & NextFreeRow & ":F" & NextFreeRow).Value = Array(StatusData(CurrProductRow, 1), StatusData(CurrProductRow, 2), StatusData(CurrProductRow, 3), StatusData(CurrProductRow, 4), StatusData(CurrProductRow, 5), StatusData(CurrProductRow, 6))
-                    NextFreeRow = NextFreeRow + 1
-                End If
-            Next CurrProductRow
+    Dim TempSheetName As String
+    TempSheetName = SanitizeSheetName(AffiliateName & "_" & FamilyName)
+    
+    On Error Resume Next
+    TWB.Sheets(TempSheetName).Delete
+    On Error GoTo 0
+    
+    Set WS_NewFamily = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
+    WS_NewFamily.Name = TempSheetName
+    
+    ' Setup Headers
+    WS_NewFamily.Range("A1:F1").Value = Array(StatusData(1, 1), StatusData(1, 2), StatusData(1, 3), StatusData(1, 4), StatusData(1, 5), StatusData(1, 6))
+    WS_NewFamily.Range("G1").Value = "Active/Discontinued"
+    WS_NewFamily.Range("H1").Value = "Phase Out Month"
+    
+    ' Populate products for this family
+    Dim NextFreeRow As Long: NextFreeRow = 2
+    For CurrProductRow = 2 To ProductStatusLRow
+        CurrProductFamily = LCase$(Trim$(StatusData(CurrProductRow, 2)))
+        If CurrProductFamily = LCase$(FamilyName) Then
+            WS_NewFamily.Range("A" & NextFreeRow & ":F" & NextFreeRow).Value = Array(StatusData(CurrProductRow, 1), StatusData(CurrProductRow, 2), StatusData(CurrProductRow, 3), StatusData(CurrProductRow, 4), StatusData(CurrProductRow, 5), StatusData(CurrProductRow, 6))
+            NextFreeRow = NextFreeRow + 1
         End If
-    Next CurrFamilyRow
-End Sub
+    Next CurrProductRow
+    
+    Set CreateSingleFamilySheet = WS_NewFamily
+End Function
 
-' =================================================================================================================
-' Helper Procedure: SetupSummaryHeaders
-' =================================================================================================================
-Private Sub SetupSummaryHeaders(ByVal WS_Summary As Worksheet, ByVal StatusData As Variant)
-    WS_Summary.Range("A1:F1").Value = Array(StatusData(1, 1), StatusData(1, 2), StatusData(1, 3), StatusData(1, 4), StatusData(1, 5), StatusData(1, 6))
-    WS_Summary.Range("G1").Value = "Active/Discontinued"
-    WS_Summary.Range("H1").Value = "Phase Out Month"
-End Sub
-
-' =================================================================================================================
-' Helper Procedure: ProcessForecastData
-' =================================================================================================================
-Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal DemandData As Variant, ByVal WS_Summary As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
-    Dim WS_CurrentFamily As Worksheet, CurrFamily As String, DemandForecastLRow As Long, CurrFamilyRow As Long
-    DemandForecastLRow = UBound(DemandData, 1)
-
-    For CurrFamilyRow = 2 To DemandForecastLRow
-        CurrFamily = Trim$(DemandData(CurrFamilyRow, 2))
-        Dim FamilySheetName As String
-        FamilySheetName = SanitizeSheetName(AffiliateName & "_" & CurrFamily)
-        
-        Application.StatusBar = "Processing family: " & CurrFamily & " for " & AffiliateName & "..."
-        
-        If SheetExists(TWB, FamilySheetName) Then
-            Set WS_CurrentFamily = TWB.Sheets(FamilySheetName)
-            CalculateAndFormatFamilySheet WS_CurrentFamily, StatusData, HistoryData, DemandData, WS_Log, LifecycleMap
-            AppendToSummarySheet WS_CurrentFamily, WS_Summary
-            Set WS_CurrentFamily = Nothing
-        End If
-    Next CurrFamilyRow
-End Sub
 
 ' =================================================================================================================
 ' Helper Procedure: CalculateAndFormatFamilySheet
@@ -257,7 +246,6 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
         Dim DemandDataRow As Long, i As Long
         DemandDataRow = 0
         For i = 2 To UBound(DemandData, 1)
-            ' *** MODIFIED: Use UCase$ for case-insensitive comparison ***
             If UCase$(Trim$(DemandData(i, 2))) = UCase$(Trim$(CurrProductFamily)) Then
                 DemandDataRow = i
                 Exit For
@@ -271,7 +259,7 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
                 ForecastValue = CalculateForecastValue(CurrentLifecycle, OutputArray(1, c), ProdGroupSum, FamilySum, FamilyDemand)
                 OutputArray(r, c) = ForecastValue
             Next c
-        End If
+        end if
     Next r
     
     WS_CurrentFamily.Cells.Clear
@@ -521,7 +509,6 @@ Private Function GetHistoricalSum(ByVal AffiliateName As String, ByVal FamilyNam
         CurrentFamily = Trim$(HistoryData(r, 2))
         CurrentGroupID = Trim$(HistoryData(r, 3))
         
-        ' *** MODIFIED: Use UCase$ for case-insensitive comparison ***
         If UCase$(CurrentAffiliate) = UCase$(AffiliateName) And UCase$(CurrentFamily) = UCase$(FamilyName) And UCase$(CurrentGroupID) = UCase$(GroupID) Then
             For i = 7 To HistLCol
                 TotalSum = TotalSum + Val(HistoryData(r, i))
@@ -539,7 +526,6 @@ Private Function GetHistoricalFamilySum(ByVal AffiliateName As String, ByVal Fam
         HSAffiliate = Trim$(HistoryData(r, 1))
         HSFamily = Trim$(HistoryData(r, 2))
         
-        ' *** MODIFIED: Use UCase$ for case-insensitive comparison ***
         If UCase$(HSAffiliate) = UCase$(AffiliateName) And UCase$(HSFamily) = UCase$(FamilyName) Then
             HSProduct = Trim$(HistoryData(r, 6))
             Dim HSLifecycle As cProductLifecycle
