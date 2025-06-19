@@ -84,7 +84,7 @@ Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be call
         HistoryData = FilterDataByColumn(AllHistoryData, 1, Affiliate)
         DemandData = FilterDataByColumn(AllDemandData, 1, Affiliate)
         
-        If Not IsEmpty(StatusData) Then
+        If Not IsEmpty(StatusData) And Not IsEmpty(DemandData) And Not IsEmpty(HistoryData) Then
             ' --- D. CORE PROCESSING FOR THIS AFFILIATE ---
             Dim LifecycleMap As Object
             Set LifecycleMap = BuildLifecycleMap(StatusData, WS_Log)
@@ -210,11 +210,8 @@ End Sub
 Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal DemandData As Variant, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
     Dim FamilyLRow As Long, HistLCol As Long, MonthCount As Long, DemandForecastLCol As Long
     
-    ' Get historical month count relative to this affiliate's demand data
-    ' Demand data now starts in column C (index 3), since A=Affiliate, B=Family
     MonthCount = GetHistoricalMonthCount(DemandData, HistoryData, 3)
     
-    ' Prepare headers
     DemandForecastLCol = UBound(DemandData, 2)
     Dim HeaderRow As Variant
     HeaderRow = GetCombinedHeaderRow(DemandData, HistoryData, MonthCount, DemandForecastLCol)
@@ -222,6 +219,8 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
     AddNewProductsToFamilySheet WS_CurrentFamily, StatusData
     FamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row
     
+    If FamilyLRow < 2 Then Exit Sub ' Exit if no products in this family sheet
+
     Dim OutputArray() As Variant
     ReDim OutputArray(1 To FamilyLRow, 1 To UBound(HeaderRow))
     
@@ -250,7 +249,12 @@ Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, B
         
         Dim HistoricSalesRow As Variant
         HistoricSalesRow = GetHistoricalDataRow(CurrProduct, HistoryData, MonthCount + 6)
-        For c = 1 To UBound(HistoricSalesRow): OutputArray(r, c + 8) = HistoricSalesRow(c): Next c
+        
+        If IsArray(HistoricSalesRow) Then
+            For c = 1 To UBound(HistoricSalesRow)
+                OutputArray(r, c + 8) = HistoricSalesRow(c)
+            Next c
+        End If
         
         Dim ProdGroupSum As Double, FamilySum As Double
         ProdGroupSum = GetHistoricalSum(CurrAffiliate, CurrProductFamily, CurrGroupID, HistoryData, MonthCount + 6)
@@ -493,9 +497,16 @@ End Function
 ' Data Retrieval Helper Functions (In-Memory)
 ' =================================================================================================================
 Private Function GetHistoricalDataRow(ByVal ProductName As String, ByVal HistoryData As Variant, ByVal HistLCol As Long) As Variant
+    ' *** MODIFIED: This function is updated to handle cases where no historical data exists ***
     Dim r As Long, c As Long
     Dim Result() As Variant
-    ReDim Result(1 To HistLCol - 6) ' Offset is 6 due to columns A-F
+
+    ' Guard clause for when there are no historical months to process
+    If HistLCol <= 6 Then
+        Exit Function ' Return an empty variant, the calling code will handle this
+    End If
+    
+    ReDim Result(1 To HistLCol - 6) ' This line is now safe
 
     For r = 2 To UBound(HistoryData, 1)
         If Trim$(HistoryData(r, 6)) = ProductName Then ' Product is Col F
@@ -506,6 +517,8 @@ Private Function GetHistoricalDataRow(ByVal ProductName As String, ByVal History
             Exit Function
         End If
     Next r
+    
+    ' If the product was not found, return the array which will be filled with "Empty" values
     GetHistoricalDataRow = Result
 End Function
 
@@ -596,7 +609,6 @@ Private Function LoadDataToArray(ByVal WS As Worksheet) As Variant
 End Function
 
 Private Function GetCombinedHeaderRow(ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
-    ' *** MODIFIED: This function is updated to handle MonthCount = 0 ***
     Dim HistHeaders() As Variant
     Dim TempDemandHeaders() As Variant
     Dim Combined() As Variant
