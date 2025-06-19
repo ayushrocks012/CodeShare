@@ -3,15 +3,15 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' The code below goes into a standard module.
+' V3.1: Complete version for Multiple Affiliates and updated terminology.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
 Private Const STATUS_SHEET As String = "Product Status"
 Private Const DEMAND_SHEET As String = "Demand Forecast"
 Private Const HISTORY_SHEET As String = "Historical Sales"
-Private Const SUMMARY_SHEET As String = "Summary"
 Private Const LOG_SHEET As String = "Log"
+Private Const SUMMARY_SHEET_PREFIX As String = "Summary"
 
 ' --- PRODUCT STATUSES ---
 Private Const STATUS_ACTIVE As String = "Active"
@@ -23,15 +23,16 @@ Private Const STATUS_UNKNOWN As String = "Unknown"
 
 ' =================================================================================================================
 ' Main Procedure: UpdateForeCast_Click
+' This is the entry point. It orchestrates the process for all affiliates.
 ' =================================================================================================================
-Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be called from a button.
+Public Sub UpdateForeCast_Click()
     ' --- 1. SETUP & INITIALIZATION ---
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
     Application.Calculation = xlCalculationManual
     Application.StatusBar = "Initializing forecast process..."
 
-    Dim TWB As Workbook
+    Dim TWB As Workbook, NewWB As Workbook
     Dim MainSheet As Worksheet, WS_ProductStatus As Worksheet
     Dim WS_DemandForecast As Worksheet, WS_HistoricalSales As Worksheet, WS_Log As Worksheet
 
@@ -55,69 +56,67 @@ Public Sub UpdateForeCast_Click() 'NOTE: This is intentionally Public to be call
     Set WS_Log = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
     InitializeLogSheet WS_Log
 
-    ' --- 2. LOAD ALL DATA INTO MEMORY ONCE ---
-    Application.StatusBar = "Loading all data into memory..."
-    Dim AllStatusData As Variant, AllHistoryData As Variant, AllDemandData As Variant
-    AllStatusData = LoadDataToArray(WS_ProductStatus)
-    AllHistoryData = LoadDataToArray(WS_HistoricalSales)
-    AllDemandData = LoadDataToArray(WS_DemandForecast)
+    ' --- 2. CORE PROCESSING (LOAD ALL DATA) ---
+    Application.StatusBar = "Loading all affiliate data into memory..."
+    Dim StatusData As Variant, HistoryData As Variant, DemandData As Variant
+    StatusData = LoadDataToArray(WS_ProductStatus)
+    HistoryData = LoadDataToArray(WS_HistoricalSales)
+    DemandData = LoadDataToArray(WS_DemandForecast)
     
-    ' --- 3. GET UNIQUE LIST OF AFFILIATES ---
-    Dim Affiliates As Object, Affiliate As Variant
-    Set Affiliates = GetUniqueValues(AllDemandData, 1)
+    Application.StatusBar = "Building universal product lifecycle map for all affiliates..."
+    Dim LifecycleMap As Object
+    Set LifecycleMap = BuildLifecycleMap(StatusData, WS_Log)
 
-    ' --- 4. START MULTI-AFFILIATE PROCESSING LOOP ---
-    For Each Affiliate In Affiliates.Keys
-        Application.StatusBar = "Processing Affiliate: " & Affiliate & "..."
-        
-        ' --- A. CLEAN UP SHEETS from previous loop run ---
-        CleanUpAffiliateSheets TWB, Affiliate
-        
-        ' --- B. CREATE SUMMARY SHEET for the current affiliate ---
+    Application.StatusBar = "Identifying unique affiliates to process..."
+    Dim Affiliates As Object, r As Long
+    Set Affiliates = CreateObject("Scripting.Dictionary")
+    ' Use Demand Forecast sheet to determine which affiliates to run for
+    For r = 2 To UBound(DemandData, 1)
+        If Not Affiliates.Exists(DemandData(r, 1)) Then
+            Affiliates.Add DemandData(r, 1), 1
+        End If
+    Next r
+
+    ' --- 3. LOOP THROUGH EACH AFFILIATE AND PROCESS ---
+    Dim AffiliateKey As Variant
+    For Each AffiliateKey In Affiliates.Keys
+        Dim CurrentAffiliate As String: CurrentAffiliate = CStr(AffiliateKey)
+        Application.StatusBar = "Processing Affiliate: " & CurrentAffiliate & "..."
+
+        ' Create a temporary Summary sheet for the current affiliate
         Dim WS_Summary As Worksheet
         Set WS_Summary = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
-        WS_Summary.Name = Affiliate & "_" & SUMMARY_SHEET
+        WS_Summary.Name = "TempSummary"
         
-        ' --- C. FILTER DATA for the current affiliate ---
-        Dim StatusData As Variant, HistoryData As Variant, DemandData As Variant
-        StatusData = FilterDataByColumn(AllStatusData, 1, Affiliate)
-        HistoryData = FilterDataByColumn(AllHistoryData, 1, Affiliate)
-        DemandData = FilterDataByColumn(AllDemandData, 1, Affiliate)
+        ' Create and process all forecast tier sheets for the affiliate
+        CreateTierSheets TWB, CurrentAffiliate, StatusData, DemandData, WS_Summary
+        ProcessForecastForAffiliate TWB, CurrentAffiliate, StatusData, HistoryData, DemandData, WS_Summary, WS_Log, LifecycleMap
+
+        ' Create the final, separate report workbook for the affiliate
+        Set NewWB = CreateOutputWorkbookForAffiliate(TWB, CurrentAffiliate, WS_Summary)
         
-        If Not IsEmpty(StatusData) Then
-            ' --- D. CORE PROCESSING FOR THIS AFFILIATE ---
-            Dim LifecycleMap As Object
-            Set LifecycleMap = BuildLifecycleMap(StatusData, WS_Log)
-
-            Application.StatusBar = "Creating family sheets for " & Affiliate & "..."
-            CreateFamilySheets TWB, Affiliate, StatusData, DemandData, WS_Summary
-
-            Application.StatusBar = "Processing forecast data for " & Affiliate & "..."
-            ProcessForecastData TWB, Affiliate, StatusData, HistoryData, DemandData, WS_Summary, WS_Log, LifecycleMap
-            
-            ' --- E. FINALIZATION FOR THIS AFFILIATE ---
-            Application.StatusBar = "Creating report workbook for " & Affiliate & "..."
-            Dim NewWB As Workbook
-            Set NewWB = CreateOutputWorkbook(TWB, Affiliate, WS_Summary)
-            
-            If Not NewWB Is Nothing Then
-                Application.StatusBar = "Saving report for " & Affiliate & "..."
-                Dim FilePath As String
-                FilePath = TWB.Path & "\Demand ForeCast - " & Affiliate & " - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
-                NewWB.SaveAs FilePath
-                NewWB.Close SaveChanges:=False
-                Set NewWB = Nothing
-            End If
-        Else
-             WriteToLog WS_Log, "Skipped", "No data found for affiliate: " & Affiliate
+        If Not NewWB Is Nothing Then
+            Application.StatusBar = "Saving final report for " & CurrentAffiliate & "..."
+            Dim FilePath As String
+            FilePath = TWB.Path & "\Demand ForeCast - " & CurrentAffiliate & " - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
+            NewWB.SaveAs FilePath
+            NewWB.Close SaveChanges:=False
+            Set NewWB = Nothing
         End If
-        
-        ' --- F. FINAL CLEANUP FOR THIS AFFILIATE'S SHEETS ---
-        CleanUpAffiliateSheets TWB, Affiliate
-        
-    Next Affiliate
-    
-' --- 5. FINAL SCRIPT CLEANUP ---
+
+        ' Clean up temporary sheets created for this affiliate before starting the next
+        Dim tempSheet As Worksheet
+        Application.DisplayAlerts = False
+        For Each tempSheet In TWB.Worksheets
+            If tempSheet.Name = "TempSummary" Or InStr(1, tempSheet.Name, CurrentAffiliate & " - ") > 0 Then
+                tempSheet.Delete
+            End If
+        Next tempSheet
+        Application.DisplayAlerts = True
+        Set WS_Summary = Nothing
+    Next AffiliateKey
+
+' --- 4. CLEANUP ---
 Cleanup:
     Application.StatusBar = False
     Application.Calculation = xlCalculationAutomatic
@@ -128,177 +127,267 @@ Cleanup:
 End Sub
 
 ' =================================================================================================================
-' Helper Procedure: CreateFamilySheets
+' Tier Sheet Creation (Replaces CreateFamilySheets)
 ' =================================================================================================================
-Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal StatusData As Variant, ByVal DemandData As Variant, ByVal WS_Summary As Worksheet)
-    Dim DemandForecastLRow As Long, ProductStatusLRow As Long
-    Dim CurrFamilyRow As Long, CurrProductRow As Long
-    Dim CurrFamily As String, CurrProductFamily As String
-    Dim WS_NewFamily As Worksheet
-
-    DemandForecastLRow = UBound(DemandData, 1)
+Private Sub CreateTierSheets(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal StatusData As Variant, ByVal DemandData As Variant, ByVal WS_Summary As Worksheet)
+    Dim ProductStatusLRow As Long, DemandLRow As Long
+    Dim CurrTierRow As Long, CurrProductRow As Long
+    Dim CurrTier As String, CurrProductTier As String, CurrProductAffiliate As String
+    Dim WS_NewTier As Worksheet
+    
+    DemandLRow = UBound(DemandData, 1)
     ProductStatusLRow = UBound(StatusData, 1)
     
-    SetupSummaryHeaders WS_Summary, StatusData
+    SetupOutputSheetHeaders WS_Summary
+    
+    For CurrTierRow = 2 To DemandLRow
+        If LCase$(Trim$(DemandData(CurrTierRow, 1))) = LCase$(AffiliateName) Then
+            CurrTier = Trim$(DemandData(CurrTierRow, 2)) 'Forecast Tier is in Col B
+            
+            If Len(CurrTier) > 0 Then
+                Dim uniqueSheetName As String: uniqueSheetName = AffiliateName & " - " & CurrTier
+                
+                On Error Resume Next
+                TWB.Sheets(uniqueSheetName).Delete
+                On Error GoTo 0
+                
+                Set WS_NewTier = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
+                WS_NewTier.Name = uniqueSheetName
+                SetupOutputSheetHeaders WS_NewTier
+                
+                Dim NextFreeRow As Long: NextFreeRow = 2
+                For CurrProductRow = 2 To ProductStatusLRow
+                    CurrProductAffiliate = LCase$(Trim$(StatusData(CurrProductRow, 1))) 'Col A
+                    CurrProductTier = LCase$(Trim$(StatusData(CurrProductRow, 2))) 'Col B
+                    
+                    If CurrProductAffiliate = LCase$(AffiliateName) And CurrProductTier = LCase$(CurrTier) Then
+                        WS_NewTier.Range("A" & NextFreeRow).Resize(1, 6).Value = Array(StatusData(CurrProductRow, 1), StatusData(CurrProductRow, 2), StatusData(CurrProductRow, 3), StatusData(CurrProductRow, 4), StatusData(CurrProductRow, 5), StatusData(CurrProductRow, 6))
+                        NextFreeRow = NextFreeRow + 1
+                    End If
+                Next CurrProductRow
+            End If
+        End If
+    Next CurrTierRow
+End Sub
 
-    For CurrFamilyRow = 2 To DemandForecastLRow
-        ' *** MODIFIED: Family is in column B (index 2) of DemandData array ***
-        CurrFamily = Trim$(DemandData(CurrFamilyRow, 2))
-        
-        If Len(CurrFamily) > 0 Then
-            Dim FamilySheetName As String
-            FamilySheetName = AffiliateName & "_" & CurrFamily
+' =================================================================================================================
+' Main Processing Logic for a single Affiliate
+' =================================================================================================================
+Private Sub ProcessForecastForAffiliate(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal DemandData As Variant, ByVal WS_Summary As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
+    Dim WS_CurrentTier As Worksheet, CurrTier As String, DemandLRow As Long, r As Long
+    DemandLRow = UBound(DemandData, 1)
+
+    For r = 2 To DemandLRow
+        If LCase$(Trim$(DemandData(r, 1))) = LCase$(AffiliateName) Then
+            CurrTier = Trim$(DemandData(r, 2))
+            Dim uniqueSheetName As String: uniqueSheetName = AffiliateName & " - " & CurrTier
+            Application.StatusBar = "Processing: " & uniqueSheetName & "..."
             
-            On Error Resume Next
-            TWB.Sheets(FamilySheetName).Delete
-            On Error GoTo 0
-            
-            Set WS_NewFamily = TWB.Sheets.Add(After:=TWB.Sheets(TWB.Sheets.Count))
-            WS_NewFamily.Name = FamilySheetName
-            
-            ' Headers now have an Affiliate column. Indices are shifted by 1.
-            WS_NewFamily.Range("A1:F1").Value = Array(StatusData(1, 1), StatusData(1, 2), StatusData(1, 3), StatusData(1, 4), StatusData(1, 5), StatusData(1, 6))
-            WS_NewFamily.Range("G1").Value = "Active/Discontinued"
-            WS_NewFamily.Range("H1").Value = "Phase Out Month"
-            
-            Dim NextFreeRow As Long: NextFreeRow = 2
-            For CurrProductRow = 2 To ProductStatusLRow
-                ' Family is now in column B (index 2)
-                CurrProductFamily = LCase$(Trim$(StatusData(CurrProductRow, 2)))
-                If CurrProductFamily = LCase$(CurrFamily) Then
-                    WS_NewFamily.Range("A" & NextFreeRow & ":F" & NextFreeRow).Value = Array(StatusData(CurrProductRow, 1), StatusData(CurrProductRow, 2), StatusData(CurrProductRow, 3), StatusData(CurrProductRow, 4), StatusData(CurrProductRow, 5), StatusData(CurrProductRow, 6))
-                    NextFreeRow = NextFreeRow + 1
+            If SheetExists(TWB, uniqueSheetName) Then
+                Set WS_CurrentTier = TWB.Sheets(uniqueSheetName)
+                If WS_CurrentTier.Cells(WS_CurrentTier.Rows.Count, "A").End(xlUp).Row > 1 Then 'Only process if there are products
+                    CalculateAndFormatTierSheet WS_CurrentTier, AffiliateName, StatusData, HistoryData, DemandData, WS_Log, LifecycleMap
+                    AppendToSummarySheet WS_CurrentTier, WS_Summary
                 End If
-            Next CurrProductRow
+                Set WS_CurrentTier = Nothing
+            End If
         End If
-    Next CurrFamilyRow
+    Next r
 End Sub
 
 ' =================================================================================================================
-' Helper Procedure: SetupSummaryHeaders
+' Calculation and Formatting for a single Tier Sheet
 ' =================================================================================================================
-Private Sub SetupSummaryHeaders(ByVal WS_Summary As Worksheet, ByVal StatusData As Variant)
-    WS_Summary.Range("A1:F1").Value = Array(StatusData(1, 1), StatusData(1, 2), StatusData(1, 3), StatusData(1, 4), StatusData(1, 5), StatusData(1, 6))
-    WS_Summary.Range("G1").Value = "Active/Discontinued"
-    WS_Summary.Range("H1").Value = "Phase Out Month"
-End Sub
-
-' =================================================================================================================
-' Helper Procedure: ProcessForecastData
-' =================================================================================================================
-Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal DemandData As Variant, ByVal WS_Summary As Worksheet, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
-    Dim WS_CurrentFamily As Worksheet, CurrFamily As String, DemandForecastLRow As Long, CurrFamilyRow As Long
-    DemandForecastLRow = UBound(DemandData, 1)
-
-    For CurrFamilyRow = 2 To DemandForecastLRow
-        ' Family is in column B (index 2)
-        CurrFamily = Trim$(DemandData(CurrFamilyRow, 2))
-        Dim FamilySheetName As String
-        FamilySheetName = AffiliateName & "_" & CurrFamily
-        
-        Application.StatusBar = "Processing family: " & CurrFamily & " for " & AffiliateName & "..."
-        
-        If SheetExists(TWB, FamilySheetName) Then
-            Set WS_CurrentFamily = TWB.Sheets(FamilySheetName)
-            CalculateAndFormatFamilySheet WS_CurrentFamily, StatusData, HistoryData, DemandData, WS_Log, LifecycleMap
-            AppendToSummarySheet WS_CurrentFamily, WS_Summary
-            Set WS_CurrentFamily = Nothing
-        End If
-    Next CurrFamilyRow
-End Sub
-
-' =================================================================================================================
-' Helper Procedure: CalculateAndFormatFamilySheet
-' =================================================================================================================
-Private Sub CalculateAndFormatFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal DemandData As Variant, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
-    Dim FamilyLRow As Long, HistLCol As Long, MonthCount As Long, DemandForecastLCol As Long
+Private Sub CalculateAndFormatTierSheet(ByVal WS_CurrentTier As Worksheet, ByVal AffiliateName As String, ByVal StatusData As Variant, ByVal HistoryData As Variant, ByVal DemandDataVariant As Variant, ByVal WS_Log As Worksheet, ByVal LifecycleMap As Object)
+    Dim TierLRow As Long, HistLCol As Long, MonthCount As Long
+    Dim SubTierSum As Double, TierSum As Double
     
-    ' Get historical month count relative to this affiliate's demand data
-    ' Demand data now starts in column C (index 3), since A=Affiliate, B=Family
-    MonthCount = GetHistoricalMonthCount(DemandData, HistoryData, 3)
+    MonthCount = GetHistoricalMonthCount(AffiliateName, DemandDataVariant, HistoryData)
     
-    ' Prepare headers
-    DemandForecastLCol = UBound(DemandData, 2)
-    Dim HeaderRow As Variant
-    HeaderRow = GetCombinedHeaderRow(DemandData, HistoryData, MonthCount, DemandForecastLCol)
+    Dim DemandLCol As Long, HeaderRow As Variant
+    DemandLCol = UBound(DemandDataVariant, 2)
+    HeaderRow = GetCombinedHeaderRow(AffiliateName, DemandDataVariant, HistoryData, MonthCount, DemandLCol)
     
-    AddNewProductsToFamilySheet WS_CurrentFamily, StatusData
-    FamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row
+    AddNewProductsToTierSheet WS_CurrentTier, AffiliateName, StatusData
+    TierLRow = WS_CurrentTier.Cells(WS_CurrentTier.Rows.Count, "A").End(xlUp).Row
+    If TierLRow < 2 Then Exit Sub
     
-    Dim OutputArray() As Variant
-    ReDim OutputArray(1 To FamilyLRow, 1 To UBound(HeaderRow))
+    Dim OutputArray() As Variant: ReDim OutputArray(1 To TierLRow, 1 To UBound(HeaderRow))
     
-    Dim r As Long, c As Long
+    Dim r As Long, c As Long, i As Long
     For c = 1 To UBound(HeaderRow): OutputArray(1, c) = HeaderRow(c): Next c
-    For r = 2 To FamilyLRow
-        For c = 1 To 6 ' A to F
-            OutputArray(r, c) = WS_CurrentFamily.Cells(r, c).Value
-        Next c
+    For r = 2 To TierLRow
+        For c = 1 To 6: OutputArray(r, c) = WS_CurrentTier.Cells(r, c).Value: Next c
     Next r
     
-    HistLCol = 8 + MonthCount ' Historical columns start after H
+    HistLCol = 8 + MonthCount 'A-F info, G status, H phase out
     
-    For r = 2 To FamilyLRow
-        Dim CurrAffiliate As String, CurrProductFamily As String, CurrGroupID As String, CurrProduct As String
+    For r = 2 To TierLRow
+        Dim CurrAffiliate As String, CurrTier As String, CurrSubTierID As String, CurrProduct As String
         CurrAffiliate = OutputArray(r, 1)
-        CurrProductFamily = OutputArray(r, 2)
-        CurrGroupID = OutputArray(r, 3)
-        CurrProduct = OutputArray(r, 6) ' I-S-D is now in Col F
+        CurrTier = OutputArray(r, 2)
+        CurrSubTierID = OutputArray(r, 3)
+        CurrProduct = OutputArray(r, 6)
         
+        Dim CompositeKey As String: CompositeKey = CurrAffiliate & "|" & CurrProduct
         Dim CurrentLifecycle As cProductLifecycle
-        If LifecycleMap.Exists(CurrProduct) Then Set CurrentLifecycle = LifecycleMap.Item(CurrProduct) Else Set CurrentLifecycle = New cProductLifecycle
+        If LifecycleMap.Exists(CompositeKey) Then Set CurrentLifecycle = LifecycleMap.Item(CompositeKey) Else Set CurrentLifecycle = New cProductLifecycle
         
         OutputArray(r, 7) = CurrentLifecycle.Status
         If CurrentLifecycle.PhaseOutDate > 0 Then OutputArray(r, 8) = CurrentLifecycle.PhaseOutDate
-        
+
         Dim HistoricSalesRow As Variant
-        HistoricSalesRow = GetHistoricalDataRow(CurrProduct, HistoryData, MonthCount + 6)
+        HistoricSalesRow = GetHistoricalDataRow(CurrAffiliate, CurrProduct, HistoryData, MonthCount + 6)
         For c = 1 To UBound(HistoricSalesRow): OutputArray(r, c + 8) = HistoricSalesRow(c): Next c
         
-        Dim ProdGroupSum As Double, FamilySum As Double
-        ProdGroupSum = GetHistoricalSum(CurrAffiliate, CurrProductFamily, CurrGroupID, HistoryData, MonthCount + 6)
-        FamilySum = GetHistoricalFamilySum(CurrAffiliate, CurrProductFamily, HistoryData, LifecycleMap, MonthCount + 6)
+        SubTierSum = GetHistoricalSubTierSum(CurrAffiliate, CurrTier, CurrSubTierID, HistoryData, MonthCount + 6)
+        TierSum = GetHistoricalTierSum(CurrAffiliate, CurrTier, HistoryData, LifecycleMap, MonthCount + 6)
         
-        Dim DemandDataRow As Long, i As Long
-        DemandDataRow = 0
-        For i = 2 To UBound(DemandData, 1)
-            If DemandData(i, 2) = CurrProductFamily Then
+        Dim DemandDataRow As Long: DemandDataRow = 0
+        For i = 2 To UBound(DemandDataVariant, 1)
+            If LCase$(DemandDataVariant(i, 1)) = LCase$(CurrAffiliate) And LCase$(DemandDataVariant(i, 2)) = LCase$(CurrTier) Then
                 DemandDataRow = i
                 Exit For
             End If
         Next i
-        
+
         If DemandDataRow > 0 Then
             For c = (HistLCol + 1) To UBound(OutputArray, 2)
-                Dim ForecastValue As Double, FamilyDemand As Double
-                FamilyDemand = DemandData(DemandDataRow, (c - HistLCol) + 2)
-                ForecastValue = CalculateForecastValue(CurrentLifecycle, OutputArray(1, c), ProdGroupSum, FamilySum, FamilyDemand)
+                Dim ForecastValue As Double
+                ForecastValue = CalculateForecastValue(CurrentLifecycle, OutputArray(1, c), SubTierSum, TierSum, DemandDataVariant(DemandDataRow, (c - HistLCol) + 2))
                 OutputArray(r, c) = ForecastValue
             Next c
         End If
+        Set CurrentLifecycle = Nothing
     Next r
     
-    WS_CurrentFamily.Cells.Clear
-    WS_CurrentFamily.Range("A1").Resize(UBound(OutputArray, 1), UBound(OutputArray, 2)).Value = OutputArray
+    WS_CurrentTier.Cells.Clear
+    WS_CurrentTier.Range("A1").Resize(UBound(OutputArray, 1), UBound(OutputArray, 2)).Value = OutputArray
     
-    FormatEnhancedSheet WS_CurrentFamily
+    FormatEnhancedSheet WS_CurrentTier
 End Sub
 
+' =================================================================================================================
+' Lifecycle Mapping Function (In-Memory using Composite Key)
+' =================================================================================================================
+Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As Worksheet) As Object
+    Dim r As Long, AffiliateName As String, ProductID As String, CompositeKey As String, SupersededByKey As String
+    Dim TempLifecycle As cProductLifecycle, LifecycleDict As Object: Set LifecycleDict = CreateObject("Scripting.Dictionary")
+    
+    If Not IsArray(StatusData) Or UBound(StatusData, 1) < 2 Then Set BuildLifecycleMap = LifecycleDict: Exit Function
+    
+    For r = 2 To UBound(StatusData, 1)
+        AffiliateName = Trim$(StatusData(r, 1))
+        ProductID = Trim$(StatusData(r, 6))
+        CompositeKey = AffiliateName & "|" & ProductID
+        
+        If Len(ProductID) > 0 And Not LifecycleDict.Exists(CompositeKey) Then
+            Set TempLifecycle = New cProductLifecycle
+            With TempLifecycle
+                .Affiliate = AffiliateName
+                .ProductID = ProductID
+                .Status = Trim$(StatusData(r, 7))
+                Dim PhaseOutDate As Variant: PhaseOutDate = StatusData(r, 8)
+                Dim PhaseOutPercent As Variant: PhaseOutPercent = StatusData(r, 9)
+                .SupersededByProductID = Trim$(StatusData(r, 10))
+
+                If .Status = STATUS_PHASE_IN_OUT Or .Status = STATUS_DISCONTINUED Then
+                    .IsPhasingOut = True
+                    If IsDate(PhaseOutDate) Then .PhaseOutDate = CDate(PhaseOutDate)
+                    If IsNumeric(PhaseOutPercent) Then .PhaseOutPercent = CDbl(PhaseOutPercent)
+                End If
+            End With
+            LifecycleDict.Add CompositeKey, TempLifecycle
+            Set TempLifecycle = Nothing
+        End If
+    Next r
+
+    For Each CompositeKey In LifecycleDict.Keys
+        Set TempLifecycle = LifecycleDict.Item(CompositeKey)
+        If TempLifecycle.IsPhasingOut And Len(TempLifecycle.SupersededByProductID) > 0 Then
+            SupersededByKey = TempLifecycle.Affiliate & "|" & TempLifecycle.SupersededByProductID
+            If LifecycleDict.Exists(SupersededByKey) Then
+                Dim SuccessorLifecycle As cProductLifecycle
+                Set SuccessorLifecycle = LifecycleDict.Item(SupersededByKey)
+                With SuccessorLifecycle
+                    .IsPhasingIn = True
+                    .ReplacesProductID = TempLifecycle.ProductID
+                    .PhaseInDate = TempLifecycle.PhaseOutDate
+                    .PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
+                End With
+                Set SuccessorLifecycle = Nothing
+            Else
+                WriteToLog WS_Log, "Warning", "In Affiliate '" & TempLifecycle.Affiliate & "', Product '" & TempLifecycle.ProductID & "' is superseded by '" & TempLifecycle.SupersededByProductID & "', but the successor product was not found."
+            End If
+        End If
+    Next CompositeKey
+    Set TempLifecycle = Nothing
+    Set BuildLifecycleMap = LifecycleDict
+End Function
 
 ' =================================================================================================================
-' Helper Function: CalculateForecastValue
+' Data Retrieval Helper Functions (Updated for Multi-Affiliate & New Columns)
 ' =================================================================================================================
-Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, ByVal ForecastDate As Date, ByVal ProdGroupSum As Double, ByVal FamilySum As Double, ByVal FamilyDemand As Double) As Double
-    Dim BaseForecast As Double: BaseForecast = 0
-    If FamilySum > 0 Then BaseForecast = (ProdGroupSum * FamilyDemand) / FamilySum
+Private Function GetHistoricalDataRow(ByVal AffiliateName As String, ByVal ProductName As String, ByVal HistoryData As Variant, ByVal HistColCount As Long) As Variant
+    Dim r As Long, c As Long, Result() As Variant: ReDim Result(1 To HistColCount - 6)
 
-    Dim FinalForecast As Double: FinalForecast = 0
+    For r = 2 To UBound(HistoryData, 1)
+        If Trim$(HistoryData(r, 1)) = AffiliateName And Trim$(HistoryData(r, 6)) = ProductName Then
+            For c = 7 To HistColCount: Result(c - 6) = HistoryData(r, c): Next c
+            GetHistoricalDataRow = Result
+            Exit Function
+        End If
+    Next r
+    GetHistoricalDataRow = Result 'Return empty array if not found
+End Function
+
+Private Function GetHistoricalTierSum(ByVal AffiliateName As String, ByVal TierName As String, ByVal HistoryData As Variant, ByVal LifecycleMap As Object, ByVal HistLCol As Long) As Double
+    Dim TotalSum As Double, r As Long, c As Long, HSProduct As String, CompositeKey As String
+    For r = 2 To UBound(HistoryData, 1)
+        If LCase$(Trim$(HistoryData(r, 1))) = LCase$(AffiliateName) And LCase$(Trim$(HistoryData(r, 2))) = LCase$(TierName) Then
+            HSProduct = Trim$(HistoryData(r, 6))
+            CompositeKey = Trim$(HistoryData(r, 1)) & "|" & HSProduct
+            Dim HSLifecycle As cProductLifecycle
+            If LifecycleMap.Exists(CompositeKey) Then
+                Set HSLifecycle = LifecycleMap.Item(CompositeKey)
+                If HSLifecycle.Status <> STATUS_DISCONTINUED Then
+                    For c = 7 To HistLCol: TotalSum = TotalSum + Val(HistoryData(r, c)): Next c
+                Else
+                    For c = 7 To HistLCol
+                        If HSLifecycle.PhaseOutDate > 0 And IsDate(HistoryData(1, c)) Then
+                            If CDate(HistoryData(1, c)) < HSLifecycle.PhaseOutDate Then TotalSum = TotalSum + Val(HistoryData(r, c))
+                        End If
+                    Next c
+                End If
+                Set HSLifecycle = Nothing
+            End If
+        End If
+    Next r
+    GetHistoricalTierSum = TotalSum
+End Function
+
+Private Function GetHistoricalSubTierSum(ByVal AffiliateName As String, ByVal TierName As String, ByVal SubTierName As String, ByVal HistoryData As Variant, ByVal HistLCol As Long) As Double
+    Dim TotalSum As Double, r As Long, c As Long
+    For r = 2 To UBound(HistoryData, 1)
+        If LCase$(Trim$(HistoryData(r, 1))) = LCase$(AffiliateName) And LCase$(Trim$(HistoryData(r, 2))) = LCase$(TierName) And LCase$(Trim$(HistoryData(r, 3))) = LCase$(SubTierName) Then
+            For c = 7 To HistLCol: TotalSum = TotalSum + Val(HistoryData(r, c)): Next c
+        End If
+    Next r
+    GetHistoricalSubTierSum = TotalSum
+End Function
+
+' =================================================================================================================
+' Core Calculation Function
+' =================================================================================================================
+Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, ByVal ForecastDate As Date, ByVal SubTierSum As Double, ByVal TierSum As Double, ByVal TierDemand As Double) As Double
+    Dim BaseForecast As Double: If TierSum > 0 Then BaseForecast = (SubTierSum * TierDemand) / TierSum
+    Dim FinalForecast As Double
 
     Select Case Lifecycle.Status
         Case STATUS_ACTIVE, STATUS_NEW
             FinalForecast = BaseForecast
         Case STATUS_PHASE_IN_OUT
-            If Lifecycle.PhaseOutDate > 0 And ForecastDate >= Lifecycle.PhaseOutDate Then
+            If Lifecycle.IsPhasingOut And Lifecycle.PhaseOutDate > 0 And ForecastDate >= Lifecycle.PhaseOutDate Then
                 If Month(ForecastDate) = Month(Lifecycle.PhaseOutDate) And Year(ForecastDate) = Year(Lifecycle.PhaseOutDate) Then
                     FinalForecast = BaseForecast * Lifecycle.PhaseOutPercent
                 Else
@@ -309,6 +398,8 @@ Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, By
             End If
         Case STATUS_DISCONTINUED
              If Lifecycle.PhaseOutDate > 0 And ForecastDate >= Lifecycle.PhaseOutDate Then FinalForecast = 0 Else FinalForecast = BaseForecast
+        Case Else
+            FinalForecast = BaseForecast
     End Select
 
     If Lifecycle.IsPhasingIn Then
@@ -318,51 +409,131 @@ Private Function CalculateForecastValue(ByVal Lifecycle As cProductLifecycle, By
             FinalForecast = BaseForecast * Lifecycle.PhaseInPercent
         End If
     End If
-
     CalculateForecastValue = FinalForecast
 End Function
 
 ' =================================================================================================================
-' Helper Procedure: AddNewProductsToFamilySheet
+' Utility Functions (Updated and New)
 ' =================================================================================================================
-Private Sub AddNewProductsToFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByVal StatusData As Variant)
-    Dim ProductStatusLRow As Long, FamilyLRow As Long, CurrProdRow As Long
-    Dim CurrProduct As String, CurrProductFamily As String, ActiveType As String
-    ProductStatusLRow = UBound(StatusData, 1)
-    
-    For CurrProdRow = 2 To ProductStatusLRow
-        CurrProductFamily = LCase$(Trim$(StatusData(CurrProdRow, 2))) ' Family is Col B
-        ActiveType = Trim$(StatusData(CurrProdRow, 7)) ' Status is Col G
-        CurrProduct = Trim$(StatusData(CurrProdRow, 6)) ' I-S-D is Col F
-        
-        If CurrProductFamily = LCase$(Split(WS_CurrentFamily.Name, "_")(1)) And ActiveType = STATUS_NEW Then
-            Dim Found As Range
-            Set Found = WS_CurrentFamily.Range("F:F").Find(What:=CurrProduct, LookIn:=xlValues, LookAt:=xlWhole)
-            If Found Is Nothing Then
-                FamilyLRow = WS_CurrentFamily.Cells(WS_CurrentFamily.Rows.Count, "A").End(xlUp).Row + 1
-                WS_CurrentFamily.Range("A" & FamilyLRow & ":F" & FamilyLRow).Value = Array(StatusData(CurrProdRow, 1), StatusData(CurrProdRow, 2), StatusData(CurrProdRow, 3), StatusData(CurrProdRow, 4), StatusData(CurrProdRow, 5), StatusData(CurrProdRow, 6))
+Private Sub AddNewProductsToTierSheet(ByVal WS_CurrentTier As Worksheet, ByVal AffiliateName As String, ByVal StatusData As Variant)
+    Dim r As Long, LastRow As Long, CurrProduct As String, ActiveType As String
+    For r = 2 To UBound(StatusData, 1)
+        If LCase$(Trim$(StatusData(r, 1))) = LCase$(AffiliateName) And LCase$(Trim$(StatusData(r, 2))) = LCase$(Replace(WS_CurrentTier.Name, AffiliateName & " - ", "")) Then
+            ActiveType = Trim$(StatusData(r, 7))
+            If ActiveType = STATUS_NEW Then
+                CurrProduct = Trim$(StatusData(r, 6))
+                Dim Found As Range: Set Found = WS_CurrentTier.Range("F:F").Find(What:=CurrProduct, LookIn:=xlValues, LookAt:=xlWhole)
+                If Found Is Nothing Then
+                    LastRow = WS_CurrentTier.Cells(WS_CurrentTier.Rows.Count, "A").End(xlUp).Row + 1
+                    WS_CurrentTier.Range("A" & LastRow).Resize(1, 6).Value = Array(StatusData(r, 1), StatusData(r, 2), StatusData(r, 3), StatusData(r, 4), StatusData(r, 5), StatusData(r, 6))
+                End If
             End If
         End If
-    Next CurrProdRow
+    Next r
 End Sub
 
-' =================================================================================================================
-' Helper Procedure: FormatEnhancedSheet
-' =================================================================================================================
+Private Sub SetupOutputSheetHeaders(ByVal WS As Worksheet)
+    WS.Range("A1:H1").Value = Array("Affiliate", "Forecast Tier", "Forecast Sub-Tier", "Local Item Nbr", "Desc", "I-S-D", "Active/Discontinued", "Phase Out Month")
+End Sub
+
+Private Function CreateOutputWorkbookForAffiliate(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal WS_Summary As Worksheet) As Workbook
+    Dim WB As Workbook, WS As Worksheet, SheetNames As Object: Set SheetNames = CreateObject("System.Collections.ArrayList")
+
+    WS_Summary.Name = SUMMARY_SHEET_PREFIX
+    FormatEnhancedSheet WS_Summary
+    
+    SheetNames.Add WS_Summary.Name
+    For Each WS In TWB.Worksheets
+        If InStr(1, WS.Name, AffiliateName & " - ") > 0 Then SheetNames.Add WS.Name
+    Next WS
+    
+    If SheetNames.Count < 2 Then Set CreateOutputWorkbookForAffiliate = Nothing: Exit Function
+    
+    TWB.Sheets(SheetNames.ToArray).Copy
+    Set WB = ActiveWorkbook
+    
+    For Each WS In WB.Worksheets
+        WS.Cells.Copy
+        WS.Cells.PasteSpecial Paste:=xlPasteValuesAndNumberFormats
+    Next WS
+    Application.CutCopyMode = False
+    
+    On Error Resume Next
+    WB.Sheets(SUMMARY_SHEET_PREFIX).Activate
+    On Error GoTo 0
+
+    Set CreateOutputWorkbookForAffiliate = WB
+End Function
+
+Private Function GetHistoricalMonthCount(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant) As Long
+    Dim r As Long, HistLCol As Long, CurrCol As Long, Count As Long, DemandStartDate As Date
+    HistLCol = UBound(HistoryData, 2)
+    
+    For r = 2 To UBound(DemandData, 1)
+        If LCase$(Trim$(DemandData(r, 1))) = LCase$(AffiliateName) Then
+            If IsDate(DemandData(r, 3)) Then 'Forecast dates start in Col C
+                DemandStartDate = CDate(DemandData(r, 3))
+                Exit For
+            End If
+        End If
+    Next r
+    If DemandStartDate = 0 Then Exit Function
+
+    For CurrCol = 7 To HistLCol 'Historical dates start in Col G
+        If IsDate(HistoryData(1, CurrCol)) Then
+            If CDate(HistoryData(1, CurrCol)) < DemandStartDate Then Count = Count + 1 Else Exit For
+        End If
+    Next CurrCol
+    GetHistoricalMonthCount = Count
+End Function
+
+Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
+    Dim HistHeaders() As Variant, r As Long, c As Long: ReDim HistHeaders(1 To MonthCount)
+    For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
+    
+    Dim DemandHeaders() As Variant
+    For r = 2 To UBound(DemandData, 1)
+        If LCase$(Trim$(DemandData(r, 1))) = LCase$(AffiliateName) Then
+            DemandHeaders = Application.WorksheetFunction.Index(DemandData, r, 0)
+            Exit For
+        End If
+    Next r
+    
+    Dim Combined() As Variant: ReDim Combined(1 To 8 + MonthCount + (DemandLCol - 2))
+    Combined(1) = "Affiliate": Combined(2) = "Forecast Tier": Combined(3) = "Forecast Sub-Tier": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
+    For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
+    For c = 3 To DemandLCol: Combined(c + 8 + MonthCount - 2) = DemandHeaders(c): Next c
+    GetCombinedHeaderRow = Combined
+End Function
+
+Private Sub AppendToSummarySheet(ByVal WS_Tier As Worksheet, ByVal WS_Summary As Worksheet)
+    Dim TierLRow As Long, TierLCol As Long, SummaryLRow As Long
+    TierLRow = WS_Tier.Cells(WS_Tier.Rows.Count, "A").End(xlUp).Row
+    If TierLRow < 2 Then Exit Sub
+    TierLRow = TierLRow - 1 'Exclude total row
+    
+    TierLCol = WS_Tier.Cells(1, WS_Tier.Columns.Count).End(xlToLeft).Column
+    SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
+    
+    If IsEmpty(WS_Summary.Range("I1").Value) Then
+        WS_Tier.Range("I1", WS_Tier.Cells(1, TierLCol)).Copy WS_Summary.Range("I1")
+    End If
+    
+    WS_Tier.Range("A2", WS_Tier.Cells(TierLRow + 1, TierLCol)).Copy WS_Summary.Range("A" & SummaryLRow + 1)
+End Sub
+
 Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
     If WS.Cells(1, 1).Value = "" Then Exit Sub
-
-    Dim LastRow As Long, LastCol As Long, TotalRow As Long, i As Long, r As Long
-    
+    Dim LastRow As Long, LastCol As Long, TotalRow As Long, r As Long, i As Long
     LastRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row
     LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
-    TotalRow = LastRow + 1
+    TotalRow = LastRow
+    If LCase$(WS.Cells(LastRow, 1).Value) <> "total" Then TotalRow = LastRow + 1
 
-    ' Data starts in column I (index 9)
-    For i = 9 To LastCol
+    WS.Cells(TotalRow, 1).Value = "TOTAL"
+    For i = 9 To LastCol 'Totals start at column I
         WS.Cells(TotalRow, i).Value = Application.WorksheetFunction.Sum(WS.Range(WS.Cells(2, i), WS.Cells(LastRow, i)))
     Next i
-    WS.Cells(TotalRow, 1).Value = "TOTAL"
 
     Dim HeaderRange As Range, DataRange As Range, TotalRange As Range, FullRange As Range
     Set HeaderRange = WS.Range(WS.Cells(1, 1), WS.Cells(1, LastCol))
@@ -387,270 +558,33 @@ Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
     End With
     
     For r = 2 To LastRow
-        If r Mod 2 = 0 Then
-            WS.Range(WS.Cells(r, 1), WS.Cells(r, LastCol)).Interior.Color = RGB(242, 242, 242)
-        End If
+        If r Mod 2 = 0 Then WS.Range(WS.Cells(r, 1), WS.Cells(r, LastCol)).Interior.Color = RGB(242, 242, 242)
     Next r
     
-    Dim HistLCol As Long
-    HistLCol = GetLastHistoricalColumn(WS)
-    If HistLCol > 8 Then
-        WS.Range(WS.Cells(2, 9), WS.Cells(LastRow, HistLCol)).Interior.Color = RGB(220, 220, 220)
-        With WS.Range(WS.Cells(1, HistLCol), WS.Cells(TotalRow, HistLCol)).Borders(xlEdgeRight)
-            .LineStyle = xlContinuous
-            .Color = RGB(47, 85, 151)
-            .Weight = xlMedium
-        End With
-    End If
-    
-    FullRange.Borders.LineStyle = xlContinuous
-    FullRange.Borders.Weight = xlThin
-    FullRange.Borders.Color = RGB(210, 210, 210)
-    
+    'Number formatting starts at column I
     WS.Range(WS.Cells(2, 9), WS.Cells(TotalRow, LastCol)).NumberFormat = "_(* #,##0_);_(* (#,##0);_(* ""-""??_);_(@_)"
     WS.Range(WS.Cells(1, 9), WS.Cells(1, LastCol)).NumberFormat = "mmm-yy"
     
     WS.Cells.EntireColumn.AutoFit
+    If WS.Name = SUMMARY_SHEET_PREFIX Then
+        WS.Range("A1", WS.Cells(TotalRow, LastCol)).Sort Key1:=WS.Range("F2"), Order1:=xlAscending, Key2:=WS.Range("B2"), Order2:=xlAscending, Header:=xlYes
+    End If
     WS.Activate
     WS.Range("A2").Select
     ActiveWindow.FreezePanes = True
 End Sub
 
-
-' =================================================================================================================
-' Helper Procedure: AppendToSummarySheet
-' =================================================================================================================
-Private Sub AppendToSummarySheet(ByVal WS_Family As Worksheet, ByVal WS_Summary As Worksheet)
-    Dim FamilyLRow As Long, FamilyLCol As Long, SummaryLRow As Long
-    
-    FamilyLRow = WS_Family.Cells(WS_Family.Rows.Count, "A").End(xlUp).Row - 1
-    If FamilyLRow < 2 Then Exit Sub
-    
-    FamilyLCol = WS_Family.Cells(1, WS_Family.Columns.Count).End(xlToLeft).Column
-    SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
-    
-    ' Data headers start at column I (index 9)
-    If IsEmpty(WS_Summary.Range("I1").Value) Then
-        WS_Family.Range("I1", WS_Family.Cells(1, FamilyLCol)).Copy WS_Summary.Range("I1")
-    End If
-    
-    Dim FamilyData As Variant
-    FamilyData = WS_Family.Range("A2", WS_Family.Cells(FamilyLRow, FamilyLCol)).Value
-    WS_Summary.Range("A" & SummaryLRow + 1).Resize(UBound(FamilyData, 1), UBound(FamilyData, 2)).Value = FamilyData
-End Sub
-
-' =================================================================================================================
-' Lifecycle Mapping Function (In-Memory)
-' =================================================================================================================
-Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As Worksheet) As Object
-    Dim r As Long, ProductID As String, productKey As Variant
-    Dim TempLifecycle As cProductLifecycle
-    Dim LifecycleDict As Object: Set LifecycleDict = CreateObject("Scripting.Dictionary")
-    
-    For r = 2 To UBound(StatusData, 1)
-        ProductID = Trim$(StatusData(r, 6)) ' I-S-D is now Col F
-        If Len(ProductID) > 0 And Not LifecycleDict.Exists(ProductID) Then
-            Set TempLifecycle = New cProductLifecycle
-            With TempLifecycle
-                .ProductID = ProductID
-                .Status = Trim$(StatusData(r, 7)) ' Status is Col G
-                Dim PhaseOutDate As Variant: PhaseOutDate = StatusData(r, 8) ' Date is Col H
-                Dim PhaseOutPercent As Variant: PhaseOutPercent = StatusData(r, 9) ' Percent is Col I
-                .SupersededByProductID = Trim$(StatusData(r, 10)) ' Superseded is Col J
-
-                If .Status = STATUS_PHASE_IN_OUT Or .Status = STATUS_DISCONTINUED Then
-                    .IsPhasingOut = True
-                    If IsDate(PhaseOutDate) Then .PhaseOutDate = CDate(PhaseOutDate)
-                    If IsNumeric(PhaseOutPercent) Then .PhaseOutPercent = CDbl(PhaseOutPercent)
-                End If
-            End With
-            LifecycleDict.Add ProductID, TempLifecycle
-        End If
-    Next r
-
-    For Each productKey In LifecycleDict.Keys
-        Set TempLifecycle = LifecycleDict.Item(productKey)
-        If TempLifecycle.IsPhasingOut And Len(TempLifecycle.SupersededByProductID) > 0 Then
-            If LifecycleDict.Exists(TempLifecycle.SupersededByProductID) Then
-                Dim SuccessorLifecycle As cProductLifecycle
-                Set SuccessorLifecycle = LifecycleDict.Item(TempLifecycle.SupersededByProductID)
-                With SuccessorLifecycle
-                    .IsPhasingIn = True
-                    .ReplacesProductID = TempLifecycle.ProductID
-                    .PhaseInDate = TempLifecycle.PhaseOutDate
-                    .PhaseInPercent = 1 - TempLifecycle.PhaseOutPercent
-                End With
-            Else
-                WriteToLog WS_Log, "Warning", "Product '" & TempLifecycle.ProductID & "' is set to be superseded by '" & TempLifecycle.SupersededByProductID & "', but the successor product was not found in '" & STATUS_SHEET & "'."
-            End If
-        End If
-    Next productKey
-
-    Set BuildLifecycleMap = LifecycleDict
-End Function
-
-' =================================================================================================================
-' Data Retrieval Helper Functions (In-Memory)
-' =================================================================================================================
-Private Function GetHistoricalDataRow(ByVal ProductName As String, ByVal HistoryData As Variant, ByVal HistLCol As Long) As Variant
-    Dim r As Long, c As Long
-    Dim Result() As Variant
-    ReDim Result(1 To HistLCol - 6) ' Offset is 6 due to columns A-F
-
-    For r = 2 To UBound(HistoryData, 1)
-        If Trim$(HistoryData(r, 6)) = ProductName Then ' Product is Col F
-            For c = 7 To HistLCol ' Data starts in Col G
-                Result(c - 6) = HistoryData(r, c)
-            Next c
-            GetHistoricalDataRow = Result
-            Exit Function
-        End If
-    Next r
-    GetHistoricalDataRow = Result
-End Function
-
-Private Function GetHistoricalSum(ByVal AffiliateName As String, ByVal FamilyName As String, ByVal GroupID As String, ByVal HistoryData As Variant, ByVal HistLCol As Long) As Double
-    Dim TotalSum As Double, i As Long, r As Long
-    Dim CurrentAffiliate As String, CurrentFamily As String, CurrentGroupID As String
-    TotalSum = 0
-    For r = 2 To UBound(HistoryData, 1)
-        CurrentAffiliate = Trim$(HistoryData(r, 1))
-        CurrentFamily = Trim$(HistoryData(r, 2))
-        CurrentGroupID = Trim$(HistoryData(r, 3))
-        
-        If CurrentAffiliate = AffiliateName And CurrentFamily = FamilyName And CurrentGroupID = GroupID Then
-            For i = 7 To HistLCol ' Data starts in Col G
-                TotalSum = TotalSum + Val(HistoryData(r, i))
-            Next i
-        End If
-    Next r
-    GetHistoricalSum = TotalSum
-End Function
-
-Private Function GetHistoricalFamilySum(ByVal AffiliateName As String, ByVal FamilyName As String, ByVal HistoryData As Variant, ByVal LifecycleMap As Object, ByVal HistLCol As Long) As Double
-    Dim TotalSum As Double, r As Long, c As Long
-    Dim HSProduct As String, HSFamily As String, HSAffiliate As String
-    TotalSum = 0
-    For r = 2 To UBound(HistoryData, 1)
-        HSAffiliate = Trim$(HistoryData(r, 1))
-        HSFamily = Trim$(HistoryData(r, 2))
-        
-        If HSAffiliate = AffiliateName And HSFamily = FamilyName Then
-            HSProduct = Trim$(HistoryData(r, 6)) ' Product is Col F
-            Dim HSLifecycle As cProductLifecycle
-            If LifecycleMap.Exists(HSProduct) Then Set HSLifecycle = LifecycleMap.Item(HSProduct)
-            
-            If Not HSLifecycle Is Nothing Then
-                For c = 7 To HistLCol ' Data starts in Col G
-                    Dim IncludeSale As Boolean: IncludeSale = False
-                    If HSLifecycle.Status <> STATUS_DISCONTINUED Then
-                        IncludeSale = True
-                    Else
-                        If HSLifecycle.PhaseOutDate > 0 And IsDate(HistoryData(1, c)) Then
-                                If CDate(HistoryData(1, c)) < HSLifecycle.PhaseOutDate Then IncludeSale = True
-                        Else
-                            IncludeSale = True
-                        End If
-                    End If
-                    If IncludeSale Then TotalSum = TotalSum + Val(HistoryData(r, c))
-                Next c
-            End If
-            Set HSLifecycle = Nothing
-        End If
-    Next r
-    GetHistoricalFamilySum = TotalSum
-End Function
-
-' =================================================================================================================
-' Utility Functions
-' =================================================================================================================
 Private Function LoadDataToArray(ByVal WS As Worksheet) As Variant
+    If WS Is Nothing Then Exit Function
     Dim LRow As Long, LCol As Long
-    If WorksheetIsEmpty(WS) Then
-        Dim TempArray(1 To 1, 1 To 1) As Variant
-        TempArray(1, 1) = ""
-        LoadDataToArray = TempArray
-        Exit Function
-    End If
     LRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row
     LCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
-    LoadDataToArray = WS.Range(WS.Cells(1, 1), WS.Cells(LRow, LCol)).Value
-End Function
-
-Private Function GetCombinedHeaderRow(ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
-    Dim HistHeaders() As Variant, DemandHeaders() As Variant, c As Long
-    ReDim HistHeaders(1 To MonthCount)
-    For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
-    
-    Dim TempDemandHeaders() As Variant
-    ReDim TempDemandHeaders(1 To DemandLCol - 2)
-    For c = 3 To DemandLCol
-        TempDemandHeaders(c - 2) = DemandData(1, c)
-    Next c
-    
-    Dim Combined() As Variant
-    ReDim Combined(1 To 8 + MonthCount + UBound(TempDemandHeaders))
-    Combined(1) = "Affiliate": Combined(2) = "Family": Combined(3) = "Sub-Family": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
-    For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
-    For c = 1 To UBound(TempDemandHeaders): Combined(c + 8 + MonthCount) = TempDemandHeaders(c): Next c
-    GetCombinedHeaderRow = Combined
-End Function
-
-Private Function GetHistoricalMonthCount(ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal DemandStartDateCol As Long) As Long
-    Dim HistLCol As Long, CurrCol As Long, Count As Long
-    HistLCol = UBound(HistoryData, 2)
-    Count = 0
-    If UBound(DemandData, 1) < 2 Then GetHistoricalMonthCount = 0: Exit Function
-    
-    For CurrCol = 7 To HistLCol ' Historical data starts in Col G
-        If IsDate(DemandData(2, DemandStartDateCol)) And IsDate(HistoryData(1, CurrCol)) Then
-            If CDate(DemandData(2, DemandStartDateCol)) > CDate(HistoryData(1, CurrCol)) Then Count = Count + 1 Else Exit For
-        End If
-    Next CurrCol
-    GetHistoricalMonthCount = Count
-End Function
-
-Private Function GetLastHistoricalColumn(ByVal WS As Worksheet) As Long
-    Dim LastCol As Long, i As Long
-    Dim FirstForecastCol As Long: FirstForecastCol = 9 ' Data starts Col I
-    LastCol = WS.Cells(1, WS.Columns.Count).End(xlToLeft).Column
-
-    Dim FirstDateCol As Long: FirstDateCol = 0
-    For i = FirstForecastCol To LastCol
-        If IsDate(WS.Cells(1, i).Value) Then
-            FirstDateCol = i
-            Exit For
-        End If
-    Next i
-    
-    If FirstDateCol = 0 Then GetLastHistoricalColumn = LastCol: Exit Function
-
-    Dim DemandForecastStartDate As Date, AffiliateName As String, FamilyName As String
-    AffiliateName = WS.Cells(2, 1).Value
-    FamilyName = WS.Cells(2, 2).Value
-    
-    Dim DemandData As Variant
-    DemandData = FilterDataByColumn(LoadDataToArray(ThisWorkbook.Sheets(DEMAND_SHEET)), 1, AffiliateName)
-    DemandData = FilterDataByColumn(DemandData, 2, FamilyName)
-
-    If Not IsEmpty(DemandData) Then
-       If UBound(DemandData, 1) >= 2 And UBound(DemandData, 2) >= 3 Then
-            If IsDate(DemandData(2, 3)) Then DemandForecastStartDate = CDate(DemandData(2, 3))
-       End If
+    If LRow > 1 And LCol > 0 Then
+        LoadDataToArray = WS.Range(WS.Cells(1, 1), WS.Cells(LRow, LCol)).Value
+    Else
+        Dim TempArray(1 To 1, 1 To 1) As Variant: TempArray(1, 1) = ""
+        LoadDataToArray = TempArray
     End If
-
-    If Not IsDate(DemandForecastStartDate) Then GetLastHistoricalColumn = LastCol: Exit Function
-
-    GetLastHistoricalColumn = 8
-    For i = FirstForecastCol To LastCol
-        If IsDate(WS.Cells(1, i).Value) Then
-            If CDate(WS.Cells(1, i).Value) < DemandForecastStartDate Then
-                 GetLastHistoricalColumn = i
-            Else
-                 Exit For
-            End If
-        End If
-    Next i
 End Function
 
 Private Function SheetExists(ByVal WB As Workbook, ByVal SheetName As String) As Boolean
@@ -660,50 +594,6 @@ Private Function SheetExists(ByVal WB As Workbook, ByVal SheetName As String) As
     On Error GoTo 0
     SheetExists = Not WS Is Nothing
 End Function
-
-Private Function CreateOutputWorkbook(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal WS_Summary As Worksheet) As Workbook
-    Dim WB As Workbook, WS As Worksheet
-    Dim SheetNames As Object: Set SheetNames = CreateObject("System.Collections.ArrayList")
-
-    Dim SummaryLastRow As Long
-    SummaryLastRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
-    If SummaryLastRow > 1 Then
-        Dim SummaryLastCol As Long
-        SummaryLastCol = WS_Summary.Cells(1, WS_Summary.Columns.Count).End(xlToLeft).Column
-        WS_Summary.Range("A1", WS_Summary.Cells(SummaryLastRow, SummaryLastCol)).Sort Key1:=WS_Summary.Range("F2"), Order1:=xlAscending, Header:=xlYes ' Sort by I-S-D in Col F
-        FormatEnhancedSheet WS_Summary
-    End If
-    
-    ' Add the summary sheet for this affiliate first
-    SheetNames.Add WS_Summary.Name
-
-    ' Add all other family sheets for this affiliate
-    For Each WS In TWB.Worksheets
-        If Left(WS.Name, Len(AffiliateName) + 1) = AffiliateName & "_" And WS.Name <> WS_Summary.Name Then
-            SheetNames.Add WS.Name
-        End If
-    Next WS
-    
-    If SheetNames.Count = 0 Then Set CreateOutputWorkbook = Nothing: Exit Function
-    
-    TWB.Sheets(SheetNames.ToArray).Copy
-    Set WB = ActiveWorkbook
-    
-    On Error Resume Next
-    WB.Sheets(1).Activate
-    On Error GoTo 0
-
-    Set CreateOutputWorkbook = WB
-End Function
-
-Private Sub CleanUpAffiliateSheets(ByVal TWB As Workbook, ByVal AffiliateName As String)
-    Dim WS As Worksheet
-    For Each WS In TWB.Worksheets
-        If Left(WS.Name, Len(AffiliateName) + 1) = AffiliateName & "_" Then
-            WS.Delete
-        End If
-    Next WS
-End Sub
 
 Private Sub InitializeLogSheet(ByVal WS As Worksheet)
     WS.Name = LOG_SHEET
@@ -715,68 +605,10 @@ Private Sub InitializeLogSheet(ByVal WS As Worksheet)
 End Sub
 
 Private Sub WriteToLog(ByVal WS As Worksheet, ByVal LogType As String, ByVal Message As String)
+    If WS Is Nothing Then Exit Sub
     Dim NextRow As Long
     NextRow = WS.Cells(WS.Rows.Count, "A").End(xlUp).Row + 1
     WS.Cells(NextRow, "A").Value = Now
     WS.Cells(NextRow, "B").Value = LogType
     WS.Cells(NextRow, "C").Value = Message
 End Sub
-
-Private Function GetUniqueValues(ByVal DataArray As Variant, ByVal ColumnIndex As Long) As Object
-    Dim Dict As Object, r As Long
-    Set Dict = CreateObject("Scripting.Dictionary")
-    Dict.CompareMode = vbTextCompare ' Case-insensitive
-    
-    If IsEmpty(DataArray) Or LBound(DataArray, 1) > UBound(DataArray, 1) Then
-        Set GetUniqueValues = Dict
-        Exit Function
-    End If
-
-    For r = 2 To UBound(DataArray, 1) ' Start from row 2 to skip header
-        Dim Key As String
-        Key = Trim(DataArray(r, ColumnIndex))
-        If Len(Key) > 0 And Not Dict.Exists(Key) Then
-            Dict.Add Key, 1
-        End If
-    Next r
-    Set GetUniqueValues = Dict
-End Function
-
-Private Function FilterDataByColumn(ByVal SourceArray As Variant, ByVal ColumnIndex As Long, ByVal FilterValue As String) As Variant
-    Dim ResultArray() As Variant, r As Long, c As Long, MatchCount As Long
-    If IsEmpty(SourceArray) Or LBound(SourceArray, 1) > UBound(SourceArray, 1) Then Exit Function
-
-    ReDim TempArray(LBound(SourceArray, 1) To UBound(SourceArray, 1), LBound(SourceArray, 2) To UBound(SourceArray, 2))
-    
-    ' Copy header row
-    For c = LBound(SourceArray, 2) To UBound(SourceArray, 2)
-        TempArray(1, c) = SourceArray(1, c)
-    Next c
-    MatchCount = 1
-
-    ' Find matching data rows
-    For r = 2 To UBound(SourceArray, 1)
-        If Trim(SourceArray(r, ColumnIndex)) = FilterValue Then
-            MatchCount = MatchCount + 1
-            For c = LBound(SourceArray, 2) To UBound(SourceArray, 2)
-                TempArray(MatchCount, c) = SourceArray(r, c)
-            Next c
-        End If
-    Next r
-
-    If MatchCount > 1 Then
-        ReDim ResultArray(LBound(SourceArray, 1) To MatchCount, LBound(SourceArray, 2) To UBound(SourceArray, 2))
-        For r = 1 To MatchCount
-            For c = LBound(ResultArray, 2) To UBound(ResultArray, 2)
-                ResultArray(r, c) = TempArray(r, c)
-            Next c
-        Next r
-        FilterDataByColumn = ResultArray
-    End If
-End Function
-
-Function WorksheetIsEmpty(WS As Worksheet) As Boolean
-    On Error Resume Next
-    WorksheetIsEmpty = (WS.Cells.Find(What:="*", After:=WS.Range("A1"), LookIn:=xlFormulas, LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlPrevious, MatchCase:=False) Is Nothing)
-    On Error GoTo 0
-End Function
