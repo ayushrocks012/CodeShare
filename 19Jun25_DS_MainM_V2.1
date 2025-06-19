@@ -3,7 +3,7 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V7.3: Added data validation to handle malformed rows in source files, preventing subscript errors.
+' V7.4: Fixed "Type Mismatch" error for single-SKU tiers by robustly handling single-cell range values.
 ' Author:      [Your Name]
 ' Date:        [Current Date]
 '================================================================================================================
@@ -11,17 +11,12 @@ Option Explicit
 '--- PRIVATE MODULE-LEVEL VARIABLES ---
 Private wsLog As Worksheet
 Private lngWarningCount As Long
-Private dictDemandCache As Object 'NEW: For caching demand row lookups to boost performance.
+Private dictDemandCache As Object 'For caching demand row lookups to boost performance.
 
 '================================================================================================================
 ' 1. Main Public Orchestrator
 '================================================================================================================
 
-'------------------------------------------------------------------------------------------------
-' Procedure: UpdateForecast_V7
-' Purpose:   Public entry point to run the entire multi-affiliate forecasting process.
-'            Orchestrates the main steps: Setup, Load, Process, and Cleanup.
-'------------------------------------------------------------------------------------------------
 Public Sub UpdateForecast_V7()
     Dim wbThis As Workbook
     Dim arrStatusData As Variant, arrHistoryData As Variant, arrDemandData As Variant
@@ -333,6 +328,11 @@ End Function
 ' 4. Utility & Helper Functions
 '================================================================================================================
 
+'------------------------------------------------------------------------------------------------
+' Procedure:   AddNewProductsToTierSheet
+' Purpose:     Adds products with status "New" to a tier sheet if they don't already exist.
+' V7.4 UPDATE: Handles single-SKU tiers correctly by checking if the read value is an array.
+'------------------------------------------------------------------------------------------------
 Private Sub AddNewProductsToTierSheet(ByVal wsTier As Worksheet, ByVal strAffiliate As String)
     Dim lngStatusLRow As Long, lngTierLRow As Long, r As Long
     Dim strTierName As String, strProduct As String, strStatus As String
@@ -345,11 +345,19 @@ Private Sub AddNewProductsToTierSheet(ByVal wsTier As Worksheet, ByVal strAffili
     If lngTierLRow > 1 Then
         Dim arrExisting As Variant
         arrExisting = wsTier.Range("F2:F" & lngTierLRow).Value
-        For r = 1 To UBound(arrExisting, 1)
-            If Not dictExistingProducts.Exists(arrExisting(r, 1)) Then
-                dictExistingProducts.Add arrExisting(r, 1), 1
+        
+        '--- FIX: Check if the returned value is an array or a single value ---
+        If IsArray(arrExisting) Then ' Multiple products exist
+            For r = 1 To UBound(arrExisting, 1)
+                If Not dictExistingProducts.Exists(arrExisting(r, 1)) Then
+                    dictExistingProducts.Add arrExisting(r, 1), 1
+                End If
+            Next r
+        Else ' A single product exists, arrExisting is not an array
+            If Not dictExistingProducts.Exists(arrExisting) Then
+                dictExistingProducts.Add arrExisting, 1
             End If
-        Next r
+        End If
     End If
     
     Dim arrStatusData As Variant
@@ -413,11 +421,6 @@ Private Function GetUniqueAffiliates(ByVal arrDemandData As Variant) As Object
     Set GetUniqueAffiliates = dictAffiliates
 End Function
 
-'------------------------------------------------------------------------------------------------
-' Procedure:   CreateTierSheets
-' Purpose:     Creates a new worksheet for each tier belonging to a specific affiliate.
-' V7.3 UPDATE: Added validation to gracefully handle malformed rows in the source data.
-'------------------------------------------------------------------------------------------------
 Private Sub CreateTierSheets(ByVal wb As Workbook, ByVal strAffiliate As String, ByVal arrStatus As Variant, ByVal arrDemand As Variant, ByVal wsSummary As Worksheet)
     Dim lngDemandLRow As Long, lngStatusLRow As Long, lngTierRow As Long, lngProductRow As Long
     Dim strTier As String, strProductTier As String, strProductAffiliate As String, wsNewTier As Worksheet
@@ -430,7 +433,6 @@ Private Sub CreateTierSheets(ByVal wb As Workbook, ByVal strAffiliate As String,
     
     For lngTierRow = 2 To lngDemandLRow
         If LCase$(Trim$(arrDemand(lngTierRow, COL_AFFILIATE))) = LCase$(strAffiliate) Then
-            '--- FIX: Validate that the row has enough columns before accessing them ---
             If UBound(arrDemand, 2) >= COL_TIER Then
                 strTier = Trim$(arrDemand(lngTierRow, COL_TIER))
                 If Len(strTier) > 0 Then
@@ -445,7 +447,7 @@ Private Sub CreateTierSheets(ByVal wb As Workbook, ByVal strAffiliate As String,
                     
                     Dim lngNextFreeRow As Long: lngNextFreeRow = 2
                     For lngProductRow = 2 To lngStatusLRow
-                        If UBound(arrStatus, 2) >= COL_ISD Then 'Check if status row is valid
+                        If UBound(arrStatus, 2) >= COL_ISD Then
                             strProductAffiliate = LCase$(Trim$(arrStatus(lngProductRow, COL_AFFILIATE)))
                             strProductTier = LCase$(Trim$(arrStatus(lngProductRow, COL_TIER)))
                             If strProductAffiliate = LCase$(strAffiliate) And strProductTier = LCase$(strTier) Then
