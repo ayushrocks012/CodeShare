@@ -3,7 +3,7 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V7.1: Complete, fully implemented code with architecture, error handling, and cleanliness improvements.
+' V7.2: Fixed compile error by changing GetStatusEnum/String to Public scope.
 ' Author:      [Your Name]
 ' Date:        [Current Date]
 '================================================================================================================
@@ -690,7 +690,7 @@ Private Function GetLastHistoricalColumn(ByVal ws As Worksheet) As Long
     Next i
 End Function
 
-Private Function GetStatusEnum(ByVal strStatus As String) As ProductStatus
+Public Function GetStatusEnum(ByVal strStatus As String) As ProductStatus
     Select Case UCase(strStatus)
         Case "ACTIVE": GetStatusEnum = psActive
         Case "PHASEIN-PHASEOUT": GetStatusEnum = psPhaseInOut
@@ -700,7 +700,7 @@ Private Function GetStatusEnum(ByVal strStatus As String) As ProductStatus
     End Select
 End Function
 
-Private Function GetStatusString(ByVal enmStatus As ProductStatus) As String
+Public Function GetStatusString(ByVal enmStatus As ProductStatus) As String
     Select Case enmStatus
         Case psActive: GetStatusString = "Active"
         Case psPhaseInOut: GetStatusString = "PhaseIn-PhaseOut"
