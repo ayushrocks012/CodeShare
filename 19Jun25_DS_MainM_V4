@@ -9,8 +9,8 @@ Option Explicit
 '      - Modularized formatting logic: broke down FormatEnhancedSheet into smaller, single-purpose subs.
 '      - Encapsulated successor-linking logic into the cProductLifecycle class.
 '
-' Author:      [Your Name]
-' Date:        [Current Date]
+' Author:      Ayush Goyal
+' Date:        19-Jun-2025
 '================================================================================================================
 
 '--- PRIVATE MODULE-LEVEL VARIABLES ---
