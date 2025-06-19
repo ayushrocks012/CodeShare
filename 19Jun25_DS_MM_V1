@@ -3,7 +3,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' V3.3: Fixed "Subscript out of range" error when MonthCount is zero. Added logging for troubleshooting.
+' V3.4: Added robust handling for MonthCount = 0 to permanently fix "Subscript out of range" error.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -493,10 +493,12 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     WriteToLog WS_Log, "Info", "GetCombinedHeaderRow called for Affiliate: " & AffiliateName & " with MonthCount: " & MonthCount
 
     Dim HistHeaders() As Variant, r As Long, c As Long
-    '--- FIX: Check if MonthCount > 0 before ReDim ---
+    '--- FIX: Robustly handle MonthCount = 0 ---
     If MonthCount > 0 Then
         ReDim HistHeaders(1 To MonthCount)
         For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
+    Else
+        ReDim HistHeaders(1 To 0) 'Create a valid, empty array
     End If
     
     Dim DemandHeaders() As Variant
@@ -510,9 +512,12 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     Dim Combined() As Variant: ReDim Combined(1 To 8 + MonthCount + (DemandLCol - 2))
     Combined(1) = "Affiliate": Combined(2) = "Forecast Tier": Combined(3) = "Forecast Sub-Tier": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
     
-    If MonthCount > 0 Then
-        For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
-    End If
+    'This loop will not run if MonthCount is 0, which is correct
+    For c = 1 To UBound(HistHeaders)
+        If UBound(HistHeaders) > 0 Then 'Extra check for safety
+            Combined(c + 8) = HistHeaders(c)
+        End If
+    Next c
     
     For c = 3 To DemandLCol: Combined(c + 8 + MonthCount - 2) = DemandHeaders(c): Next c
     GetCombinedHeaderRow = Combined
