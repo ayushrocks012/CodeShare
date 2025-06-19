@@ -1,0 +1,103 @@
+'@Folder("Classes")
+Option Explicit
+
+'================================================================================================
+'--- CLASS MODULE: cProductLifecycle ---
+' Author:      [Your Name]
+' Date:        [Current Date]
+' Purpose:     Represents a single product's lifecycle attributes. An object of this
+'              class holds all relevant status, phasing, and successor information
+'              for one product within a specific affiliate.
+'================================================================================================
+
+'--- Private Backing Fields ---
+Private m_strAffiliate As String
+Private m_strProductID As String
+Private m_enmStatus As ProductStatus
+Private m_blnIsPhasingOut As Boolean
+Private m_dtePhaseOutDate As Date
+Private m_dblPhaseOutPercent As Double
+Private m_strSupersededByProductID As String
+Private m_blnIsPhasingIn As Boolean
+Private m_strReplacesProductID As String
+Private m_dtePhaseInDate As Date
+Private m_dblPhaseInPercent As Double
+
+'--- Public Properties ---
+
+Public Property Get Affiliate() As String
+    Affiliate = m_strAffiliate
+End Property
+Public Property Let Affiliate(ByVal strValue As String)
+    m_strAffiliate = strValue
+End Property
+
+Public Property Get ProductID() As String
+    ProductID = m_strProductID
+End Property
+Public Property Let ProductID(ByVal strValue As String)
+    m_strProductID = strValue
+End Property
+
+Public Property Get Status() As ProductStatus
+    Status = m_enmStatus
+End Property
+Public Property Let Status(ByVal enmValue As ProductStatus)
+    m_enmStatus = enmValue
+End Property
+
+Public Property Get IsPhasingOut() As Boolean
+    IsPhasingOut = m_blnIsPhasingOut
+End Property
+Public Property Let IsPhasingOut(ByVal blnValue As Boolean)
+    m_blnIsPhasingOut = blnValue
+End Property
+
+Public Property Get PhaseOutDate() As Date
+    PhaseOutDate = m_dtePhaseOutDate
+End Property
+Public Property Let PhaseOutDate(ByVal dteValue As Date)
+    m_dtePhaseOutDate = dteValue
+End Property
+
+Public Property Get PhaseOutPercent() As Double
+    PhaseOutPercent = m_dblPhaseOutPercent
+End Property
+Public Property Let PhaseOutPercent(ByVal dblValue As Double)
+    m_dblPhaseOutPercent = dblValue
+End Property
+
+Public Property Get SupersededByProductID() As String
+    SupersededByProductID = m_strSupersededByProductID
+End Property
+Public Property Let SupersededByProductID(ByVal strValue As String)
+    m_strSupersededByProductID = strValue
+End Property
+
+Public Property Get IsPhasingIn() As Boolean
+    IsPhasingIn = m_blnIsPhasingIn
+End Property
+Public Property Let IsPhasingIn(ByVal blnValue As Boolean)
+    m_blnIsPhasingIn = blnValue
+End Property
+
+Public Property Get ReplacesProductID() As String
+    ReplacesProductID = m_strReplacesProductID
+End Property
+Public Property Let ReplacesProductID(ByVal strValue As String)
+    m_strReplacesProductID = strValue
+End Property
+
+Public Property Get PhaseInDate() As Date
+    PhaseInDate = m_dtePhaseInDate
+End Property
+Public Property Let PhaseInDate(ByVal dteValue As Date)
+    m_dtePhaseInDate = dteValue
+End Property
+
+Public Property Get PhaseInPercent() As Double
+    PhaseInPercent = m_dblPhaseInPercent
+End Property
+Public Property Let PhaseInPercent(ByVal dblValue As Double)
+    m_dblPhaseInPercent = dblValue
+End Property
