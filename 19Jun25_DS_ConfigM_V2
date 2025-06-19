@@ -1,0 +1,44 @@
+'@Folder("Configuration")
+Option Explicit
+
+'================================================================================================
+'--- CONFIGURATION MODULE (M_Config) ---
+' Purpose: Centralizes all constants for easy updating without changing core logic.
+'================================================================================================
+
+'--- DEBUGGING & LOGGING FLAGS ---
+Public Const DEBUG_MODE As Boolean = False 'Set to TRUE to skip file saving and enable verbose logging.
+
+'--- SHEET NAME CONSTANTS ---
+Public Const SHEET_MAIN As String = "Main"
+Public Const SHEET_STATUS As String = "Product Status"
+Public Const SHEET_DEMAND As String = "Demand Forecast"
+Public Const SHEET_HISTORY As String = "Historical Sales"
+Public Const SHEET_LOG As String = "Log"
+Public Const SHEET_SUMMARY_PREFIX As String = "Summary"
+
+'--- PRODUCT STATUS KEYWORDS ---
+Public Const STATUS_ACTIVE As String = "Active"
+Public Const STATUS_PHASE_IN_OUT As String = "PhaseIn-PhaseOut"
+Public Const STATUS_DISCONTINUED As String = "Discontinued"
+Public Const STATUS_NEW As String = "New"
+Public Const STATUS_UNKNOWN As String = "Unknown"
+
+'--- COLUMN INDEX CONSTANTS (Based on your Excel files) ---
+'-- Universal Columns --
+Public Const COL_AFFILIATE As Long = 1
+Public Const COL_TIER As Long = 2
+Public Const COL_SUB_TIER As Long = 3
+Public Const COL_LOCAL_ITEM As Long = 4
+Public Const COL_DESC As Long = 5
+Public Const COL_ISD As Long = 6
+
+'-- Product Status Sheet --
+Public Const COL_STATUS As Long = 7
+Public Const COL_PHASE_OUT_DATE As Long = 8
+Public Const COL_PHASE_OUT_PCT As Long = 9
+Public Const COL_SUPERSEDED_BY As Long = 10
+
+'-- Demand Forecast & Historical Sales Sheets --
+Public Const COL_DEMAND_START As Long = 3
+Public Const COL_HISTORY_START As Long = 7
