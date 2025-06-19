@@ -146,7 +146,6 @@ Private Sub CreateFamilySheets(ByVal TWB As Workbook, ByVal AffiliateName As Str
         
         If Len(CurrFamily) > 0 Then
             Dim FamilySheetName As String
-            ' *** MODIFIED: Sanitize the sheet name to prevent errors ***
             FamilySheetName = SanitizeSheetName(AffiliateName & "_" & CurrFamily)
             
             On Error Resume Next
@@ -192,7 +191,6 @@ Private Sub ProcessForecastData(ByVal TWB As Workbook, ByVal AffiliateName As St
     For CurrFamilyRow = 2 To DemandForecastLRow
         CurrFamily = Trim$(DemandData(CurrFamilyRow, 2))
         Dim FamilySheetName As String
-        ' *** MODIFIED: Sanitize the sheet name here as well to ensure it matches ***
         FamilySheetName = SanitizeSheetName(AffiliateName & "_" & CurrFamily)
         
         Application.StatusBar = "Processing family: " & CurrFamily & " for " & AffiliateName & "..."
@@ -334,7 +332,6 @@ Private Sub AddNewProductsToFamilySheet(ByVal WS_CurrentFamily As Worksheet, ByV
         ActiveType = Trim$(StatusData(CurrProdRow, 7)) ' Status is Col G
         CurrProduct = Trim$(StatusData(CurrProdRow, 6)) ' I-S-D is Col F
         
-        ' *** MODIFIED: Get the original family name from the sanitized sheet name ***
         Dim OriginalFamilyName As String
         OriginalFamilyName = Split(WS_CurrentFamily.Name, "_")(1)
         
@@ -568,7 +565,6 @@ End Function
 ' Utility Functions
 ' =================================================================================================================
 Private Function SanitizeSheetName(ByVal SheetName As String) As String
-    ' *** NEW FUNCTION: Cleans a string to be a valid Excel sheet name. ***
     Dim InvalidChars As String
     Dim i As Long
     InvalidChars = ":\/?*[]" ' Characters forbidden by Excel
@@ -600,21 +596,46 @@ Private Function LoadDataToArray(ByVal WS As Worksheet) As Variant
 End Function
 
 Private Function GetCombinedHeaderRow(ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
-    Dim HistHeaders() As Variant, DemandHeaders() As Variant, c As Long
-    ReDim HistHeaders(1 To MonthCount)
-    For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
-    
+    ' *** MODIFIED: This function is updated to handle MonthCount = 0 ***
+    Dim HistHeaders() As Variant
     Dim TempDemandHeaders() As Variant
+    Dim Combined() As Variant
+    Dim c As Long
+    Dim HistHeaderCount As Long
+
+    ' Handle historical headers only if there are historical months
+    If MonthCount > 0 Then
+        HistHeaderCount = MonthCount
+        ReDim HistHeaders(1 To HistHeaderCount)
+        For c = 1 To HistHeaderCount
+            HistHeaders(c) = HistoryData(1, c + 6)
+        Next c
+    Else
+        HistHeaderCount = 0
+    End If
+    
+    ' Handle demand headers
     ReDim TempDemandHeaders(1 To DemandLCol - 2)
     For c = 3 To DemandLCol
         TempDemandHeaders(c - 2) = DemandData(1, c)
     Next c
     
-    Dim Combined() As Variant
-    ReDim Combined(1 To 8 + MonthCount + UBound(TempDemandHeaders))
+    ' Combine all headers
+    ReDim Combined(1 To 8 + HistHeaderCount + UBound(TempDemandHeaders))
     Combined(1) = "Affiliate": Combined(2) = "Family": Combined(3) = "Sub-Family": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
-    For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
-    For c = 1 To UBound(TempDemandHeaders): Combined(c + 8 + MonthCount) = TempDemandHeaders(c): Next c
+    
+    ' Add historical headers if they exist
+    If HistHeaderCount > 0 Then
+        For c = 1 To HistHeaderCount
+            Combined(c + 8) = HistHeaders(c)
+        Next c
+    End If
+    
+    ' Add demand headers
+    For c = 1 To UBound(TempDemandHeaders)
+        Combined(c + 8 + HistHeaderCount) = TempDemandHeaders(c)
+    Next c
+    
     GetCombinedHeaderRow = Combined
 End Function
 
@@ -722,7 +743,6 @@ Private Sub CleanUpAffiliateSheets(ByVal TWB As Workbook, ByVal AffiliateName As
     Dim WS As Worksheet
     Application.DisplayAlerts = False
     For Each WS In TWB.Worksheets
-        ' *** MODIFIED: Use sanitized name for checking which sheets to delete ***
         If WS.Name = SanitizeSheetName(AffiliateName & "_" & SUMMARY_SHEET) Then
             WS.Delete
         ElseIf Left(WS.Name, Len(AffiliateName) + 1) = AffiliateName & "_" Then
