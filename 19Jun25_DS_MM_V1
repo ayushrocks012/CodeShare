@@ -3,7 +3,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' V3.1: Complete version for Multiple Affiliates and updated terminology.
+' V3.2: Complete version for Multiple Affiliates and updated terminology. Corrected compiler error.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -271,7 +271,8 @@ End Sub
 ' Lifecycle Mapping Function (In-Memory using Composite Key)
 ' =================================================================================================================
 Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As Worksheet) As Object
-    Dim r As Long, AffiliateName As String, ProductID As String, CompositeKey As String, SupersededByKey As String
+    Dim r As Long, AffiliateName As String, ProductID As String, SupersededByKey As String
+    Dim CompositeKey As Variant 'FIX: Changed from String to Variant for For Each loop
     Dim TempLifecycle As cProductLifecycle, LifecycleDict As Object: Set LifecycleDict = CreateObject("Scripting.Dictionary")
     
     If Not IsArray(StatusData) Or UBound(StatusData, 1) < 2 Then Set BuildLifecycleMap = LifecycleDict: Exit Function
@@ -297,7 +298,7 @@ Private Function BuildLifecycleMap(ByVal StatusData As Variant, ByVal WS_Log As 
                     If IsNumeric(PhaseOutPercent) Then .PhaseOutPercent = CDbl(PhaseOutPercent)
                 End If
             End With
-            LifecycleDict.Add CompositeKey, TempLifecycle
+            LifecycleDict.Add CStr(CompositeKey), TempLifecycle 'Ensure key is string when adding
             Set TempLifecycle = Nothing
         End If
     Next r
@@ -489,7 +490,9 @@ End Function
 
 Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long) As Variant
     Dim HistHeaders() As Variant, r As Long, c As Long: ReDim HistHeaders(1 To MonthCount)
-    For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
+    If MonthCount > 0 Then
+        For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
+    End If
     
     Dim DemandHeaders() As Variant
     For r = 2 To UBound(DemandData, 1)
@@ -501,7 +504,9 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     
     Dim Combined() As Variant: ReDim Combined(1 To 8 + MonthCount + (DemandLCol - 2))
     Combined(1) = "Affiliate": Combined(2) = "Forecast Tier": Combined(3) = "Forecast Sub-Tier": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
-    For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
+    If MonthCount > 0 Then
+        For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
+    End If
     For c = 3 To DemandLCol: Combined(c + 8 + MonthCount - 2) = DemandHeaders(c): Next c
     GetCombinedHeaderRow = Combined
 End Function
@@ -510,7 +515,6 @@ Private Sub AppendToSummarySheet(ByVal WS_Tier As Worksheet, ByVal WS_Summary As
     Dim TierLRow As Long, TierLCol As Long, SummaryLRow As Long
     TierLRow = WS_Tier.Cells(WS_Tier.Rows.Count, "A").End(xlUp).Row
     If TierLRow < 2 Then Exit Sub
-    TierLRow = TierLRow - 1 'Exclude total row
     
     TierLCol = WS_Tier.Cells(1, WS_Tier.Columns.Count).End(xlToLeft).Column
     SummaryLRow = WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row
@@ -519,7 +523,9 @@ Private Sub AppendToSummarySheet(ByVal WS_Tier As Worksheet, ByVal WS_Summary As
         WS_Tier.Range("I1", WS_Tier.Cells(1, TierLCol)).Copy WS_Summary.Range("I1")
     End If
     
-    WS_Tier.Range("A2", WS_Tier.Cells(TierLRow + 1, TierLCol)).Copy WS_Summary.Range("A" & SummaryLRow + 1)
+    Dim DataRange As Range
+    Set DataRange = WS_Tier.Range("A2", WS_Tier.Cells(TierLRow, TierLCol))
+    WS_Summary.Range("A" & SummaryLRow + 1).Resize(DataRange.Rows.Count, DataRange.Columns.Count).Value = DataRange.Value
 End Sub
 
 Private Sub FormatEnhancedSheet(ByVal WS As Worksheet)
