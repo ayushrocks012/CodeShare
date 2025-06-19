@@ -3,7 +3,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' V3.5: Corrected logic for getting DemandStartDate to read from header row (1,3) instead of data rows.
+' V3.6: Fixed "Name is already taken" error by renaming the summary sheet in the new workbook, not the source.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -440,19 +440,30 @@ End Sub
 Private Function CreateOutputWorkbookForAffiliate(ByVal TWB As Workbook, ByVal AffiliateName As String, ByVal WS_Summary As Worksheet) As Workbook
     Dim WB As Workbook, WS As Worksheet, SheetNames As Object: Set SheetNames = CreateObject("System.Collections.ArrayList")
 
-    WS_Summary.Name = SUMMARY_SHEET_PREFIX
+    ' --- FIX: Format the sheet while it's still named "TempSummary" ---
     FormatEnhancedSheet WS_Summary
     
+    ' Add the temporary summary sheet (still named "TempSummary") and affiliate tier sheets to the collection
     SheetNames.Add WS_Summary.Name
     For Each WS In TWB.Worksheets
         If InStr(1, WS.Name, AffiliateName & " - ") > 0 Then SheetNames.Add WS.Name
     Next WS
     
-    If SheetNames.Count < 2 Then Set CreateOutputWorkbookForAffiliate = Nothing: Exit Function
+    If SheetNames.Count < 2 And WS_Summary.Cells(WS_Summary.Rows.Count, "A").End(xlUp).Row < 2 Then
+        Set CreateOutputWorkbookForAffiliate = Nothing
+        Exit Function
+    End If
     
+    ' Copy all collected sheets to a new workbook
     TWB.Sheets(SheetNames.ToArray).Copy
     Set WB = ActiveWorkbook
     
+    ' --- FIX: Rename the summary sheet AFTER it has been copied to the new workbook ---
+    On Error Resume Next
+    WB.Sheets("TempSummary").Name = SUMMARY_SHEET_PREFIX
+    On Error GoTo 0
+    
+    ' Unlink formulas by pasting as values
     For Each WS In WB.Worksheets
         WS.Cells.Copy
         WS.Cells.PasteSpecial Paste:=xlPasteValuesAndNumberFormats
@@ -472,7 +483,7 @@ Private Function GetHistoricalMonthCount(ByVal DemandData As Variant, ByVal Hist
     HistLCol = UBound(HistoryData, 2)
     
     ' The forecast start date is global and in the header row, column C (index 3)
-    If IsDate(DemandData(1, 3)) Then
+    If UBound(DemandData, 2) >= 3 And IsDate(DemandData(1, 3)) Then
         DemandStartDate = CDate(DemandData(1, 3))
     Else
         ' If there's no valid date in the header, we can't count historical months.
@@ -498,14 +509,13 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     If MonthCount > 0 Then
         ReDim HistHeaders(1 To MonthCount)
         For c = 1 To MonthCount: HistHeaders(c) = HistoryData(1, c + 6): Next c
-    Else
-        ReDim HistHeaders(1 To 0) 'Create a valid, empty array
     End If
     
     Dim DemandHeaders() As Variant
     For r = 2 To UBound(DemandData, 1)
+        'Find any row for the current affiliate to get the date headers
         If LCase$(Trim$(DemandData(r, 1))) = LCase$(AffiliateName) Then
-            DemandHeaders = Application.WorksheetFunction.Index(DemandData, r, 0)
+            DemandHeaders = Application.WorksheetFunction.Index(DemandData, 1, 0) 'Get header row (row 1)
             Exit For
         End If
     Next r
@@ -513,7 +523,6 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     Dim Combined() As Variant: ReDim Combined(1 To 8 + MonthCount + (DemandLCol - 2))
     Combined(1) = "Affiliate": Combined(2) = "Forecast Tier": Combined(3) = "Forecast Sub-Tier": Combined(4) = "Local Item Nbr": Combined(5) = "Desc": Combined(6) = "I-S-D": Combined(7) = "Active/Discontinued": Combined(8) = "Phase Out Month"
     
-    'This loop will not run if MonthCount is 0, which is correct
     If MonthCount > 0 Then
         For c = 1 To UBound(HistHeaders)
             Combined(c + 8) = HistHeaders(c)
