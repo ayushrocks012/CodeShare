@@ -2,7 +2,8 @@
 Option Explicit
 
 '--- Private backing fields for properties ---
-
+'NEW: Added Affiliate property
+Private pAffiliate As String
 Private pProductID As String
 Private pStatus As String
 Private pIsPhasingOut As Boolean
@@ -16,6 +17,14 @@ Private pPhaseInPercent As Double
  
 '--- Public Properties to access the private fields ---
 
+'NEW: Property to get/let the Affiliate name
+Public Property Get Affiliate() As String
+    Affiliate = pAffiliate
+End Property
+Public Property Let Affiliate(Value As String)
+    pAffiliate = Value
+End Property
+ 
 Public Property Get ProductID() As String
     ProductID = pProductID
 End Property
@@ -65,6 +74,9 @@ Public Property Let IsPhasingIn(Value As Boolean)
     pIsPhasingIn = Value
 End Property
 
+Public Property Get ReplacesProductID() As String
+    ReplacesProductID = pReplacesProductID
+End Property
 Public Property Let ReplacesProductID(Value As String)
     pReplacesProductID = Value
 End Property
