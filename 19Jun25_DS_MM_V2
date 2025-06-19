@@ -3,7 +3,7 @@ Option Explicit
 
 ' =================================================================================================================
 ' --- STANDARD MODULE CODE ---
-' V3.8: Fixed forecast date header formatting to ensure "mmm-yy" is applied correctly.
+' V3.9: Final fix for date formatting using IsDate to correctly format forecast headers.
 ' =================================================================================================================
 ' --- MODULE-LEVEL CONSTANTS ---
 Private Const MAIN_SHEET As String = "Main"
@@ -496,7 +496,6 @@ Private Function GetHistoricalMonthCount(ByVal DemandData As Variant, ByVal Hist
     GetHistoricalMonthCount = Count
 End Function
 
-'--- FIX: Ensured forecast date headers are treated as dates for correct formatting ---
 Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal DemandData As Variant, ByVal HistoryData As Variant, ByVal MonthCount As Long, ByVal DemandLCol As Long, ByVal WS_Log As Worksheet) As Variant
     WriteToLog WS_Log, "Info", "GetCombinedHeaderRow called for Affiliate: " & AffiliateName & " with MonthCount: " & MonthCount
 
@@ -507,7 +506,6 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
     End If
     
     Dim DemandHeaders() As Variant
-    'Get header row (row 1) from the Demand Forecast Data
     DemandHeaders = Application.WorksheetFunction.Index(DemandData, 1, 0)
     
     Dim Combined() As Variant: ReDim Combined(1 To 8 + MonthCount + (DemandLCol - 2))
@@ -517,12 +515,12 @@ Private Function GetCombinedHeaderRow(ByVal AffiliateName As String, ByVal Deman
         For c = 1 To UBound(HistHeaders): Combined(c + 8) = HistHeaders(c): Next c
     End If
     
-    ' Loop through the demand headers, ensuring dates are handled correctly
+    '--- FIX: Using IsDate instead of IsNumeric for more accurate date handling ---
     For c = 3 To DemandLCol
         Dim headerValue As Variant
         headerValue = DemandHeaders(c)
-        ' Check if the value is numeric (which dates are) and convert to ensure it's a date type
-        If IsNumeric(headerValue) Then
+        ' Check if the value can be interpreted as a date
+        If IsDate(headerValue) Then
             Combined(c + 8 + MonthCount - 2) = CDate(headerValue)
         Else
             Combined(c + 8 + MonthCount - 2) = headerValue
