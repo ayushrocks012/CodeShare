@@ -92,9 +92,10 @@ Private Sub LoadAllData(ByVal wb As Workbook)
     On Error GoTo Load_ErrorHandler
     Application.StatusBar = "Loading all source data into memory..."
     
-    arrStatus = LoadDataToArray(wb.Sheets(SHEET_STATUS))
-    arrHistory = LoadDataToArray(wb.Sheets(SHEET_HISTORY))
-    arrDemand = LoadDataToArray(wb.Sheets(SHEET_DEMAND))
+    'FIX: Corrected variable names to match module-level declarations.
+    arrStatusData = LoadDataToArray(wb.Sheets(SHEET_STATUS))
+    arrHistoryData = LoadDataToArray(wb.Sheets(SHEET_HISTORY))
+    arrDemandData = LoadDataToArray(wb.Sheets(SHEET_DEMAND))
     
     WriteToLog "Info", "LoadAllData", "All source data loaded successfully."
     Exit Sub
@@ -116,7 +117,7 @@ Private Sub ProcessAllAffiliates(ByVal wb As Workbook, ByVal dictLifecycle As Ob
     End If
     
     Dim lngHistMonthCount As Long
-    lngHistMonthCount = GetHistoricalMonthCount(arrDemand, arrHistory)
+    lngHistMonthCount = GetHistoricalMonthCount(arrDemandData, arrHistoryData)
     
     For Each varAffiliateKey In dictAffiliates.Keys
         lngAffiliateCounter = lngAffiliateCounter + 1
@@ -327,7 +328,7 @@ Private Sub PopulateForecastValues(ByRef arrOutput As Variant, ByVal lngRow As L
         lngForecastStartCol = 8 + lngMonthCount + 1
         
         For c = lngForecastStartCol To UBound(arrOutput, 2)
-            arrOutput(lngRow, c) = CalculateForecastValue(objLifecycle, arrOutput(1, c), dblSubTierSum, dblTierSum, arrDemand(lngDemandRow, (c - lngForecastStartCol) + COL_DEMAND_START))
+            arrOutput(lngRow, c) = CalculateForecastValue(objLifecycle, arrOutput(1, c), dblSubTierSum, dblTierSum, arrDemandData(lngDemandRow, (c - lngForecastStartCol) + COL_DEMAND_START))
         Next c
     End If
 End Sub
@@ -485,14 +486,14 @@ Private Sub CreateTierSheets(ByVal wb As Workbook, ByVal strAffiliate As String,
     
     On Error GoTo TierSheet_ErrorHandler
     
-    lngDemandLRow = UBound(arrDemand, 1)
+    lngDemandLRow = UBound(arrDemandData, 1)
     lngStatusLRow = UBound(arrStatusData, 1)
     SetupOutputSheetHeaders wsSummary
     
     For lngTierRow = 2 To lngDemandLRow
-        If LCase$(Trim$(arrDemand(lngTierRow, COL_AFFILIATE))) = LCase$(strAffiliate) Then
-            If UBound(arrDemand, 2) >= COL_TIER Then
-                strTier = Trim$(arrDemand(lngTierRow, COL_TIER))
+        If LCase$(Trim$(arrDemandData(lngTierRow, COL_AFFILIATE))) = LCase$(strAffiliate) Then
+            If UBound(arrDemandData, 2) >= COL_TIER Then
+                strTier = Trim$(arrDemandData(lngTierRow, COL_TIER))
                 If Len(strTier) > 0 Then
                     Dim strSheetName As String: strSheetName = strAffiliate & " - " & strTier
                     
@@ -529,9 +530,9 @@ End Sub
 Private Function GetHistoricalDataRow(ByVal strAffiliate As String, ByVal strProduct As String, ByVal lngHistColCount As Long) As Variant
     Dim r As Long, c As Long, arrResult() As Variant
     ReDim arrResult(1 To lngHistColCount - 6)
-    For r = 2 To UBound(arrHistory, 1)
-        If Trim$(arrHistory(r, COL_AFFILIATE)) = strAffiliate And Trim$(arrHistory(r, COL_ISD)) = strProduct Then
-            For c = COL_HISTORY_START To lngHistColCount: arrResult(c - (COL_HISTORY_START - 1)) = arrHistory(r, c): Next c
+    For r = 2 To UBound(arrHistoryData, 1)
+        If Trim$(arrHistoryData(r, COL_AFFILIATE)) = strAffiliate And Trim$(arrHistoryData(r, COL_ISD)) = strProduct Then
+            For c = COL_HISTORY_START To lngHistColCount: arrResult(c - (COL_HISTORY_START - 1)) = arrHistoryData(r, c): Next c
             GetHistoricalDataRow = arrResult
             Exit Function
         End If
@@ -541,19 +542,19 @@ End Function
 
 Private Function GetHistoricalTierSum(ByVal strAffiliate As String, ByVal strTier As String, ByVal dictLifecycle As Object, ByVal lngHistLCol As Long) As Double
     Dim dblTotalSum As Double, r As Long, c As Long, strHSProduct As String, strCompositeKey As String
-    For r = 2 To UBound(arrHistory, 1)
-        If LCase$(Trim$(arrHistory(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistory(r, COL_TIER))) = LCase$(strTier) Then
-            strHSProduct = Trim$(arrHistory(r, COL_ISD))
-            strCompositeKey = Trim$(arrHistory(r, COL_AFFILIATE)) & "|" & strHSProduct
+    For r = 2 To UBound(arrHistoryData, 1)
+        If LCase$(Trim$(arrHistoryData(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistoryData(r, COL_TIER))) = LCase$(strTier) Then
+            strHSProduct = Trim$(arrHistoryData(r, COL_ISD))
+            strCompositeKey = Trim$(arrHistoryData(r, COL_AFFILIATE)) & "|" & strHSProduct
             Dim objLifecycle As cProductLifecycle
             If dictLifecycle.Exists(strCompositeKey) Then
                 Set objLifecycle = dictLifecycle.Item(strCompositeKey)
                 If objLifecycle.Status <> psDiscontinued Then
-                    For c = COL_HISTORY_START To lngHistLCol: dblTotalSum = dblTotalSum + Val(arrHistory(r, c)): Next c
+                    For c = COL_HISTORY_START To lngHistLCol: dblTotalSum = dblTotalSum + Val(arrHistoryData(r, c)): Next c
                 Else
                     For c = COL_HISTORY_START To lngHistLCol
-                        If objLifecycle.PhaseOutDate > 0 And IsDate(arrHistory(1, c)) Then
-                            If CDate(arrHistory(1, c)) < objLifecycle.PhaseOutDate Then dblTotalSum = dblTotalSum + Val(arrHistory(r, c))
+                        If objLifecycle.PhaseOutDate > 0 And IsDate(arrHistoryData(1, c)) Then
+                            If CDate(arrHistoryData(1, c)) < objLifecycle.PhaseOutDate Then dblTotalSum = dblTotalSum + Val(arrHistoryData(r, c))
                         End If
                     Next c
                 End If
@@ -566,9 +567,9 @@ End Function
 
 Private Function GetHistoricalSubTierSum(ByVal strAffiliate As String, ByVal strTier As String, ByVal strSubTier As String, ByVal lngHistLCol As Long) As Double
     Dim dblTotalSum As Double, r As Long, c As Long
-    For r = 2 To UBound(arrHistory, 1)
-        If LCase$(Trim$(arrHistory(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistory(r, COL_TIER))) = LCase$(strTier) And LCase$(Trim$(arrHistory(r, COL_SUB_TIER))) = LCase$(strSubTier) Then
-            For c = COL_HISTORY_START To lngHistLCol: dblTotalSum = dblTotalSum + Val(arrHistory(r, c)): Next c
+    For r = 2 To UBound(arrHistoryData, 1)
+        If LCase$(Trim$(arrHistoryData(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistoryData(r, COL_TIER))) = LCase$(strTier) And LCase$(Trim$(arrHistoryData(r, COL_SUB_TIER))) = LCase$(strSubTier) Then
+            For c = COL_HISTORY_START To lngHistLCol: dblTotalSum = dblTotalSum + Val(arrHistoryData(r, c)): Next c
         End If
     Next r
     GetHistoricalSubTierSum = dblTotalSum
@@ -666,11 +667,11 @@ Private Function GetCombinedHeaderRow(ByVal lngMonthCount As Long) As Variant
     
     If lngMonthCount > 0 Then
         ReDim arrHistHeaders(1 To lngMonthCount)
-        For c = 1 To lngMonthCount: arrHistHeaders(c) = arrHistory(1, c + (COL_HISTORY_START - 1)): Next c
+        For c = 1 To lngMonthCount: arrHistHeaders(c) = arrHistoryData(1, c + (COL_HISTORY_START - 1)): Next c
     End If
     Dim arrDemandHeaders() As Variant
-    arrDemandHeaders = Application.WorksheetFunction.Index(arrDemand, 1, 0)
-    Dim lngDemandLCol As Long: lngDemandLCol = UBound(arrDemand, 2)
+    arrDemandHeaders = Application.WorksheetFunction.Index(arrDemandData, 1, 0)
+    Dim lngDemandLCol As Long: lngDemandLCol = UBound(arrDemandData, 2)
     Dim arrCombined() As Variant: ReDim arrCombined(1 To 8 + lngMonthCount + (lngDemandLCol - 2))
     arrCombined(1) = "Affiliate": arrCombined(2) = "Forecast Tier": arrCombined(3) = "Forecast Sub-Tier": arrCombined(4) = "Local Item Nbr"
     arrCombined(5) = "Desc": arrCombined(6) = "I-S-D": arrCombined(7) = "Active/Discontinued": arrCombined(8) = "Phase Out Month"
