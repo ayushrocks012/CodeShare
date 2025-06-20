@@ -3,8 +3,8 @@ Option Explicit
 
 '================================================================================================
 '--- CLASS MODULE: cProductLifecycle ---
-' V14.7: Architectural Improvements
-'      - Replaced manual date comparisons with a dedicated IsSameMonthAndYear helper function.
+' V14.9: Final Code Cleanup
+'      - Added annotation to ignore false positive warning from code analysis tool.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -88,6 +88,8 @@ Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
     End If
 End Function
 
+'@Ignore ProcedureNotUsed
+' This procedure is called from the main module on a dictionary item, which Rubberduck does not always detect.
 Public Sub LinkSuccessor(ByVal dictMap As Object)
     If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
     
