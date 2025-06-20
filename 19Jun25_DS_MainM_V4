@@ -3,9 +3,11 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14.8: Fix Summary Sheet Headers
-'      - Re-instated the call to SetupOutputSheetHeaders for the summary sheet, which was
-'        accidentally removed during prior refactoring.
+' V14.9: Final Code Cleanup
+'      - Addressed all remaining Rubberduck code inspection warnings.
+'      - Made all dictionary access explicit (.Item, .Add, .Exists).
+'      - Removed unused variables and parameters.
+'      - Added robust checking for Range.Find results.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -136,6 +138,7 @@ Private Sub ProcessAllAffiliates()
     For Each varAffiliateKey In dictAffiliates.Keys
         strCurrentAffiliate = CStr(varAffiliateKey)
         lngAffiliateCounter = lngAffiliateCounter + 1
+        ' The error handler is set here to catch any unhandled error during an affiliate's processing.
         On Error GoTo Affiliate_ErrorHandler
         
         If Not DEBUG_MODE Then
@@ -148,12 +151,14 @@ Private Sub ProcessAllAffiliates()
         GoTo Next_Affiliate
 
 Affiliate_ErrorHandler:
+        ' This block only runs if an error occurs. It logs the issue and then resumes at the cleanup stage for the current affiliate.
         lngWarningCount = lngWarningCount + 1
         WriteToLog "Error", "ProcessAllAffiliates", "Failed affiliate '" & strCurrentAffiliate & "'.", Err.Number, Err.Description
         Resume Next_Affiliate
         
 Next_Affiliate:
-        CleanupAffiliateSheets strCurrentAffiliate
+        CleanupAffiliateSheets
+        ' Resets the error handler for the next iteration of the loop.
         On Error GoTo 0
     Next varAffiliateKey
     
@@ -192,22 +197,16 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
     Dim colTierSheets As Collection
     Dim tTierStart As Double
     
-    ' Create the summary sheet
     Set wsSummary = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
     wsSummary.Name = TEMP_SHEET_PREFIX & "Summary"
-    
-    ' *** FIX: Set the headers on the summary sheet immediately after creation. ***
     SetupOutputSheetHeaders wsSummary
     
-    ' Create all the necessary tier sheets
     CreateTierSheets strAffiliate
-    Set colTierSheets = GetAffiliateTierSheets(strAffiliate)
+    Set colTierSheets = GetAffiliateTierSheets()
     
-    ' Initialize caches for this affiliate run
     Dim dictTierSumCache As Object: Set dictTierSumCache = CreateObject("Scripting.Dictionary")
     Dim dictSubTierSumCache As Object: Set dictSubTierSumCache = CreateObject("Scripting.Dictionary")
     
-    ' Process each tier and append its data to the summary sheet
     For Each wsTier In colTierSheets
         tTierStart = Timer
         If wsTier.Cells(wsTier.Rows.Count, "A").End(xlUp).Row > 1 Then
@@ -219,12 +218,10 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
         LogPerformance tTierStart, "Tier Processed: " & wsTier.Name
     Next wsTier
     
-    ' Format the completed summary sheet
     If Not DEBUG_MODE Then
         FormatEnhancedSheet wsSummary
     End If
     
-    ' Generate the final report workbook
     GenerateAffiliateReport strAffiliate, wsSummary
 End Sub
 
@@ -369,15 +366,17 @@ Private Sub AddNewProductsToTierSheet(ByVal wsTier As Worksheet, ByVal strAffili
         Dim arrExisting As Variant, r As Long
         arrExisting = wsTier.Range("F2:F" & lngTierLRow).Value
         If IsArray(arrExisting) Then
-            For r = 1 To UBound(arrExisting, 1): dictExistingProducts(arrExisting(r, 1)) = 1: Next r
+            For r = 1 To UBound(arrExisting, 1)
+                If Not dictExistingProducts.Exists(arrExisting(r, 1)) Then dictExistingProducts.Add arrExisting(r, 1), 1
+            Next r
         ElseIf Not IsEmpty(arrExisting) Then
-            dictExistingProducts(arrExisting) = 1
+             If Not dictExistingProducts.Exists(arrExisting) Then dictExistingProducts.Add arrExisting, 1
         End If
     End If
     
     Dim strTierName As String: strTierName = Replace(wsTier.Name, TEMP_SHEET_PREFIX, "")
     
-    Dim rStatus As Long, strStatus As String, strProduct As String
+    Dim rStatus As Long, strProduct As String
     For rStatus = 2 To UBound(arrStatusData, 1)
         If LCase$(Trim$(arrStatusData(rStatus, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrStatusData(rStatus, COL_TIER))) = LCase$(strTierName) Then
             If GetStatusEnum(Trim$(arrStatusData(rStatus, COL_STATUS))) = psNew Then
@@ -397,7 +396,7 @@ AddNew_ErrorHandler:
     WriteToLog "Error", "AddNewProductsToTierSheet", "Failed to add new products.", Err.Number, "Sheet: " & wsTier.Name
 End Sub
 
-Private Function GetAffiliateTierSheets(ByVal strAffiliate As String) As Collection
+Private Function GetAffiliateTierSheets() As Collection
     Dim colSheets As Collection: Set colSheets = New Collection
     Dim ws As Worksheet
     
@@ -415,15 +414,15 @@ Private Sub CreateTierSheets(ByVal strAffiliate As String)
     Dim dictTiers As Object: Set dictTiers = CreateObject("Scripting.Dictionary")
     Dim r As Long, strTier As String
     
-    ' Collect all unique tiers for the affiliate first
     For r = 2 To UBound(arrDemandData, 1)
         If LCase$(Trim$(arrDemandData(r, COL_AFFILIATE))) = LCase$(strAffiliate) Then
             strTier = Trim$(arrDemandData(r, COL_TIER))
-            If Len(strTier) > 0 Then dictTiers(strTier) = 1
+            If Len(strTier) > 0 Then
+                If Not dictTiers.Exists(strTier) Then dictTiers.Add strTier, 1
+            End If
         End If
     Next r
     
-    ' Create sheets for each unique tier
     Dim varTier As Variant, wsNewTier As Worksheet
     For Each varTier In dictTiers.Keys
         strTier = CStr(varTier)
@@ -473,7 +472,7 @@ Report_ErrorHandler:
     WriteToLog "Error", "GenerateAffiliateReport", "Could not generate or save report.", Err.Number, "Affiliate: " & strAffiliate
 End Sub
 
-Private Sub CleanupAffiliateSheets(ByVal strAffiliate As String)
+Private Sub CleanupAffiliateSheets()
     On Error Resume Next
     Application.DisplayAlerts = False
     Dim ws As Worksheet
@@ -522,7 +521,9 @@ Private Function GetUniqueAffiliates(ByVal arrDemandData As Variant) As Object
         Dim r As Long
         For r = 2 To UBound(arrDemandData, 1)
             If Not IsEmpty(arrDemandData(r, COL_AFFILIATE)) Then
-                dict(arrDemandData(r, COL_AFFILIATE)) = 1
+                If Not dict.Exists(arrDemandData(r, COL_AFFILIATE)) Then
+                    dict.Add arrDemandData(r, COL_AFFILIATE), 1
+                End If
             End If
         Next r
     End If
@@ -594,7 +595,7 @@ Private Sub SetupOutputSheetHeaders(ByVal ws As Worksheet)
 End Sub
 
 Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSummary As Worksheet) As Workbook
-    Dim colSheetsToCopy As Collection: Set colSheetsToCopy = GetAffiliateTierSheets(strAffiliate)
+    Dim colSheetsToCopy As Collection: Set colSheetsToCopy = GetAffiliateTierSheets()
     colSheetsToCopy.Add wsSummary, Before:=1
     
     If colSheetsToCopy.Count < 2 And wsSummary.Cells(wsSummary.Rows.Count, "A").End(xlUp).Row < 2 Then Exit Function
@@ -611,7 +612,6 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
     End With
     
     For Each ws In wbReport.Worksheets
-        ' Sanitize sheet name if it's a tier sheet
         If Left$(ws.Name, Len(TEMP_SHEET_PREFIX)) = TEMP_SHEET_PREFIX Then
             ws.Name = SanitizeSheetName(Replace(ws.Name, TEMP_SHEET_PREFIX, ""))
         End If
@@ -620,7 +620,7 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
         Set findRow = ws.Cells.Find(What:="*", SearchOrder:=xlByRows, SearchDirection:=xlPrevious)
         Set findCol = ws.Cells.Find(What:="*", SearchOrder:=xlByColumns, SearchDirection:=xlPrevious)
         
-        If Not findRow Is Nothing Then
+        If Not findRow Is Nothing And Not findCol Is Nothing Then
             With ws.Range("A1", ws.Cells(findRow.Row, findCol.Column))
                 .Value = .Value
             End With
@@ -832,7 +832,7 @@ End Function
 Public Function GetStatusEnum(ByVal strStatus As String) As ProductStatus
     Dim strKey As String: strKey = UCase$(Trim$(strStatus))
     If dictStatusMap.Exists(strKey) Then
-        GetStatusEnum = dictStatusMap(strKey)
+        GetStatusEnum = dictStatusMap.Item(strKey)
     Else
         GetStatusEnum = psUnknown
     End If
