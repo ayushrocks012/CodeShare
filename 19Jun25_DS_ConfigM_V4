@@ -3,8 +3,11 @@ Option Explicit
 
 '================================================================================================
 '--- CONFIGURATION MODULE (M_Config) ---
+' V14.7: Architectural Improvements
+'      - Added a constant for temporary sheet prefixes.
+'
 ' Author:      Ayush Goyal
-' Date:        19-Jun-2025
+' Date:        20-Jun-2025
 ' Purpose:     Centralizes all constants and settings for the forecasting tool.
 '              Modify values here to adjust tool behavior without changing core logic.
 '================================================================================================
@@ -18,6 +21,7 @@ Public Const SHEET_DEMAND As String = "Demand Forecast"
 Public Const SHEET_HISTORY As String = "Historical Sales"
 Public Const SHEET_LOG As String = "Log"
 Public Const SHEET_SUMMARY_PREFIX As String = "Summary"
+Public Const TEMP_SHEET_PREFIX As String = "TEMP_" 'Used for all temporary working sheets
 
 '--- PRODUCT STATUS ENUMERATION ---
 ' Using an Enum provides type safety and IntelliSense, preventing typos in the code.
