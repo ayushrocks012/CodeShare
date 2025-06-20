@@ -3,16 +3,18 @@ Option Explicit
 
 '================================================================================================
 '--- CLASS MODULE: cProductLifecycle ---
-' V14: Architectural Refactoring
-'      - Encapsulated the successor-linking logic into a new 'LinkSuccessor' method.
+' V14.5: Code Cleanup
+'      - Addressed Rubberduck code inspection warnings.
+'      - Removed unused 'ProductID' property.
+'      - Removed empty Else block in LinkSuccessor.
 '
-' Author:      [Your Name]
-' Date:        [Current Date]
+' Author:      Ayush Goyal
+' Date:        20-Jun-2025
 '================================================================================================
 
 '--- Private Backing Fields ---
 Private m_strAffiliate As String
-Private m_strProductID As String
+' Removed unused m_strProductID
 Private m_enmStatus As ProductStatus
 Private m_blnIsPhasingOut As Boolean
 Private m_dtePhaseOutDate As Date
@@ -26,8 +28,7 @@ Private m_dblPhaseInPercent As Double
 Public Property Get Affiliate() As String: Affiliate = m_strAffiliate: End Property
 Public Property Let Affiliate(ByVal Value As String): m_strAffiliate = Value: End Property
 
-Public Property Get ProductID() As String: ProductID = m_strProductID: End Property
-Public Property Let ProductID(ByVal Value As String): m_strProductID = Value: End Property
+' Removed unused ProductID property
 
 Public Property Get Status() As ProductStatus: Status = m_enmStatus: End Property
 Public Property Let Status(ByVal Value As ProductStatus): m_enmStatus = Value: End Property
@@ -60,7 +61,8 @@ Public Property Let PhaseInPercent(ByVal Value As Double): m_dblPhaseInPercent =
 Public Sub Init(ByVal arrDataSource As Variant, ByVal lngRow As Long)
     On Error Resume Next
     Me.Affiliate = Trim$(arrDataSource(lngRow, COL_AFFILIATE))
-    Me.ProductID = Trim$(arrDataSource(lngRow, COL_ISD))
+    ' The ProductID is set in the data source but not used by the object, so no need to store it here.
+    ' Me.ProductID = Trim$(arrDataSource(lngRow, COL_ISD))
     Me.Status = GetStatusEnum(Trim$(arrDataSource(lngRow, COL_STATUS)))
     Me.SupersededByProductID = Trim$(arrDataSource(lngRow, COL_SUPERSEDED_BY))
     
@@ -117,7 +119,6 @@ Public Sub LinkSuccessor(ByVal dictMap As Object)
         objSuccessor.IsPhasingIn = True
         objSuccessor.PhaseInDate = Me.PhaseOutDate
         objSuccessor.PhaseInPercent = 1 - Me.PhaseOutPercent
-    Else
-        'The main module's logging will handle the warning message.
+    ' Removed empty Else block, as the calling procedure handles logging.
     End If
 End Sub
