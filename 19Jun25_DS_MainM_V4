@@ -3,9 +3,8 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14.4: Fix Summary Sheet Formatting
-'      - Added call to FormatEnhancedSheet for the summary sheet to apply styles and totals.
-'      - Corrected the sorting condition to ensure the summary sheet is sorted correctly.
+' V14.5: Code Cleanup
+'      - Addressed Rubberduck code inspection warnings for better robustness and clarity.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -23,6 +22,8 @@ Private dictLifecycleMap As Object, dictAffiliates As Object
 ' 1. Main Public Orchestrator
 '================================================================================================================
 
+'@Ignore ProcedureNotUsed
+' This is the main entry point, intended to be called by the user.
 Public Sub UpdateForecast_V7()
     Dim tStart As Double: tStart = Timer
     
@@ -67,7 +68,7 @@ Private Function InitializeRun() As Boolean
     Set wsLog = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
     InitializeLogSheet wsLog
     
-    LogPerformance tCheckpoint, "Initialize Environment"
+    tCheckpoint = LogPerformance(tCheckpoint, "Initialize Environment")
     InitializeRun = True
     Exit Function
 
@@ -91,7 +92,7 @@ Private Function LoadAndValidateData() As Boolean
     If Not IsArray(arrDemandData) Or UBound(arrDemandData, 1) < 2 Then Err.Raise 517, , "Sheet '" & SHEET_DEMAND & "' is missing or empty."
     
     WriteToLog "Info", "LoadAndValidateData", "All source data loaded and validated."
-    LogPerformance tCheckpoint, "Load & Validate Data"
+    tCheckpoint = LogPerformance(tCheckpoint, "Load & Validate Data")
     LoadAndValidateData = True
     Exit Function
 
@@ -107,11 +108,11 @@ Private Sub BuildCachesAndMaps()
     Dim tCheckpoint As Double: tCheckpoint = Timer
     
     Set dictLifecycleMap = BuildLifecycleMap(arrStatusData)
-    LogPerformance tCheckpoint, "Build Lifecycle Map"
+    tCheckpoint = LogPerformance(tCheckpoint, "Build Lifecycle Map")
     
     Set dictAffiliates = GetUniqueAffiliates(arrDemandData)
     CacheDemandDataRows arrDemandData
-    LogPerformance tCheckpoint, "Cache Demand & Affiliate Data"
+    tCheckpoint = LogPerformance(tCheckpoint, "Cache Demand & Affiliate Data")
 End Sub
 
 Private Sub ProcessAllAffiliates()
@@ -141,15 +142,20 @@ Private Sub ProcessAllAffiliates()
         ProcessForecastForAffiliate strCurrentAffiliate, lngHistMonthCount
         
         GoTo Next_Affiliate
+
 Affiliate_ErrorHandler:
         lngWarningCount = lngWarningCount + 1
         WriteToLog "Error", "ProcessAllAffiliates", "Failed affiliate '" & strCurrentAffiliate & "'. Error: " & Err.Description
+        ' Use Resume to properly clear the error state and continue execution at the specified label.
+        Resume Next_Affiliate
+        
 Next_Affiliate:
         CleanupAffiliateSheets strCurrentAffiliate
+        ' Reset error handling for the next loop iteration.
         On Error GoTo 0
     Next varAffiliateKey
     
-    LogPerformance tCheckpoint, "Process All Affiliates"
+    tCheckpoint = LogPerformance(tCheckpoint, "Process All Affiliates")
 End Sub
 
 Private Sub FinalizeRun(ByVal tStart As Double)
@@ -202,15 +208,13 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
         Else
             WriteToLog "Info", "ProcessForecastForAffiliate", "Skipping empty tier sheet: " & wsTier.Name
         End If
-        LogPerformance tTierStart, "Tier Processed: " & wsTier.Name
+        tTierStart = LogPerformance(tTierStart, "Tier Processed: " & wsTier.Name)
     Next wsTier
     
-    ' --- START: NEW CODE ---
     ' After all data is appended, apply formatting and sorting to the completed summary sheet.
     If Not DEBUG_MODE Then
         FormatEnhancedSheet wsSummary
     End If
-    ' --- END: NEW CODE ---
     
     GenerateAffiliateReport strAffiliate, wsSummary
 End Sub
@@ -411,7 +415,10 @@ AddNew_ErrorHandler:
 End Sub
 
 Private Function GetAffiliateTierSheets(ByVal strAffiliate As String) As Collection
-    Dim colSheets As New Collection
+    ' Explicitly instantiate collection to avoid auto-instantiation issues.
+    Dim colSheets As Collection
+    Set colSheets = New Collection
+    
     Dim ws As Worksheet
     Dim strPattern As String: strPattern = SanitizeSheetName(strAffiliate & " - ")
     
@@ -545,7 +552,6 @@ Private Function GetDemandDataRow(ByVal strAffiliate As String, ByVal strTier As
     If dictDemandCache.Exists(strKey) Then GetDemandDataRow = dictDemandCache.Item(strKey) Else GetDemandDataRow = 0
 End Function
 
-'BUG FIX: Re-added this function that was accidentally deleted.
 Private Function GetUniqueAffiliates(ByVal arrDemandData As Variant) As Object
     Dim dict As Object, r As Long
     Set dict = CreateObject("Scripting.Dictionary")
@@ -651,12 +657,16 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
     ' to apply final formatting touches like AutoFit.
     For Each ws In wbReport.Worksheets
         Dim lRow As Long, lCol As Long
-        On Error Resume Next
-        lRow = ws.Cells.Find(What:="*", SearchOrder:=xlByRows, SearchDirection:=xlPrevious).Row
-        lCol = ws.Cells.Find(What:="*", SearchOrder:=xlByColumns, SearchDirection:=xlPrevious).Column
-        On Error GoTo 0
+        Dim findRow As Range, findCol As Range
         
-        If lRow > 0 And lCol > 0 Then
+        ' Safely find the last used row and column by checking if the Find result is Nothing.
+        Set findRow = ws.Cells.Find(What:="*", SearchOrder:=xlByRows, SearchDirection:=xlPrevious)
+        Set findCol = ws.Cells.Find(What:="*", SearchOrder:=xlByColumns, SearchDirection:=xlPrevious)
+        
+        If Not findRow Is Nothing And Not findCol Is Nothing Then
+             lRow = findRow.Row
+             lCol = findCol.Column
+             
              ' This removes formulas and pastes only the values, which is good practice.
              With ws.Range(ws.Cells(1, 1), ws.Cells(lRow, lCol))
                 .Value = .Value
@@ -759,12 +769,10 @@ Private Sub FormatEnhancedSheet(ByVal ws As Worksheet)
     
     ws.Cells.EntireColumn.AutoFit
     
-    ' --- START: MODIFIED CODE ---
     ' This condition now also checks for the temporary summary sheet name to ensure it gets sorted.
     If ws.Name = SHEET_SUMMARY_PREFIX Or ws.Name = "TempSummary" Then
         ws.Range("A1", ws.Cells(lngTotalRow, lngLastCol)).Sort Key1:=ws.Range("F2"), Order1:=xlAscending, Header:=xlYes
     End If
-    ' --- END: MODIFIED CODE ---
 End Sub
 
 Private Function ApplyTotalRow(ByVal ws As Worksheet, ByVal lngLastRow As Long, ByVal lngLastCol As Long) As Long
@@ -862,12 +870,14 @@ Private Sub WriteToLog(ByVal strType As String, ByVal strProcedure As String, By
     End With
 End Sub
 
-Private Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
+' Converted LogPerformance to a function to make its behavior more explicit.
+' It now returns the new checkpoint time.
+Private Function LogPerformance(ByVal tCheckpoint As Double, ByVal strStageName As String) As Double
     Dim dblElapsed As Double
     dblElapsed = Timer - tCheckpoint
     WriteToLog "Profile", strStageName, "Stage completed.", dblElapsed
-    tCheckpoint = Timer
-End Sub
+    LogPerformance = Timer
+End Function
 
 Private Function GetLastHistoricalColumn(ByVal ws As Worksheet) As Long
     Dim lngLastCol As Long, i As Long, dteStartDate As Date
