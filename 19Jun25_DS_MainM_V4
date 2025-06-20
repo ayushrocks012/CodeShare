@@ -3,8 +3,10 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14.5: Code Cleanup
-'      - Addressed Rubberduck code inspection warnings for better robustness and clarity.
+' V14.6: Final Code Cleanup
+'      - Addressed final Rubberduck code inspection warnings.
+'      - Corrected error handling in ProcessAllAffiliates to use 'Resume' instead of 'GoTo'.
+'      - Refactored LogPerformance back to a Sub to remove unused assignment warnings.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -68,7 +70,7 @@ Private Function InitializeRun() As Boolean
     Set wsLog = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
     InitializeLogSheet wsLog
     
-    tCheckpoint = LogPerformance(tCheckpoint, "Initialize Environment")
+    LogPerformance tCheckpoint, "Initialize Environment"
     InitializeRun = True
     Exit Function
 
@@ -92,7 +94,7 @@ Private Function LoadAndValidateData() As Boolean
     If Not IsArray(arrDemandData) Or UBound(arrDemandData, 1) < 2 Then Err.Raise 517, , "Sheet '" & SHEET_DEMAND & "' is missing or empty."
     
     WriteToLog "Info", "LoadAndValidateData", "All source data loaded and validated."
-    tCheckpoint = LogPerformance(tCheckpoint, "Load & Validate Data")
+    LogPerformance tCheckpoint, "Load & Validate Data"
     LoadAndValidateData = True
     Exit Function
 
@@ -108,11 +110,11 @@ Private Sub BuildCachesAndMaps()
     Dim tCheckpoint As Double: tCheckpoint = Timer
     
     Set dictLifecycleMap = BuildLifecycleMap(arrStatusData)
-    tCheckpoint = LogPerformance(tCheckpoint, "Build Lifecycle Map")
+    LogPerformance tCheckpoint, "Build Lifecycle Map"
     
     Set dictAffiliates = GetUniqueAffiliates(arrDemandData)
     CacheDemandDataRows arrDemandData
-    tCheckpoint = LogPerformance(tCheckpoint, "Cache Demand & Affiliate Data")
+    LogPerformance tCheckpoint, "Cache Demand & Affiliate Data"
 End Sub
 
 Private Sub ProcessAllAffiliates()
@@ -155,7 +157,7 @@ Next_Affiliate:
         On Error GoTo 0
     Next varAffiliateKey
     
-    tCheckpoint = LogPerformance(tCheckpoint, "Process All Affiliates")
+    LogPerformance tCheckpoint, "Process All Affiliates"
 End Sub
 
 Private Sub FinalizeRun(ByVal tStart As Double)
@@ -208,7 +210,7 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
         Else
             WriteToLog "Info", "ProcessForecastForAffiliate", "Skipping empty tier sheet: " & wsTier.Name
         End If
-        tTierStart = LogPerformance(tTierStart, "Tier Processed: " & wsTier.Name)
+        LogPerformance tTierStart, "Tier Processed: " & wsTier.Name
     Next wsTier
     
     ' After all data is appended, apply formatting and sorting to the completed summary sheet.
@@ -870,14 +872,13 @@ Private Sub WriteToLog(ByVal strType As String, ByVal strProcedure As String, By
     End With
 End Sub
 
-' Converted LogPerformance to a function to make its behavior more explicit.
-' It now returns the new checkpoint time.
-Private Function LogPerformance(ByVal tCheckpoint As Double, ByVal strStageName As String) As Double
+' This procedure logs the time elapsed since the last checkpoint and resets the checkpoint.
+Private Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
     Dim dblElapsed As Double
     dblElapsed = Timer - tCheckpoint
     WriteToLog "Profile", strStageName, "Stage completed.", dblElapsed
-    LogPerformance = Timer
-End Function
+    tCheckpoint = Timer
+End Sub
 
 Private Function GetLastHistoricalColumn(ByVal ws As Worksheet) As Long
     Dim lngLastCol As Long, i As Long, dteStartDate As Date
