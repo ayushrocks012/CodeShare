@@ -3,10 +3,8 @@ Option Explicit
 
 '================================================================================================
 '--- CLASS MODULE: cProductLifecycle ---
-' V14.5: Code Cleanup
-'      - Addressed Rubberduck code inspection warnings.
-'      - Removed unused 'ProductID' property.
-'      - Removed empty Else block in LinkSuccessor.
+' V14.7: Architectural Improvements
+'      - Replaced manual date comparisons with a dedicated IsSameMonthAndYear helper function.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -14,7 +12,6 @@ Option Explicit
 
 '--- Private Backing Fields ---
 Private m_strAffiliate As String
-' Removed unused m_strProductID
 Private m_enmStatus As ProductStatus
 Private m_blnIsPhasingOut As Boolean
 Private m_dtePhaseOutDate As Date
@@ -24,36 +21,25 @@ Private m_blnIsPhasingIn As Boolean
 Private m_dtePhaseInDate As Date
 Private m_dblPhaseInPercent As Double
 
-'--- Public Properties ---
+'--- Public Properties (omitted for brevity, no changes) ---
 Public Property Get Affiliate() As String: Affiliate = m_strAffiliate: End Property
 Public Property Let Affiliate(ByVal Value As String): m_strAffiliate = Value: End Property
-
-' Removed unused ProductID property
-
 Public Property Get Status() As ProductStatus: Status = m_enmStatus: End Property
 Public Property Let Status(ByVal Value As ProductStatus): m_enmStatus = Value: End Property
-
 Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = m_blnIsPhasingOut: End Property
 Public Property Let IsPhasingOut(ByVal Value As Boolean): m_blnIsPhasingOut = Value: End Property
-
 Public Property Get PhaseOutDate() As Date: PhaseOutDate = m_dtePhaseOutDate: End Property
 Public Property Let PhaseOutDate(ByVal Value As Date): m_dtePhaseOutDate = Value: End Property
-
 Public Property Get PhaseOutPercent() As Double: PhaseOutPercent = m_dblPhaseOutPercent: End Property
 Public Property Let PhaseOutPercent(ByVal Value As Double): m_dblPhaseOutPercent = Value: End Property
-
 Public Property Get SupersededByProductID() As String: SupersededByProductID = m_strSupersededByProductID: End Property
 Public Property Let SupersededByProductID(ByVal Value As String): m_strSupersededByProductID = Value: End Property
-
 Public Property Get IsPhasingIn() As Boolean: IsPhasingIn = m_blnIsPhasingIn: End Property
 Public Property Let IsPhasingIn(ByVal Value As Boolean): m_blnIsPhasingIn = Value: End Property
-
 Public Property Get PhaseInDate() As Date: PhaseInDate = m_dtePhaseInDate: End Property
 Public Property Let PhaseInDate(ByVal Value As Date): m_dtePhaseInDate = Value: End Property
-
 Public Property Get PhaseInPercent() As Double: PhaseInPercent = m_dblPhaseInPercent: End Property
 Public Property Let PhaseInPercent(ByVal Value As Double): m_dblPhaseInPercent = Value: End Property
-
 '================================================================================================
 '--- Public Methods ---
 '================================================================================================
@@ -61,8 +47,6 @@ Public Property Let PhaseInPercent(ByVal Value As Double): m_dblPhaseInPercent =
 Public Sub Init(ByVal arrDataSource As Variant, ByVal lngRow As Long)
     On Error Resume Next
     Me.Affiliate = Trim$(arrDataSource(lngRow, COL_AFFILIATE))
-    ' The ProductID is set in the data source but not used by the object, so no need to store it here.
-    ' Me.ProductID = Trim$(arrDataSource(lngRow, COL_ISD))
     Me.Status = GetStatusEnum(Trim$(arrDataSource(lngRow, COL_STATUS)))
     Me.SupersededByProductID = Trim$(arrDataSource(lngRow, COL_SUPERSEDED_BY))
     
@@ -89,14 +73,14 @@ Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
         If dteForecastDate < Me.PhaseInDate Then
             GetForecastMultiplier = 0 'Not yet started
             Exit Function
-        ElseIf Month(dteForecastDate) = Month(Me.PhaseInDate) And Year(dteForecastDate) = Year(Me.PhaseInDate) Then
+        ElseIf IsSameMonthAndYear(dteForecastDate, Me.PhaseInDate) Then
             GetForecastMultiplier = Me.PhaseInPercent 'Apply phase-in percentage
             Exit Function
         End If
     End If
 
     If Me.IsPhasingOut And Me.PhaseOutDate > 0 And dteForecastDate >= Me.PhaseOutDate Then
-        If Month(dteForecastDate) = Month(Me.PhaseOutDate) And Year(dteForecastDate) = Year(Me.PhaseOutDate) Then
+        If IsSameMonthAndYear(dteForecastDate, Me.PhaseOutDate) Then
             GetForecastMultiplier = Me.PhaseOutPercent 'Apply phase-out percentage
         Else
             GetForecastMultiplier = 0 'Phased out completely
@@ -105,20 +89,28 @@ Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
 End Function
 
 Public Sub LinkSuccessor(ByVal dictMap As Object)
-    'REFACTOR #3: This new method encapsulates the logic for linking this product to its successor.
     If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
     
     Dim strSuccessorKey As String
-    strSuccessorKey = Me.Affiliate & "|" & Me.SupersededByProductID
+    strSuccessorKey = BuildCompositeKey(Me.Affiliate, Me.SupersededByProductID)
     
     If dictMap.Exists(strSuccessorKey) Then
         Dim objSuccessor As cProductLifecycle
         Set objSuccessor = dictMap.Item(strSuccessorKey)
         
-        'Update the successor product's properties based on this product's phase-out details.
-        objSuccessor.IsPhasingIn = True
-        objSuccessor.PhaseInDate = Me.PhaseOutDate
-        objSuccessor.PhaseInPercent = 1 - Me.PhaseOutPercent
-    ' Removed empty Else block, as the calling procedure handles logging.
+        With objSuccessor
+            .IsPhasingIn = True
+            .PhaseInDate = Me.PhaseOutDate
+            .PhaseInPercent = 1 - Me.PhaseOutPercent
+        End With
     End If
 End Sub
+
+'================================================================================================
+'--- Private Helper Methods ---
+'================================================================================================
+
+Private Function IsSameMonthAndYear(ByVal date1 As Date, ByVal date2 As Date) As Boolean
+    If date1 = 0 Or date2 = 0 Then Exit Function
+    IsSameMonthAndYear = (Month(date1) = Month(date2) And Year(date1) = Year(date2))
+End Function
