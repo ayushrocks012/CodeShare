@@ -3,11 +3,12 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14.1: Bug Fix
-'      - Re-introduced the GetUniqueAffiliates helper function that was accidentally removed during refactoring.
+' V14.2: Enhanced Formatting
+'      - Modified CreateOutputWorkbook to apply FreezePanes and AutoFit to ALL sheets in the final report.
+'      - Corrected FreezePane application to lock top row and left columns correctly.
 '
 ' Author:      Ayush Goyal
-' Date:        19-Jun-2025
+' Date:        20-Jun-2025
 '================================================================================================================
 
 '--- PRIVATE MODULE-LEVEL VARIABLES ---
@@ -639,6 +640,9 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
     wbReport.Sheets("TempSummary").Name = SHEET_SUMMARY_PREFIX
     On Error GoTo 0
     
+    ' --- START: MODIFIED LOOP TO FORMAT ALL SHEETS ---
+    ' This loop iterates through every sheet in the new report workbook
+    ' to apply final formatting touches like AutoFit and Freeze Panes.
     For Each ws In wbReport.Worksheets
         Dim lRow As Long, lCol As Long
         On Error Resume Next
@@ -647,19 +651,28 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
         On Error GoTo 0
         
         If lRow > 0 And lCol > 0 Then
+             ' This removes formulas and pastes only the values, which is good practice.
              With ws.Range(ws.Cells(1, 1), ws.Cells(lRow, lCol))
                 .Value = .Value
              End With
+             
+             ' Apply AutoFit and Freeze Panes to the current sheet
+             ws.Activate
+             ws.Cells.EntireColumn.AutoFit
+             ws.Range("I2").Select ' Select cell I2 to freeze row 1 and columns A-H
+             ActiveWindow.FreezePanes = True
         End If
     Next ws
+    ' --- END: MODIFIED LOOP ---
     
     Application.CutCopyMode = False
     
+    ' Activate the main summary sheet before finishing.
     wbReport.Sheets(SHEET_SUMMARY_PREFIX).Activate
-    ActiveWindow.FreezePanes = True
     
     Set CreateOutputWorkbook = wbReport
 End Function
+
 
 Private Function GetHistoricalMonthCount(ByVal arrDemand As Variant, ByVal arrHistory As Variant) As Long
     Dim lngHistLCol As Long, lngCurrCol As Long, lngCount As Long, dteStartDate As Date
