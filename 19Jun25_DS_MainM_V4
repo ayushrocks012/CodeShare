@@ -3,8 +3,9 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14.3: Removed Freeze Panes
-'      - Removed the application of FreezePanes from all output sheets based on user feedback.
+' V14.4: Fix Summary Sheet Formatting
+'      - Added call to FormatEnhancedSheet for the summary sheet to apply styles and totals.
+'      - Corrected the sorting condition to ensure the summary sheet is sorted correctly.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -203,6 +204,13 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
         End If
         LogPerformance tTierStart, "Tier Processed: " & wsTier.Name
     Next wsTier
+    
+    ' --- START: NEW CODE ---
+    ' After all data is appended, apply formatting and sorting to the completed summary sheet.
+    If Not DEBUG_MODE Then
+        FormatEnhancedSheet wsSummary
+    End If
+    ' --- END: NEW CODE ---
     
     GenerateAffiliateReport strAffiliate, wsSummary
 End Sub
@@ -639,7 +647,6 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
     wbReport.Sheets("TempSummary").Name = SHEET_SUMMARY_PREFIX
     On Error GoTo 0
     
-    ' --- START: MODIFIED LOOP TO FORMAT ALL SHEETS ---
     ' This loop iterates through every sheet in the new report workbook
     ' to apply final formatting touches like AutoFit.
     For Each ws In wbReport.Worksheets
@@ -660,7 +667,6 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
              ws.Cells.EntireColumn.AutoFit
         End If
     Next ws
-    ' --- END: MODIFIED LOOP ---
     
     Application.CutCopyMode = False
     
@@ -752,9 +758,13 @@ Private Sub FormatEnhancedSheet(ByVal ws As Worksheet)
     ApplyNumberFormats ws, lngTotalRow, lngLastCol
     
     ws.Cells.EntireColumn.AutoFit
-    If ws.Name = SHEET_SUMMARY_PREFIX Then
+    
+    ' --- START: MODIFIED CODE ---
+    ' This condition now also checks for the temporary summary sheet name to ensure it gets sorted.
+    If ws.Name = SHEET_SUMMARY_PREFIX Or ws.Name = "TempSummary" Then
         ws.Range("A1", ws.Cells(lngTotalRow, lngLastCol)).Sort Key1:=ws.Range("F2"), Order1:=xlAscending, Header:=xlYes
     End If
+    ' --- END: MODIFIED CODE ---
 End Sub
 
 Private Function ApplyTotalRow(ByVal ws As Worksheet, ByVal lngLastRow As Long, ByVal lngLastCol As Long) As Long
