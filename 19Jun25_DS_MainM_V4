@@ -3,9 +3,8 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14.2: Enhanced Formatting
-'      - Modified CreateOutputWorkbook to apply FreezePanes and AutoFit to ALL sheets in the final report.
-'      - Corrected FreezePane application to lock top row and left columns correctly.
+' V14.3: Removed Freeze Panes
+'      - Removed the application of FreezePanes from all output sheets based on user feedback.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -642,7 +641,7 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
     
     ' --- START: MODIFIED LOOP TO FORMAT ALL SHEETS ---
     ' This loop iterates through every sheet in the new report workbook
-    ' to apply final formatting touches like AutoFit and Freeze Panes.
+    ' to apply final formatting touches like AutoFit.
     For Each ws In wbReport.Worksheets
         Dim lRow As Long, lCol As Long
         On Error Resume Next
@@ -656,11 +655,9 @@ Private Function CreateOutputWorkbook(ByVal strAffiliate As String, ByVal wsSumm
                 .Value = .Value
              End With
              
-             ' Apply AutoFit and Freeze Panes to the current sheet
+             ' Apply AutoFit to the current sheet
              ws.Activate
              ws.Cells.EntireColumn.AutoFit
-             ws.Range("I2").Select ' Select cell I2 to freeze row 1 and columns A-H
-             ActiveWindow.FreezePanes = True
         End If
     Next ws
     ' --- END: MODIFIED LOOP ---
