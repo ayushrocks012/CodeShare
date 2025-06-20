@@ -3,13 +3,9 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting) ---
-' V14.7: Architectural Improvements
-'      - Implemented suggestions to improve maintainability, performance, and robustness.
-'      - Centralized composite key creation.
-'      - Replaced Select Case with Dictionary for Enum mapping.
-'      - Enhanced logging with error numbers and context.
-'      - Replaced magic numbers and strings with helper functions and constants.
-'      - Implemented safer, more granular error handling.
+' V14.8: Fix Summary Sheet Headers
+'      - Re-instated the call to SetupOutputSheetHeaders for the summary sheet, which was
+'        accidentally removed during prior refactoring.
 '
 ' Author:      Ayush Goyal
 ' Date:        20-Jun-2025
@@ -196,15 +192,22 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
     Dim colTierSheets As Collection
     Dim tTierStart As Double
     
+    ' Create the summary sheet
     Set wsSummary = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
     wsSummary.Name = TEMP_SHEET_PREFIX & "Summary"
     
-    CreateTierSheets strAffiliate, wsSummary
+    ' *** FIX: Set the headers on the summary sheet immediately after creation. ***
+    SetupOutputSheetHeaders wsSummary
+    
+    ' Create all the necessary tier sheets
+    CreateTierSheets strAffiliate
     Set colTierSheets = GetAffiliateTierSheets(strAffiliate)
     
+    ' Initialize caches for this affiliate run
     Dim dictTierSumCache As Object: Set dictTierSumCache = CreateObject("Scripting.Dictionary")
     Dim dictSubTierSumCache As Object: Set dictSubTierSumCache = CreateObject("Scripting.Dictionary")
     
+    ' Process each tier and append its data to the summary sheet
     For Each wsTier In colTierSheets
         tTierStart = Timer
         If wsTier.Cells(wsTier.Rows.Count, "A").End(xlUp).Row > 1 Then
@@ -216,10 +219,12 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal lngH
         LogPerformance tTierStart, "Tier Processed: " & wsTier.Name
     Next wsTier
     
+    ' Format the completed summary sheet
     If Not DEBUG_MODE Then
         FormatEnhancedSheet wsSummary
     End If
     
+    ' Generate the final report workbook
     GenerateAffiliateReport strAffiliate, wsSummary
 End Sub
 
@@ -405,7 +410,7 @@ Private Function GetAffiliateTierSheets(ByVal strAffiliate As String) As Collect
     Set GetAffiliateTierSheets = colSheets
 End Function
 
-Private Sub CreateTierSheets(ByVal strAffiliate As String, ByVal wsSummary As Worksheet)
+Private Sub CreateTierSheets(ByVal strAffiliate As String)
     On Error GoTo TierSheet_ErrorHandler
     Dim dictTiers As Object: Set dictTiers = CreateObject("Scripting.Dictionary")
     Dim r As Long, strTier As String
@@ -852,7 +857,7 @@ Public Function GetStatusString(ByVal enmStatus As ProductStatus) As String
     End Select
 End Function
 
-Private Function BuildCompositeKey(ByVal keyPart1 As String, ByVal keyPart2 As String) As String
+Public Function BuildCompositeKey(ByVal keyPart1 As String, ByVal keyPart2 As String) As String
     Const SEPARATOR As String = "|"
     BuildCompositeKey = Trim$(keyPart1) & SEPARATOR & Trim$(keyPart2)
 End Function
