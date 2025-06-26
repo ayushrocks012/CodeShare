@@ -1,0 +1,133 @@
+'@Folder("Classes")
+Option Explicit
+
+'================================================================================================
+' CLASS MODULE: cProductLifecycle
+' V15.0: Final Refinement
+'      - Refined all code comments for clarity and professionalism.
+'
+' Author:      Ayush Goyal
+' Date:        26-Jun-2025
+' Purpose:     Defines a Product Lifecycle object to store and manage the status,
+'              phase-in/out dates, and successor information for a single product.
+'================================================================================================
+
+'--- Private Backing Fields ---
+Private m_strAffiliate As String
+Private m_enmStatus As ProductStatus
+Private m_blnIsPhasingOut As Boolean
+Private m_dtePhaseOutDate As Date
+Private m_dblPhaseOutPercent As Double
+Private m_strSupersededByProductID As String
+Private m_blnIsPhasingIn As Boolean
+Private m_dtePhaseInDate As Date
+Private m_dblPhaseInPercent As Double
+
+'--- Public Properties (Read/Write) ---
+Public Property Get Affiliate() As String: Affiliate = m_strAffiliate: End Property
+Public Property Let Affiliate(ByVal Value As String): m_strAffiliate = Value: End Property
+Public Property Get Status() As ProductStatus: Status = m_enmStatus: End Property
+Public Property Let Status(ByVal Value As ProductStatus): m_enmStatus = Value: End Property
+Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = m_blnIsPhasingOut: End Property
+Public Property Let IsPhasingOut(ByVal Value As Boolean): m_blnIsPhasingOut = Value: End Property
+Public Property Get PhaseOutDate() As Date: PhaseOutDate = m_dtePhaseOutDate: End Property
+Public Property Let PhaseOutDate(ByVal Value As Date): m_dtePhaseOutDate = Value: End Property
+Public Property Get PhaseOutPercent() As Double: PhaseOutPercent = m_dblPhaseOutPercent: End Property
+Public Property Let PhaseOutPercent(ByVal Value As Double): m_dblPhaseOutPercent = Value: End Property
+Public Property Get SupersededByProductID() As String: SupersededByProductID = m_strSupersededByProductID: End Property
+Public Property Let SupersededByProductID(ByVal Value As String): m_strSupersededByProductID = Value: End Property
+Public Property Get IsPhasingIn() As Boolean: IsPhasingIn = m_blnIsPhasingIn: End Property
+Public Property Let IsPhasingIn(ByVal Value As Boolean): m_blnIsPhasingIn = Value: End Property
+Public Property Get PhaseInDate() As Date: PhaseInDate = m_dtePhaseInDate: End Property
+Public Property Let PhaseInDate(ByVal Value As Date): m_dtePhaseInDate = Value: End Property
+Public Property Get PhaseInPercent() As Double: PhaseInPercent = m_dblPhaseInPercent: End Property
+Public Property Let PhaseInPercent(ByVal Value As Double): m_dblPhaseInPercent = Value: End Property
+
+
+'================================================================================================
+'--- PUBLIC METHODS ---
+'================================================================================================
+
+'--- Purpose: Initializes the object's properties from a row of data in the status array.
+'------------------------------------------------------------------------------------------------
+Public Sub Init(ByVal arrDataSource As Variant, ByVal lngRow As Long)
+    On Error Resume Next
+    Me.Affiliate = Trim$(arrDataSource(lngRow, COL_AFFILIATE))
+    Me.Status = GetStatusEnum(Trim$(arrDataSource(lngRow, COL_STATUS)))
+    Me.SupersededByProductID = Trim$(arrDataSource(lngRow, COL_SUPERSEDED_BY))
+    
+    Dim varPhaseOutPct As Variant: varPhaseOutPct = arrDataSource(lngRow, COL_PHASE_OUT_PCT)
+    If IsNumeric(varPhaseOutPct) And varPhaseOutPct >= 0 And varPhaseOutPct <= 1 Then
+        Me.PhaseOutPercent = CDbl(varPhaseOutPct)
+    End If
+
+    If Me.Status = psPhaseInOut Or Me.Status = psDiscontinued Then
+        Me.IsPhasingOut = True
+        If IsDate(arrDataSource(lngRow, COL_PHASE_OUT_DATE)) Then
+            Me.PhaseOutDate = CDate(arrDataSource(lngRow, COL_PHASE_OUT_DATE))
+        End If
+    End If
+    On Error GoTo 0
+End Sub
+
+'--- Purpose: Calculates the forecast multiplier for a given month based on the object's status.
+'--- Returns: A Double (e.g., 1.0, 0.5, 0.0) to adjust the base forecast.
+'------------------------------------------------------------------------------------------------
+Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
+    GetForecastMultiplier = 1 'Default to 100% for active products
+
+    '--- Handle Phase-In logic ---
+    If Me.IsPhasingIn Then
+        If dteForecastDate < Me.PhaseInDate Then
+            GetForecastMultiplier = 0 'Forecast is zero before phase-in starts
+            Exit Function
+        ElseIf IsSameMonthAndYear(dteForecastDate, Me.PhaseInDate) Then
+            GetForecastMultiplier = Me.PhaseInPercent 'Apply phase-in percentage for the first month
+            Exit Function
+        End If
+    End If
+
+    '--- Handle Phase-Out logic ---
+    If Me.IsPhasingOut And Me.PhaseOutDate > 0 And dteForecastDate >= Me.PhaseOutDate Then
+        If IsSameMonthAndYear(dteForecastDate, Me.PhaseOutDate) Then
+            GetForecastMultiplier = Me.PhaseOutPercent 'Apply phase-out percentage for the last month
+        Else
+            GetForecastMultiplier = 0 'Forecast is zero after the phase-out month
+        End If
+    End If
+End Function
+
+'@Ignore ProcedureNotUsed
+'--- Purpose: Finds the successor product (if any) in the main lifecycle map and
+'---          sets its phase-in properties based on this object's phase-out data.
+'------------------------------------------------------------------------------------------------
+Public Sub LinkSuccessor(ByVal dictMap As Object)
+    If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
+    
+    Dim strSuccessorKey As String
+    strSuccessorKey = BuildCompositeKey(Me.Affiliate, Me.SupersededByProductID)
+    
+    If dictMap.Exists(strSuccessorKey) Then
+        Dim objSuccessor As cProductLifecycle
+        Set objSuccessor = dictMap.Item(strSuccessorKey)
+        
+        '--- Set the successor's phase-in details ---
+        With objSuccessor
+            .IsPhasingIn = True
+            .PhaseInDate = Me.PhaseOutDate
+            .PhaseInPercent = 1 - Me.PhaseOutPercent 'Successor's volume is the inverse of predecessor's
+        End With
+    End If
+End Sub
+
+
+'================================================================================================
+'--- PRIVATE HELPER METHODS ---
+'================================================================================================
+
+'--- Purpose: Compares two dates to see if they fall in the same month and year.
+'------------------------------------------------------------------------------------------------
+Private Function IsSameMonthAndYear(ByVal date1 As Date, ByVal date2 As Date) As Boolean
+    If date1 = 0 Or date2 = 0 Then Exit Function
+    IsSameMonthAndYear = (Month(date1) = Month(date2) And Year(date1) = Year(date2))
+End Function
