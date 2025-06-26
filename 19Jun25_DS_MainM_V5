@@ -3,10 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V15.0: Final Refinement
+' V15.1: Readability Enhancement
+'      - Adjusted code style for loops and conditionals based on user feedback for clarity.
 '      - Implemented robust fix for date header formatting in the final report.
-'      - Refined all code comments for clarity, professionalism, and maintainability.
-'      - Standardized procedure headers and removed unnecessary code.
+'      - Refined all code comments for professionalism and maintainability.
 '
 ' Author:      Ayush Goyal
 ' Date:        26-Jun-2025
@@ -444,9 +444,15 @@ Private Sub AddNewProductsToTierSheet(ByVal wsTier As Worksheet, ByVal strAffili
         Dim arrExisting As Variant, r As Long
         arrExisting = wsTier.Range("F2:F" & lngTierLRow).Value
         If IsArray(arrExisting) Then
-            For r = 1 To UBound(arrExisting, 1): If Not dictExistingProducts.Exists(arrExisting(r, 1)) Then dictExistingProducts.Add arrExisting(r, 1), 1: Next r
+            For r = 1 To UBound(arrExisting, 1)
+                If Not dictExistingProducts.Exists(arrExisting(r, 1)) Then
+                    dictExistingProducts.Add arrExisting(r, 1), 1
+                End If
+            Next r
         ElseIf Not IsEmpty(arrExisting) Then
-             If Not dictExistingProducts.Exists(arrExisting) Then dictExistingProducts.Add arrExisting, 1
+            If Not dictExistingProducts.Exists(arrExisting) Then
+                dictExistingProducts.Add arrExisting, 1
+            End If
         End If
     End If
     
