@@ -1,0 +1,42 @@
+let
+    // Section 1: Get the list of all files and parse their timestamps
+    Source = SharePoint.Files("https://abbott.sharepoint.com/sites/GB-AN-HeadOffice", [ApiVersion = 15]),
+    #"Filtered Rows" = Table.SelectRows(Source, each ([Folder Path] = "https://abbott.sharepoint.com/sites/GB-AN-HeadOffice/Shared Documents/General/Demand/DP Master Download/")),
+    #"Filtered Hidden Files" = Table.SelectRows(#"Filtered Rows", each [Attributes]?[Hidden]? <> true),
+    #"Added TimestampText" = Table.AddColumn(#"Filtered Hidden Files", "TimestampText", each Text.Middle([Name], 29, 19)),
+    #"Replaced Underscore" = Table.ReplaceValue(#"Added TimestampText","_","T",Replacer.ReplaceText,{"TimestampText"}),
+    #"Added TimestampFixed" = Table.AddColumn(#"Replaced Underscore", "TimestampFixed", each Text.Start([TimestampText], 10) & "T" & Text.Middle([TimestampText], 11, 2) & ":" & Text.Middle([TimestampText], 14, 2) & ":" & Text.End([TimestampText], 2)),
+    #"Changed Type" = Table.TransformColumnTypes(#"Added TimestampFixed",{{"TimestampFixed", type datetime}}),
+
+    // *** OPTIMIZATION: Identify the latest file for each year BEFORE processing data ***
+    // Add a year column based on the file's timestamp
+    #"Added File Year" = Table.AddColumn(#"Changed Type", "FileYear", each Date.Year([TimestampFixed])),
+    
+    // Group the list of FILES by year
+    #"Grouped Files by Year" = Table.Group(#"Added File Year", {"FileYear"}, {{"LatestFile", each Table.Sort(_, {{"TimestampFixed", Order.Descending}}){0}, type record}}),
+    
+    // Expand the record to get the final, filtered list of files to process
+    #"Expanded LatestFile" = Table.ExpandRecordColumn(#"Grouped Files by Year", "LatestFile", {"Name", "Content"}, {"Name", "Content"}),
+
+    // Section 2: Invoke the transform function ONLY on the pre-filtered list of latest files
+    #"Invoked Custom Function" = Table.AddColumn(#"Expanded LatestFile", "Transform File", each #"Transform File"([Content])),
+    
+    // Expand the pre-processed data from the few required files
+    #"Removed Other Columns" = Table.SelectColumns(#"Invoked Custom Function", {"Transform File"}),
+    #"Expanded Table Column" = Table.ExpandTableColumn(#"Removed Other Columns", "Transform File", {"Country", "Local Item number", "APO Product (1-6-3-3)", "APO Customer", "Column8", "Location/Plant/Site", "Key Figures", "Calendar year", "Calendar month", "Column14", "IsIncluded", "NewKeyFigure"}),
+
+    // Section 3: Final filtering and grouping (now on a much smaller table)
+    #"Filtered Rows to Keep" = Table.SelectRows(#"Expanded Table Column", each [IsIncluded] = true),
+    #"Renamed Columns" = Table.RenameColumns(#"Filtered Rows to Keep",{{"Column8", "APO Customer Name"}, {"Column14", "Data"}}),
+    
+    // Group the final rows. This is very fast as it operates on a minimal dataset.
+    #"Grouped Rows for Final Output" = Table.Group(#"Renamed Columns", 
+        {"Country", "Local Item number", "APO Product (1-6-3-3)", "APO Customer", "APO Customer Name", "Location/Plant/Site", "Calendar year", "Calendar month", "NewKeyFigure"}, 
+        {{"Data", each List.Sum([Data]), type nullable number}}
+    ),
+    
+    // Final cleanup
+    #"Renamed Key Figure Column" = Table.RenameColumns(#"Grouped Rows for Final Output", {{"NewKeyFigure", "Key Figures"}})
+
+in
+    #"Renamed Key Figure Column"
