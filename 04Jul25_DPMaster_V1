@@ -1,5 +1,5 @@
 let
-    // Section 1: Load and Prepare Source Files (Largely unchanged)
+    // Section 1: Load and Prepare Source Files
     Source = SharePoint.Files("https://abbott.sharepoint.com/sites/GB-AN-HeadOffice", [ApiVersion = 15]),
     #"Filtered Rows" = Table.SelectRows(Source, each ([Folder Path] = "https://abbott.sharepoint.com/sites/GB-AN-HeadOffice/Shared Documents/General/Demand/DP Master Download/")),
     #"Added TimestampText" = Table.AddColumn(#"Filtered Rows", "TimestampText", each Text.Middle([Name], 29, 19)),
@@ -10,10 +10,22 @@ let
     #"Invoked Custom Function" = Table.AddColumn(#"Filtered Hidden Files", "Transform File", each #"Transform File"([Content])),
     #"Removed Other Columns" = Table.SelectColumns(#"Invoked Custom Function",{"TimestampFixed", "Transform File"}),
     #"Expanded Table Column" = Table.ExpandTableColumn(#"Removed Other Columns", "Transform File", Table.ColumnNames(#"Transform File"(#"Sample File"))),
+    
+    // Group by year to find the latest file for each year
     #"Grouped by Year" = Table.Group(#"Expanded Table Column", {"Calendar year"}, {{"AllData", each _, type table}}),
     #"Added LatestTimestamp" = Table.AddColumn(#"Grouped by Year", "LatestTimestamp", each List.Max([AllData][TimestampFixed])),
-    #"Expanded AllData" = Table.ExpandTableColumn(#"Added LatestTimestamp", "AllData", Table.ColumnNames(Table.Combine(#"Added LatestTimestamp"[AllData]))),
+
+    // *** FIX APPLIED HERE ***
+    // Rename the grouping column to avoid a name conflict during the expansion step.
+    #"Renamed Grouping Column" = Table.RenameColumns(#"Added LatestTimestamp",{{"Calendar year", "Calendar year.Group"}}),
+
+    // Expand the nested table data. This now works because the conflicting column name has been changed.
+    #"Expanded AllData" = Table.ExpandTableColumn(#"Renamed Grouping Column", "AllData", Table.ColumnNames(Table.Combine(#"Renamed Grouping Column"[AllData]))),
+    
+    // Filter to keep only the rows from the latest file for each year
     #"Filtered Latest Only" = Table.SelectRows(#"Expanded AllData", each [TimestampFixed] = [LatestTimestamp]),
+    
+    // Select the final columns needed for the main table, implicitly removing helper columns like 'LatestTimestamp' and 'Calendar year.Group'
     #"Selected Columns" = Table.SelectColumns(#"Filtered Latest Only",{"Calendar year", "Country", "Local Item number", "APO Product (1-6-3-3)", "APO Customer", "Column8", "Location/Plant/Site", "Key Figures", "Calendar month", "Column14"}),
     #"Renamed Columns" = Table.RenameColumns(#"Selected Columns",{{"Column8", "APO Customer Name"}, {"Column14", "Data"}}),
     #"Changed Year Type" = Table.TransformColumnTypes(#"Renamed Columns",{{"Calendar year", Int64.Type}}),
@@ -21,7 +33,7 @@ let
     // Section 2: Efficiently Determine Month Type and Projections in a Single Pass
     #"Added Month and Projection Logic" = Table.AddColumn(#"Changed Year Type", "ProjectionLogic", each
         let
-            // Determine Month Number
+            // Determine Month Number using a list for efficiency and clarity
             monthNames = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"},
             monthNum = List.PositionOf(monthNames, Text.Upper([Calendar month])) + 1,
 
