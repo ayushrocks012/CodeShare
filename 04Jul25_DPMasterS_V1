@@ -1,24 +1,21 @@
-// Name this query "Transform File"
-// It must be a function that accepts the binary file content
-(fileContent as binary) =>
 let
-    // This assumes your source files are Excel files with data in "Sheet1".
-    // If they are CSVs or have a different sheet name, this part needs to be adjusted.
-    Source = Excel.Workbook(fileContent, null, true),
-    DataSheet = Source{[Item="Sheet1",Kind="Sheet"]}[Data],
-    #"Promoted Headers" = Table.PromoteHeaders(DataSheet, [PromoteAllScalars=true]),
-    
-    // Perform basic type changes early
+    // Your original steps to get the data from the sample file
+    Source = Excel.Workbook(Parameter1, null, true),
+    DataSheet = Source{[Item="Analysis 1 - DP Master Plann...",Kind="Sheet"]}[Data],
+    #"Removed Top Rows" = Table.Skip(DataSheet,3),
+    #"Promoted Headers" = Table.PromoteHeaders(#"Removed Top Rows", [PromoteAllScalars=true]),
+
+    // Perform basic type changes early for stability
     #"Changed Column Types" = Table.TransformColumnTypes(#"Promoted Headers",{
         {"Country", type text}, {"Local Item number", type text}, {"APO Product (1-6-3-3)", type text},
         {"APO Customer", type text}, {"Column8", type text}, {"Location/Plant/Site", type text},
-        {"Key Figures", type text}, {"Calendar year", type text}, {"Calendar month", type text}, {"Column14", type number}
+        {"Key Figures", type text}, {"Calendar year", type any}, {"Calendar month", type text}, {"Column14", type number}
     }),
 
     // Convert "Calendar year" to a number right away to prevent errors later
     #"Changed Year Type" = Table.TransformColumnTypes(#"Changed Column Types",{{"Calendar year", Int64.Type}}),
 
-    // Section 2 from the main query is now here, running on each small file individually
+    // This is the efficient, single-pass logic now running inside the sample file transformation
     #"Added Month and Projection Logic" = Table.AddColumn(#"Changed Year Type", "ProjectionLogic", each
         let
             // Determine Month Number using a list for efficiency and clarity
@@ -54,7 +51,7 @@ let
         [ IsIncluded = include, NewKeyFigure = newKeyFigure ]
     ),
     
-    // Expand the logic into columns. This table is what the main query will now receive.
+    // Expand the logic into columns. This pre-processed table is what the main query will receive.
     #"Expanded Logic" = Table.ExpandRecordColumn(#"Added Month and Projection Logic", "ProjectionLogic", {"IsIncluded", "NewKeyFigure"})
 in
     #"Expanded Logic"
