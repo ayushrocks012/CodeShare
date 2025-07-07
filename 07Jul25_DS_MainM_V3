@@ -3,9 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V23.2: Duplicate Declaration Fix
-'      - Resolved "Duplicate declaration" compile error in ComputeBaseForecasts
-'        by moving the variable declaration to a higher scope.
+' V23.3: Implemented ToString for Enhanced Logging
+'      - Resolved Rubberduck warning by using the cProductLifecycle.ToString function.
+'      - Log messages for duplicate products are now more descriptive.
+'      - Added detailed, product-level logging when DEBUG_MODE is enabled.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -224,6 +225,9 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
     For Each varProductKey In dictLifecycleMap.Keys
         Set objLifecycle = dictLifecycleMap.Item(varProductKey)
         If objLifecycle.Affiliate = strAffiliate Then
+            
+            If DEBUG_MODE Then WriteToLog ltInfo, "ComputeBaseForecasts", "Processing: " & objLifecycle.ToString()
+            
             For Each varKeyFigure In dictKeyFigures.Keys
                 Dim strKeyFigure As String: strKeyFigure = CStr(varKeyFigure)
                 Dim dblHistSubTierSum As Double, dblHistTierSum As Double
@@ -572,7 +576,7 @@ Private Function BuildLifecycleMap(ByVal arrStatus As Variant) As Object
             dictMap.Add strKey, obj
         Else
             lngWarningCount = lngWarningCount + 1
-            WriteToLog ltWarning, "BuildLifecycleMap", "Duplicate product key found in Product Status sheet. First instance used.", , "Key: " & strKey & " on row " & rowIndex
+            WriteToLog ltWarning, "BuildLifecycleMap", "Duplicate product found. Ignoring duplicate on row " & rowIndex & ".", , "Original: " & dictMap.Item(strKey).ToString()
         End If
     Next rowIndex
     Set BuildLifecycleMap = dictMap
