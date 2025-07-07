@@ -3,10 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V18.0: Rubberduck Code Quality Refinements
-'      - Resolved all warnings from Rubberduck inspection report.
-'      - Removed unused variables and used explicit dictionary access (.Item).
-'      - Replaced generic functions (Format, Left) with typed equivalents (Format$, Left$).
+' V18.1: Sheet Naming Error Fix
+'      - Resolved Run-time Error '1004' by ensuring summary sheet names do not exceed 31 chars.
+'      - Implemented a dictionary map to robustly link truncated sheet names to full key figure names.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -172,6 +171,8 @@ Private Sub GenerateAffiliateReport(ByVal strAffiliate As String)
     Dim ws As Worksheet
     Dim varKeyFigure As Variant, varTier As Variant
     Dim dictTiers As Object
+    Dim dictSheetToKeyFigureMap As Object
+    Set dictSheetToKeyFigureMap = CreateObject("Scripting.Dictionary")
     
     ' Create a new workbook for the affiliate's report
     Set wbReport = Workbooks.Add
@@ -179,7 +180,10 @@ Private Sub GenerateAffiliateReport(ByVal strAffiliate As String)
     ' Create a summary sheet for each key figure
     For Each varKeyFigure In dictKeyFigures.Keys
         Set ws = wbReport.Sheets.Add(Before:=wbReport.Sheets(1))
-        ws.Name = "Summary - " & SanitizeSheetName(CStr(varKeyFigure))
+        Dim sheetName As String
+        sheetName = SanitizeSheetName("Summary - " & CStr(varKeyFigure))
+        ws.Name = sheetName
+        dictSheetToKeyFigureMap.Add sheetName, CStr(varKeyFigure) ' Store the mapping
     Next varKeyFigure
     
     Application.DisplayAlerts = False
@@ -197,7 +201,7 @@ Private Sub GenerateAffiliateReport(ByVal strAffiliate As String)
     Next varTier
     
     ' Populate the summary sheets with the final calculated data
-    PopulateSummarySheets wbReport, strAffiliate
+    PopulateSummarySheets wbReport, strAffiliate, dictSheetToKeyFigureMap
     
     ' Save the final report
     If Not DEBUG_MODE Then
@@ -271,20 +275,12 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     ws.Columns.AutoFit
 End Sub
 
-Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate As String)
+Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate As String, ByVal dictMap As Object)
     Dim ws As Worksheet
     For Each ws In wbReport.Worksheets
-        If InStr(1, ws.Name, "Summary - ") > 0 Then
-            Dim strSheetKeyFigure As String: strSheetKeyFigure = Replace(ws.Name, "Summary - ", "")
-            
-            ' Find the full key figure name from the sanitized sheet name
-            Dim strFullKeyFigure As String, varKey As Variant
-            For Each varKey In dictKeyFigures.Keys
-                If SanitizeSheetName(CStr(varKey)) = strSheetKeyFigure Then
-                    strFullKeyFigure = CStr(varKey)
-                    Exit For
-                End If
-            Next varKey
+        If dictMap.Exists(ws.Name) Then
+            Dim strFullKeyFigure As String
+            strFullKeyFigure = dictMap.Item(ws.Name)
             
             ' Set up headers
             Dim arrHeader As Variant
@@ -302,6 +298,7 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             ' Populate data
             Dim lngRow As Long: lngRow = 2
             Dim objLifecycle As cProductLifecycle
+            Dim varKey As Variant
             For Each varKey In dictLifecycleMap.Keys
                 Set objLifecycle = dictLifecycleMap.Item(varKey)
                 If objLifecycle.Affiliate = strAffiliate Then
