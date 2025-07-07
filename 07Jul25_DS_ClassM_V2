@@ -3,9 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' CLASS MODULE: cProductLifecycle
-' V18.0: Rubberduck Code Quality Refinements
+' V19.0: Corrected Phase-Out Logic
+'      - Resolved inconsistent phase-out behavior by comparing months as a whole, not specific days.
 '      - Implemented full encapsulation using Property Get/Let procedures for all fields.
-'      - Resolved all warnings related to unbound default member access in dictionaries.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -118,28 +118,30 @@ Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
     GetForecastMultiplier = 1 'Default to 100% for active products
 
     '--- Handle Phase-In logic ---
-    If Me.IsPhasingIn Then
-        If dteForecastDate < Me.PhaseInDate Then
+    If Me.IsPhasingIn And Me.PhaseInDate > 0 Then
+        If FirstDayOfMonth(dteForecastDate) < FirstDayOfMonth(Me.PhaseInDate) Then
             GetForecastMultiplier = 0 'Forecast is zero before phase-in starts
             Exit Function
-        ElseIf IsSameMonthAndYear(dteForecastDate, Me.PhaseInDate) Then
+        ElseIf FirstDayOfMonth(dteForecastDate) = FirstDayOfMonth(Me.PhaseInDate) Then
             GetForecastMultiplier = Me.PhaseInPercent 'Apply phase-in percentage for the first month
             Exit Function
         End If
     End If
 
     '--- Handle Phase-Out logic ---
-    If Me.IsPhasingOut And Me.PhaseOutDate > 0 And dteForecastDate >= Me.PhaseOutDate Then
-        If IsSameMonthAndYear(dteForecastDate, Me.PhaseOutDate) Then
-            GetForecastMultiplier = (1 - Me.PhaseOutPercent)
-        Else
-            GetForecastMultiplier = 0
+    If Me.IsPhasingOut And Me.PhaseOutDate > 0 Then
+        If FirstDayOfMonth(dteForecastDate) > FirstDayOfMonth(Me.PhaseOutDate) Then
+            GetForecastMultiplier = 0 'After phase-out month, forecast is zero
+        ElseIf FirstDayOfMonth(dteForecastDate) = FirstDayOfMonth(Me.PhaseOutDate) Then
+            GetForecastMultiplier = (1 - Me.PhaseOutPercent) 'In phase-out month, apply reduction
         End If
     End If
     
     '--- Handle outright Discontinued status ---
-    If Me.Status = psDiscontinued And dteForecastDate >= Me.PhaseOutDate And Me.PhaseOutDate > 0 Then
-        GetForecastMultiplier = 0
+    If Me.Status = psDiscontinued And Me.PhaseOutDate > 0 Then
+        If FirstDayOfMonth(dteForecastDate) >= FirstDayOfMonth(Me.PhaseOutDate) Then
+             GetForecastMultiplier = 0
+        End If
     End If
     
 End Function
@@ -174,7 +176,7 @@ Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
             dblMultiplier = Me.GetForecastMultiplier(dteForecastMonth)
             
             ' The value to transfer is the portion that was removed by the phase-out
-            If dblMultiplier > 0 Then ' Avoid division by zero
+            If dblMultiplier > 0 And dblMultiplier < 1 Then ' Only transfer if there was a partial reduction
                 dblTransferValue = (dblOriginalValue / dblMultiplier) * (1 - dblMultiplier)
             End If
             
@@ -187,9 +189,8 @@ Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
     End If
 End Sub
 
-'--- Purpose: Compares two dates to see if they fall in the same month and year.
+'--- Purpose: Returns the first day of the month for a given date.
 '------------------------------------------------------------------------------------------------
-Private Function IsSameMonthAndYear(ByVal date1 As Date, ByVal date2 As Date) As Boolean
-    If date1 = 0 Or date2 = 0 Then Exit Function
-    IsSameMonthAndYear = (Month(date1) = Month(date2) And Year(date1) = Year(date2))
+Private Function FirstDayOfMonth(ByVal d As Date) As Date
+    FirstDayOfMonth = DateSerial(Year(d), Month(d), 1)
 End Function
