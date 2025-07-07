@@ -3,10 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V20.0: Historical Data and Advanced Formatting
-'      - Reinstated historical sales months into the final report.
-'      - Implemented a new, efficient cache for monthly historical data lookups.
-'      - Overhauled FormatTierSheet to apply distinct formatting for historical vs. forecast columns.
+' V20.1: Final Bug Fixes
+'      - Corrected subtotal calculation to prevent cumulative summing across months.
+'      - Fixed date header formatting to display as "mmm-yy".
+'      - Used reinstated constants from Config module for improved robustness.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -98,7 +98,7 @@ Private Sub BuildHistoryCache()
     
     For r = 2 To UBound(arrHistoryData, 1)
         ' Key: Affiliate|KeyFigure|LocalItemNbr
-        strKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL) & "|" & arrHistoryData(r, 5) 'HS_LOCAL_ITEM_NBR_COL
+        strKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL) & "|" & arrHistoryData(r, HS_LOCAL_ITEM_NBR_COL)
         
         If Not dictHistoryCache.Exists(strKey) Then
             Set dictMonthlyValues = CreateObject("Scripting.Dictionary")
@@ -242,11 +242,11 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     
     c = 9
     For i = 1 To numHistMonths
-        arrHeader(c) = arrHistoryData(1, HS_START_OF_MONTHS_COL + i - 1)
+        arrHeader(c) = Format$(arrHistoryData(1, HS_START_OF_MONTHS_COL + i - 1), "mmm-yy")
         c = c + 1
     Next i
     For i = 1 To numFcstMonths
-        arrHeader(c) = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
+        arrHeader(c) = Format$(arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1), "mmm-yy")
         c = c + 1
     Next i
     
@@ -296,10 +296,11 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
         arrOutput(outputRowIndex, 2) = strTier
         arrOutput(outputRowIndex, 4) = CStr(varKeyFigure)
         For c = 9 To UBound(arrOutput, 2)
-            Dim monthlyTotal As Double, productRow As Long
+            Dim monthlyTotal As Double: monthlyTotal = 0 ' Explicitly reset for each column
+            Dim productRow As Long
             For productRow = subtotalStartRow To outputRowIndex - 1
                 If IsNumeric(arrOutput(productRow, c)) Then
-                    monthlyTotal = monthlyTotal + arrOutput(productRow, c)
+                    monthlyTotal = monthlyTotal + CDbl(arrOutput(productRow, c))
                 End If
             Next productRow
             arrOutput(outputRowIndex, c) = monthlyTotal
@@ -418,7 +419,7 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             
             Dim i As Long
             For i = 1 To numForecastMonths
-                arrHeader(7 + i) = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
+                arrHeader(7 + i) = Format$(arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1), "mmm-yy")
             Next i
             ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
             
