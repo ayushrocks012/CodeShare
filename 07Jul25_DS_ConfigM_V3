@@ -3,15 +3,13 @@ Option Explicit
 
 '================================================================================================
 ' CONFIGURATION MODULE (M_Config)
-' V22.0: Professional Refactoring
-'      - Implemented suggestions from code review.
+' V23.0: Professional Refactoring
+'      - Moved BuildCompositeKey here to make it globally accessible.
 '      - Added LogType enumeration for structured logging.
-'      - Ensured all constants are comprehensive and well-commented.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
-' Purpose:     Centralizes all constants and settings for the forecasting tool.
-'              Modify values here to adjust tool behavior without changing core logic.
+' Purpose:     Centralizes all constants and globally accessible utility functions.
 '================================================================================================
 
 ' --- DEBUGGING & LOGGING FLAGS ---
@@ -24,8 +22,6 @@ Public Const SHEET_HISTORY As String = "Historical Sales"
 Public Const SHEET_LOG As String = "Log"
 
 ' --- ENUMERATIONS ---
-' Provides type-safe, case-insensitive values for use throughout the code.
-
 Public Enum ProductStatus
     psUnknown
     psActive
@@ -43,8 +39,6 @@ Public Enum LogType
 End Enum
 
 ' --- COLUMN INDEX CONSTANTS ---
-' Defines the column numbers for key data fields. Adjust these if the source file layout changes.
-
 '-- 'Product Status' Sheet Columns --
 Public Const PS_AFFILIATE_COL As Long = 1
 Public Const PS_TIER_COL As Long = 2
@@ -72,3 +66,14 @@ Public Const DF_AFFILIATE_COL As Long = 1
 Public Const DF_KEY_FIGURE_COL As Long = 2
 Public Const DF_TIER_COL As Long = 3
 Public Const DF_START_OF_MONTHS_COL As Long = 4
+
+'================================================================================================
+'--- GLOBAL UTILITY FUNCTIONS ---
+'================================================================================================
+
+'--- Purpose: Creates a standardized composite key for dictionary lookups.
+'------------------------------------------------------------------------------------------------
+Public Function BuildCompositeKey(ByVal keyPart1 As String, ByVal keyPart2 As String) As String
+    Const SEPARATOR As String = "|"
+    BuildCompositeKey = Trim$(keyPart1) & SEPARATOR & Trim$(keyPart2)
+End Function
