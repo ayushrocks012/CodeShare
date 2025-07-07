@@ -3,8 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V23.1: Compile Error Fix
-'      - Reinstated the missing BuildHistoryCache subroutine to resolve "Sub not defined" error.
+' V23.2: Duplicate Declaration Fix
+'      - Resolved "Duplicate declaration" compile error in ComputeBaseForecasts
+'        by moving the variable declaration to a higher scope.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -217,6 +218,7 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
     Dim objLifecycle As cProductLifecycle
     Dim varProductKey As Variant, varKeyFigure As Variant
     Dim monthIndex As Long
+    Dim dteForecastMonth As Date
     Dim dictTierSumCache As Object: Set dictTierSumCache = CreateObject("Scripting.Dictionary")
     
     For Each varProductKey In dictLifecycleMap.Keys
@@ -241,7 +243,7 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
                     dblHistSubTierSum = GetHistoricalSum(strAffiliate, objLifecycle.ForecastTier, objLifecycle.ForecastSubTier, strKeyFigure)
                     
                     For monthIndex = 1 To UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
-                        Dim dteForecastMonth As Date: dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1)
+                        dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1)
                         Dim dblDemandTierValue As Double: dblDemandTierValue = GetDemandValue(strAffiliate, objLifecycle.ForecastTier, strKeyFigure, dteForecastMonth)
                         Dim dblBaseForecast As Double
                         
@@ -252,7 +254,7 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
                 Else
                     ' --- If tier has no history, all forecasts for this key figure are zero ---
                      For monthIndex = 1 To UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
-                        Dim dteForecastMonth As Date: dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1)
+                        dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1)
                         objLifecycle.ForecastValues.Add strKeyFigure & "|" & dteForecastMonth, 0
                     Next monthIndex
                 End If
