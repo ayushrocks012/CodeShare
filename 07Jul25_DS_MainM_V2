@@ -3,10 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V19.1: Final Report Fixes
-'      - Fixed subtotal calculation logic to sum from the array, not the worksheet.
-'      - Corrected the position of the subtotal row text ("TOTAL" in column A).
-'      - Added a new subroutine to apply professional formatting to all Summary sheets.
+' V19.2: Runtime Error Fix
+'      - Resolved "Select method of Range class failed" error by activating sheets
+'        before attempting to select ranges for formatting (Freeze Panes).
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -338,6 +337,7 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
     
     ' AutoFit Columns and Freeze Panes
     ws.Columns.AutoFit
+    ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
     ws.Cells(1, 1).Select
@@ -375,6 +375,7 @@ Private Sub FormatSummarySheet(ByVal ws As Worksheet)
     
     ' AutoFit Columns and Freeze Panes
     ws.Columns.AutoFit
+    ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
     ws.Cells(1, 1).Select
