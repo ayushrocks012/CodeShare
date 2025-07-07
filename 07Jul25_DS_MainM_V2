@@ -3,9 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V21.1: Zero-Demand Forecast Fix
-'      - Resolved critical bug where a forecast was generated for key figures with zero demand.
-'      - Ensured the base forecast variable is explicitly reset to zero before each calculation.
+' V22.0: Reinstated Enhanced Logging & UI Feedback
+'      - Merged detailed logging and status bar updates from the original code.
+'      - Added performance timing for each major stage to the log sheet.
+'      - Final summary message now includes a count of any non-fatal warnings.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -14,6 +15,7 @@ Option Explicit
 '--- Private Module-Level Variables ---
 Private wbHost As Workbook
 Private wsLog As Worksheet
+Private lngWarningCount As Long ' Reinstated for tracking non-fatal issues
 Private dictStatusMap As Object
 Private arrStatusData As Variant
 Private arrHistoryData As Variant
@@ -21,7 +23,7 @@ Private arrDemandData As Variant
 Private dictLifecycleMap As Object
 Private dictAffiliates As Object
 Private dictKeyFigures As Object
-Private dictHistoryCache As Object ' For fast monthly historical lookups
+Private dictHistoryCache As Object
 
 '================================================================================================
 ' 1. MAIN PUBLIC ORCHESTRATOR
@@ -46,25 +48,39 @@ End Sub
 '================================================================================================
 
 Private Function InitializeRun() As Boolean
+    Dim tCheckpoint As Double: tCheckpoint = Timer
+    On Error GoTo Init_ErrorHandler
+    
+    Application.StatusBar = "Initializing environment..."
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
     Application.Calculation = xlCalculationManual
     
     Set wbHost = ThisWorkbook
     InitializeStatusMap
+    lngWarningCount = 0 ' Reset warning counter
     
     On Error Resume Next
     wbHost.Sheets(SHEET_LOG).Delete
-    On Error GoTo 0
+    On Error GoTo Init_ErrorHandler
     
     Set wsLog = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
     InitializeLogSheet wsLog
     
+    LogPerformance tCheckpoint, "Initialize Environment"
     InitializeRun = True
+    Exit Function
+
+Init_ErrorHandler:
+    MsgBox "A critical error occurred during initialization: " & Err.Description, vbCritical, "Initialization Failed"
+    InitializeRun = False
 End Function
 
 Private Function LoadAndValidateData() As Boolean
+    Dim tCheckpoint As Double: tCheckpoint = Timer
     On Error GoTo Load_ErrorHandler
+    
+    Application.StatusBar = "Loading and validating source data..."
     
     arrStatusData = LoadDataToArray(wbHost.Sheets(SHEET_STATUS))
     arrHistoryData = LoadDataToArray(wbHost.Sheets(SHEET_HISTORY))
@@ -74,54 +90,79 @@ Private Function LoadAndValidateData() As Boolean
     If Not IsArray(arrHistoryData) Then Err.Raise 516, , "Sheet '" & SHEET_HISTORY & "' is missing or empty."
     If Not IsArray(arrDemandData) Then Err.Raise 517, , "Sheet '" & SHEET_DEMAND & "' is missing or empty."
     
+    WriteToLog "Info", "LoadAndValidateData", "All source data loaded and validated."
+    LogPerformance tCheckpoint, "Load & Validate Data"
     LoadAndValidateData = True
     Exit Function
 
 Load_ErrorHandler:
-    MsgBox "Failed to load source sheets. " & vbCrLf & Err.Description, vbCritical, "Process Halted"
+    Dim strErrorMsg As String: strErrorMsg = "Failed to load source sheets. " & vbCrLf & Err.Description
+    WriteToLog "FATAL", "LoadAndValidateData", strErrorMsg, Err.Number
+    MsgBox strErrorMsg, vbCritical, "Process Halted"
     LoadAndValidateData = False
 End Function
 
 Private Sub BuildCachesAndMaps()
+    Dim tCheckpoint As Double: tCheckpoint = Timer
+    Application.StatusBar = "Building data caches and maps..."
+    
     Set dictLifecycleMap = BuildLifecycleMap(arrStatusData)
     Set dictAffiliates = GetUniqueValues(arrDemandData, DF_AFFILIATE_COL)
     Set dictKeyFigures = GetUniqueValues(arrDemandData, DF_KEY_FIGURE_COL)
     BuildHistoryCache
-End Sub
-
-Private Sub BuildHistoryCache()
-    Set dictHistoryCache = CreateObject("Scripting.Dictionary")
-    Dim r As Long, c As Long
-    Dim strKey As String
-    Dim dictMonthlyValues As Object
     
-    For r = 2 To UBound(arrHistoryData, 1)
-        strKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL) & "|" & arrHistoryData(r, HS_LOCAL_ITEM_NBR_COL)
-        
-        If Not dictHistoryCache.Exists(strKey) Then
-            Set dictMonthlyValues = CreateObject("Scripting.Dictionary")
-            For c = HS_START_OF_MONTHS_COL To UBound(arrHistoryData, 2)
-                dictMonthlyValues.Add CDate(arrHistoryData(1, c)), arrHistoryData(r, c)
-            Next c
-            dictHistoryCache.Add strKey, dictMonthlyValues
-        End If
-    Next r
+    LogPerformance tCheckpoint, "Build Caches and Maps"
 End Sub
-
 
 Private Sub ProcessAllAffiliates()
-    Dim varAffiliate As Variant
+    Dim varAffiliate As Variant, strAffiliate As String
+    Dim lngCounter As Long, lngTotal As Long
+    Dim tCheckpoint As Double: tCheckpoint = Timer
+    
+    lngTotal = dictAffiliates.Count
+    If lngTotal = 0 Then
+        WriteToLog "Warning", "ProcessAllAffiliates", "No affiliates found in Demand Forecast sheet."
+        Exit Sub
+    End If
+    
     For Each varAffiliate In dictAffiliates.Keys
-        ProcessForecastForAffiliate CStr(varAffiliate)
+        strAffiliate = CStr(varAffiliate)
+        lngCounter = lngCounter + 1
+        On Error GoTo Affiliate_ErrorHandler
+        
+        Application.StatusBar = "Processing Affiliate: " & strAffiliate & " (" & lngCounter & " of " & lngTotal & ")..."
+        WriteToLog "Info", "ProcessAllAffiliates", "Starting: " & strAffiliate
+        
+        ProcessForecastForAffiliate strAffiliate
+        
+        GoTo Next_Affiliate
+Affiliate_ErrorHandler:
+        lngWarningCount = lngWarningCount + 1
+        WriteToLog "Error", "ProcessAllAffiliates", "A critical error occurred processing affiliate '" & strAffiliate & "'.", Err.Number, Err.Description
+        Resume Next_Affiliate
+Next_Affiliate:
+        On Error GoTo 0
     Next varAffiliate
+    
+    LogPerformance tCheckpoint, "Process All Affiliates"
 End Sub
 
 Private Sub FinalizeRun(ByVal tStart As Double)
+    On Error Resume Next
+    
     CleanupMemory
+    
+    Application.StatusBar = False
+    Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
-    Application.Calculation = xlCalculationAutomatic
-    MsgBox "Forecast process completed in " & Format$(Timer - tStart, "#,##0.00") & " seconds.", vbInformation
+    
+    Dim strMessage As String
+    strMessage = "Forecast process completed in " & Format$(Timer - tStart, "#,##0.00") & " seconds." & vbCrLf & vbCrLf
+    strMessage = strMessage & "Affiliates Processed: " & dictAffiliates.Count & vbCrLf
+    strMessage = strMessage & "Warnings: " & lngWarningCount & " (see Log sheet for details)"
+    
+    MsgBox strMessage, IIf(lngWarningCount > 0, vbExclamation, vbInformation), "Forecast Update Complete"
 End Sub
 
 '================================================================================================
@@ -160,9 +201,6 @@ Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
                     Dim dblDemandTierValue As Double: dblDemandTierValue = GetDemandValue(strAffiliate, objLifecycle.ForecastTier, strKeyFigure, dteForecastMonth)
                     Dim dblBaseForecast As Double
                     
-                    ' THE FIX: Explicitly reset the forecast to 0 before calculation.
-                    ' This prevents a value from a previous key figure loop from carrying over
-                    ' if the current key figure has no historical data (dblHistTierSum = 0).
                     dblBaseForecast = 0
                     
                     If dblHistTierSum > 0 Then
@@ -214,6 +252,7 @@ Private Sub GenerateAffiliateReport(ByVal strAffiliate As String)
     PopulateSummarySheets wbReport, strAffiliate, dictSheetToKeyFigureMap
     
     If Not DEBUG_MODE Then
+        Application.StatusBar = "Saving final report for " & strAffiliate & "..."
         Dim strFilePath As String
         strFilePath = GetOutputFilePath(wbHost.Path, strAffiliate)
         wbReport.SaveAs strFilePath
@@ -472,6 +511,9 @@ Private Function BuildLifecycleMap(ByVal arrStatus As Variant) As Object
             Set obj = New cProductLifecycle
             obj.Init arrStatus, r
             dictMap.Add strKey, obj
+        Else
+            lngWarningCount = lngWarningCount + 1
+            WriteToLog "Warning", "BuildLifecycleMap", "Duplicate product key found in Product Status sheet. First instance used.", , "Key: " & strKey & " on row " & r
         End If
     Next r
     Set BuildLifecycleMap = dictMap
@@ -626,6 +668,11 @@ Private Sub WriteToLog(ByVal strType As String, ByVal strProcedure As String, By
             .Cells(5).Value = strContext
         End If
     End With
+End Sub
+
+Private Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
+    WriteToLog "Profile", strStageName, "Stage completed in " & Format$(Timer - tCheckpoint, "#,##0.00") & "s"
+    tCheckpoint = Timer
 End Sub
 
 Public Function GetStatusEnum(ByVal strStatus As String) As ProductStatus
