@@ -1,0 +1,61 @@
+'@Folder("Configuration")
+Option Explicit
+
+'================================================================================================
+' CONFIGURATION MODULE (M_Config)
+' V18.0: Rubberduck Code Quality Refinements
+'      - Removed all unused constants as identified by the inspection report.
+'
+' Author:      Ayush Goyal
+' Date:        07-Jul-2025
+' Purpose:     Centralizes all constants and settings for the forecasting tool.
+'              Modify values here to adjust tool behavior without changing core logic.
+'================================================================================================
+
+'--- DEBUGGING & LOGGING FLAGS ---
+Public Const DEBUG_MODE As Boolean = False 'TRUE: Prevents file saving for testing. FALSE: Normal operation.
+
+'--- SHEET NAME CONSTANTS ---
+'Defines the required names for all source and output worksheets.
+Public Const SHEET_STATUS As String = "Product Status"
+Public Const SHEET_DEMAND As String = "Demand Forecast"
+Public Const SHEET_HISTORY As String = "Historical Sales"
+Public Const SHEET_LOG As String = "Log"
+
+'--- PRODUCT STATUS ENUMERATION ---
+'Provides type-safe, case-insensitive status values for use throughout the code.
+Public Enum ProductStatus
+    psUnknown
+    psActive
+    psPhaseInOut
+    psDiscontinued
+    psNew
+End Enum
+
+'--- COLUMN INDEX CONSTANTS ---
+'Defines the column numbers for key data fields. Adjust these if the source file layout changes.
+
+'-- 'Product Status' Sheet Columns --
+Public Const PS_AFFILIATE_COL As Long = 1
+Public Const PS_TIER_COL As Long = 2
+Public Const PS_SUB_TIER_COL As Long = 3
+Public Const PS_LOCAL_ITEM_NBR_COL As Long = 4
+Public Const PS_DESC_COL As Long = 5
+Public Const PS_ISD_COL As Long = 6
+Public Const PS_STATUS_COL As Long = 7
+Public Const PS_PHASE_OUT_DATE_COL As Long = 8
+Public Const PS_PHASE_OUT_PCT_COL As Long = 9
+Public Const PS_SUPERSEDED_BY_COL As Long = 10
+
+'-- 'Historical Sales' Sheet Columns --
+Public Const HS_AFFILIATE_COL As Long = 1
+Public Const HS_TIER_COL As Long = 2
+Public Const HS_SUB_TIER_COL As Long = 3
+Public Const HS_KEY_FIGURE_COL As Long = 4
+Public Const HS_START_OF_MONTHS_COL As Long = 8
+
+'-- 'Demand Forecast' Sheet Columns --
+Public Const DF_AFFILIATE_COL As Long = 1
+Public Const DF_KEY_FIGURE_COL As Long = 2
+Public Const DF_TIER_COL As Long = 3
+Public Const DF_START_OF_MONTHS_COL As Long = 4
