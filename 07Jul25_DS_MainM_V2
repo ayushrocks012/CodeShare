@@ -3,9 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V18.1: Sheet Naming Error Fix
-'      - Resolved Run-time Error '1004' by ensuring summary sheet names do not exceed 31 chars.
-'      - Implemented a dictionary map to robustly link truncated sheet names to full key figure names.
+' V19.0: Report Formatting and Layout Overhaul
+'      - Reworked PopulateTierSheet to generate a "long" stacked format instead of "wide".
+'      - Added automatic subtotal rows for each Tier/Key Figure combination.
+'      - Created a new FormatTierSheet subroutine to apply all visual styling (colors, borders, etc.).
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -198,6 +199,7 @@ Private Sub GenerateAffiliateReport(ByVal strAffiliate As String)
         Set ws = wbReport.Sheets.Add(After:=wbReport.Sheets(wbReport.Sheets.Count))
         ws.Name = SanitizeSheetName(CStr(varTier))
         PopulateTierSheet ws, strAffiliate, CStr(varTier)
+        FormatTierSheet ws ' Apply formatting
     Next varTier
     
     ' Populate the summary sheets with the final calculated data
@@ -215,65 +217,125 @@ End Sub
 
 Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As String, ByVal strTier As String)
     Dim arrOutput() As Variant, arrHeader() As Variant
-    Dim lngProductCount As Long, r As Long, c As Long, i As Long
+    Dim r As Long, i As Long
     Dim objLifecycle As cProductLifecycle
     Dim varKeyFigure As Variant
     Dim dteForecastMonth As Date
+    Dim colProducts As Collection
+    Dim numForecastMonths As Long
+    Dim outputRowIndex As Long
+    Dim subtotalRow As Long
     
     ' --- Get Products for this Tier ---
-    Dim colProducts As Collection: Set colProducts = GetProductsForTier(strAffiliate, strTier)
-    lngProductCount = colProducts.Count
-    If lngProductCount = 0 Then Exit Sub
+    Set colProducts = GetProductsForTier(strAffiliate, strTier)
+    If colProducts.Count = 0 Then Exit Sub
     
     ' --- Create Headers ---
-    Dim numKeyFigures As Long: numKeyFigures = dictKeyFigures.Count
-    Dim numForecastMonths As Long: numForecastMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
-    ReDim arrHeader(1 To 7 + (numKeyFigures * numForecastMonths))
+    numForecastMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
+    ReDim arrHeader(1 To 8 + numForecastMonths)
     
     arrHeader(1) = "Affiliate": arrHeader(2) = "Forecast Tier": arrHeader(3) = "Forecast Sub-Tier"
-    arrHeader(4) = "Local Item Nbr": arrHeader(5) = "Desc": arrHeader(6) = "I-S-D": arrHeader(7) = "Status"
+    arrHeader(4) = "Key Figures": arrHeader(5) = "Local Item Nbr": arrHeader(6) = "Desc"
+    arrHeader(7) = "I-S-D": arrHeader(8) = "Status"
     
-    c = 8
     For i = 1 To numForecastMonths
-        dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
-        For Each varKeyFigure In dictKeyFigures.Keys
-            arrHeader(c) = Format$(dteForecastMonth, "mmm-yy") & " " & CStr(varKeyFigure)
-            c = c + 1
-        Next varKeyFigure
+        arrHeader(8 + i) = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
     Next i
     
-    ReDim arrOutput(1 To lngProductCount, 1 To UBound(arrHeader))
+    ' --- Prepare Output Array ---
+    ' Total rows = (Products * Key Figures) + (Key Figures for subtotals)
+    ReDim arrOutput(1 To (colProducts.Count * dictKeyFigures.Count) + dictKeyFigures.Count, 1 To UBound(arrHeader))
+    
+    outputRowIndex = 1
     
     ' --- Populate Data Array from Stored Values ---
-    r = 1
-    For Each objLifecycle In colProducts
-        arrOutput(r, 1) = objLifecycle.Affiliate: arrOutput(r, 2) = objLifecycle.ForecastTier
-        arrOutput(r, 3) = objLifecycle.ForecastSubTier: arrOutput(r, 4) = objLifecycle.LocalItemNbr
-        arrOutput(r, 5) = objLifecycle.Description: arrOutput(r, 6) = objLifecycle.ISD
-        arrOutput(r, 7) = GetStatusString(objLifecycle.Status)
+    For Each varKeyFigure In dictKeyFigures.Keys
+        subtotalRow = outputRowIndex
         
-        c = 8
-        For i = 1 To numForecastMonths
-            dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
-            For Each varKeyFigure In dictKeyFigures.Keys
+        For Each objLifecycle In colProducts
+            arrOutput(outputRowIndex, 1) = objLifecycle.Affiliate
+            arrOutput(outputRowIndex, 2) = objLifecycle.ForecastTier
+            arrOutput(outputRowIndex, 3) = objLifecycle.ForecastSubTier
+            arrOutput(outputRowIndex, 4) = CStr(varKeyFigure)
+            arrOutput(outputRowIndex, 5) = objLifecycle.LocalItemNbr
+            arrOutput(outputRowIndex, 6) = objLifecycle.Description
+            arrOutput(outputRowIndex, 7) = objLifecycle.ISD
+            arrOutput(outputRowIndex, 8) = GetStatusString(objLifecycle.Status)
+            
+            For i = 1 To numForecastMonths
+                dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
                 Dim forecastKey As String: forecastKey = CStr(varKeyFigure) & "|" & dteForecastMonth
-                Dim dblFinalForecast As Double
                 
                 If objLifecycle.ForecastValues.Exists(forecastKey) Then
-                    dblFinalForecast = objLifecycle.ForecastValues.Item(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
-                    arrOutput(r, c) = dblFinalForecast
+                    arrOutput(outputRowIndex, 8 + i) = objLifecycle.ForecastValues.Item(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
                 End If
-                c = c + 1
-            Next varKeyFigure
+            Next i
+            outputRowIndex = outputRowIndex + 1
+        Next objLifecycle
+        
+        ' Add Subtotal Row
+        arrOutput(outputRowIndex, 2) = "TOTAL"
+        arrOutput(outputRowIndex, 4) = CStr(varKeyFigure)
+        For i = 1 To numForecastMonths
+            arrOutput(outputRowIndex, 8 + i) = Application.WorksheetFunction.Sum(ws.Range(ws.Cells(subtotalRow + 1, 8 + i), ws.Cells(outputRowIndex, 8 + i)))
         Next i
-        r = r + 1
-    Next objLifecycle
+        outputRowIndex = outputRowIndex + 1
+        
+    Next varKeyFigure
     
     ' --- Write to Sheet ---
     ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
     ws.Range("A2").Resize(UBound(arrOutput, 1), UBound(arrOutput, 2)).Value = arrOutput
-    ws.Columns.AutoFit
 End Sub
+
+Private Sub FormatTierSheet(ByVal ws As Worksheet)
+    Dim lastRow As Long, lastCol As Long
+    Dim dataRange As Range, headerRange As Range
+    Dim i As Long
+
+    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).row
+    If lastRow <= 1 Then Exit Sub
+    
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    
+    Set headerRange = ws.Range(ws.Cells(1, 1), ws.Cells(1, lastCol))
+    Set dataRange = ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastCol))
+    
+    ' Format Header
+    With headerRange
+        .Font.Bold = True
+        .Font.Color = vbWhite
+        .Interior.Color = RGB(0, 32, 96) ' Dark Blue
+        .VerticalAlignment = xlCenter
+    End With
+    
+    ' Format Subtotal Rows
+    For i = 2 To lastRow
+        If ws.Cells(i, 2).Value = "TOTAL" Then
+            With ws.Range(ws.Cells(i, 1), ws.Cells(i, lastCol))
+                .Font.Bold = True
+                .Interior.Color = RGB(242, 242, 242) ' Light Gray
+            End With
+        End If
+    Next i
+    
+    ' Format Forecast Numbers
+    ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
+    
+    ' Apply Borders
+    With dataRange.Borders
+        .LineStyle = xlContinuous
+        .Weight = xlThin
+        .ColorIndex = xlAutomatic
+    End With
+    
+    ' AutoFit Columns and Freeze Panes
+    ws.Columns.AutoFit
+    ws.Rows(2).Select
+    ActiveWindow.FreezePanes = True
+    ws.Cells(1, 1).Select
+End Sub
+
 
 Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate As String, ByVal dictMap As Object)
     Dim ws As Worksheet
