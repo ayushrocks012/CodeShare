@@ -3,10 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V20.1: Final Bug Fixes
-'      - Corrected subtotal calculation to prevent cumulative summing across months.
-'      - Fixed date header formatting to display as "mmm-yy".
-'      - Used reinstated constants from Config module for improved robustness.
+' V21.0: Final Feature Addition
+'      - Reinstated the "Phase Out Month" column in all Tier and Summary sheets.
+'      - Updated all report generation and formatting routines to handle the new column.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -22,7 +21,7 @@ Private arrDemandData As Variant
 Private dictLifecycleMap As Object
 Private dictAffiliates As Object
 Private dictKeyFigures As Object
-Private dictHistoryCache As Object ' NEW: For fast monthly historical lookups
+Private dictHistoryCache As Object ' For fast monthly historical lookups
 
 '================================================================================================
 ' 1. MAIN PUBLIC ORCHESTRATOR
@@ -87,7 +86,7 @@ Private Sub BuildCachesAndMaps()
     Set dictLifecycleMap = BuildLifecycleMap(arrStatusData)
     Set dictAffiliates = GetUniqueValues(arrDemandData, DF_AFFILIATE_COL)
     Set dictKeyFigures = GetUniqueValues(arrDemandData, DF_KEY_FIGURE_COL)
-    BuildHistoryCache ' Build the new cache
+    BuildHistoryCache
 End Sub
 
 Private Sub BuildHistoryCache()
@@ -97,7 +96,6 @@ Private Sub BuildHistoryCache()
     Dim dictMonthlyValues As Object
     
     For r = 2 To UBound(arrHistoryData, 1)
-        ' Key: Affiliate|KeyFigure|LocalItemNbr
         strKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL) & "|" & arrHistoryData(r, HS_LOCAL_ITEM_NBR_COL)
         
         If Not dictHistoryCache.Exists(strKey) Then
@@ -234,13 +232,13 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     numHistMonths = UBound(arrHistoryData, 2) - HS_START_OF_MONTHS_COL + 1
     numFcstMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
     
-    ReDim arrHeader(1 To 8 + numHistMonths + numFcstMonths)
+    ReDim arrHeader(1 To 9 + numHistMonths + numFcstMonths)
     
     arrHeader(1) = "Affiliate": arrHeader(2) = "Forecast Tier": arrHeader(3) = "Forecast Sub-Tier"
     arrHeader(4) = "Key Figures": arrHeader(5) = "Local Item Nbr": arrHeader(6) = "Desc"
-    arrHeader(7) = "I-S-D": arrHeader(8) = "Status"
+    arrHeader(7) = "I-S-D": arrHeader(8) = "Status": arrHeader(9) = "Phase Out Month"
     
-    c = 9
+    c = 10
     For i = 1 To numHistMonths
         arrHeader(c) = Format$(arrHistoryData(1, HS_START_OF_MONTHS_COL + i - 1), "mmm-yy")
         c = c + 1
@@ -266,8 +264,9 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
             arrOutput(outputRowIndex, 6) = objLifecycle.Description
             arrOutput(outputRowIndex, 7) = objLifecycle.ISD
             arrOutput(outputRowIndex, 8) = GetStatusString(objLifecycle.Status)
+            If objLifecycle.PhaseOutDate > 0 Then arrOutput(outputRowIndex, 9) = objLifecycle.PhaseOutDate
             
-            c = 9
+            c = 10
             ' Populate Historical Data
             Dim histKey As String: histKey = objLifecycle.Affiliate & "|" & CStr(varKeyFigure) & "|" & objLifecycle.LocalItemNbr
             For i = 1 To numHistMonths
@@ -295,8 +294,8 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
         arrOutput(outputRowIndex, 1) = "TOTAL"
         arrOutput(outputRowIndex, 2) = strTier
         arrOutput(outputRowIndex, 4) = CStr(varKeyFigure)
-        For c = 9 To UBound(arrOutput, 2)
-            Dim monthlyTotal As Double: monthlyTotal = 0 ' Explicitly reset for each column
+        For c = 10 To UBound(arrOutput, 2)
+            Dim monthlyTotal As Double: monthlyTotal = 0
             Dim productRow As Long
             For productRow = subtotalStartRow To outputRowIndex - 1
                 If IsNumeric(arrOutput(productRow, c)) Then
@@ -315,20 +314,19 @@ End Sub
 
 Private Sub FormatTierSheet(ByVal ws As Worksheet)
     Dim lastRow As Long, lastCol As Long
-    Dim dataRange As Range, headerRange As Range
+    Dim dataRange As Range
     Dim i As Long, histColEnd As Long
     
     lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).row
     If lastRow <= 1 Then Exit Sub
     
     lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
-    histColEnd = 8 + (UBound(arrHistoryData, 2) - HS_START_OF_MONTHS_COL + 1)
+    histColEnd = 9 + (UBound(arrHistoryData, 2) - HS_START_OF_MONTHS_COL + 1)
     
-    Set headerRange = ws.Range("A1").Resize(1, lastCol)
     Set dataRange = ws.Range("A1").Resize(lastRow, lastCol)
     
     ' Format Static and Forecast Headers (Dark Blue)
-    With Union(ws.Range("A1:H1"), ws.Range(ws.Cells(1, histColEnd + 1), ws.Cells(1, lastCol)))
+    With Union(ws.Range("A1:I1"), ws.Range(ws.Cells(1, histColEnd + 1), ws.Cells(1, lastCol)))
         .Font.Bold = True
         .Font.Color = vbWhite
         .Interior.Color = RGB(0, 32, 96)
@@ -336,7 +334,7 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
     End With
     
     ' Format Historical Headers (Gray)
-    With ws.Range(ws.Cells(1, 9), ws.Cells(1, histColEnd))
+    With ws.Range(ws.Cells(1, 10), ws.Cells(1, histColEnd))
         .Font.Bold = True
         .Font.Color = vbBlack
         .Interior.Color = RGB(217, 217, 217)
@@ -344,7 +342,7 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
     End With
     
     ' Format Historical Data Area (Light Fill)
-    ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, histColEnd)).Interior.Color = RGB(242, 242, 242)
+    ws.Range(ws.Cells(2, 10), ws.Cells(lastRow, histColEnd)).Interior.Color = RGB(242, 242, 242)
     
     ' Format Subtotal Rows
     For i = 2 To lastRow
@@ -356,7 +354,8 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
         End If
     Next i
     
-    ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
+    ws.Range("J2", ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
+    ws.Columns("I").NumberFormat = "dd/mm/yyyy"
     
     With dataRange.Borders
         .LineStyle = xlContinuous
@@ -389,7 +388,8 @@ Private Sub FormatSummarySheet(ByVal ws As Worksheet)
         .VerticalAlignment = xlCenter
     End With
     
-    ws.Range(ws.Cells(2, 8), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
+    ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
+    ws.Columns("H").NumberFormat = "dd/mm/yyyy"
     
     With dataRange.Borders
         .LineStyle = xlContinuous
@@ -413,13 +413,14 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             
             Dim arrHeader As Variant
             Dim numForecastMonths As Long: numForecastMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
-            ReDim arrHeader(1 To 7 + numForecastMonths)
+            ReDim arrHeader(1 To 8 + numForecastMonths)
             arrHeader(1) = "Affiliate": arrHeader(2) = "Forecast Tier": arrHeader(3) = "Forecast Sub-Tier"
-            arrHeader(4) = "Local Item Nbr": arrHeader(5) = "Desc": arrHeader(6) = "I-S-D": arrHeader(7) = "Status"
+            arrHeader(4) = "Local Item Nbr": arrHeader(5) = "Desc": arrHeader(6) = "I-S-D"
+            arrHeader(7) = "Status": arrHeader(8) = "Phase Out Month"
             
             Dim i As Long
             For i = 1 To numForecastMonths
-                arrHeader(7 + i) = Format$(arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1), "mmm-yy")
+                arrHeader(8 + i) = Format$(arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1), "mmm-yy")
             Next i
             ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
             
@@ -433,13 +434,14 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                     ws.Cells(lngRow, 3).Value = objLifecycle.ForecastSubTier: ws.Cells(lngRow, 4).Value = objLifecycle.LocalItemNbr
                     ws.Cells(lngRow, 5).Value = objLifecycle.Description: ws.Cells(lngRow, 6).Value = objLifecycle.ISD
                     ws.Cells(lngRow, 7).Value = GetStatusString(objLifecycle.Status)
+                    If objLifecycle.PhaseOutDate > 0 Then ws.Cells(lngRow, 8).Value = objLifecycle.PhaseOutDate
                     
                     For i = 1 To numForecastMonths
                         Dim dteForecastMonth As Date: dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
                         Dim forecastKey As String: forecastKey = strFullKeyFigure & "|" & dteForecastMonth
                         
                         If objLifecycle.ForecastValues.Exists(forecastKey) Then
-                            ws.Cells(lngRow, 7 + i).Value = objLifecycle.ForecastValues.Item(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
+                            ws.Cells(lngRow, 8 + i).Value = objLifecycle.ForecastValues.Item(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
                         End If
                     Next i
                     lngRow = lngRow + 1
