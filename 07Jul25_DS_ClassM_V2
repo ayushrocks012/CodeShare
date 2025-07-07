@@ -3,10 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' CLASS MODULE: cProductLifecycle
-' V20.0: Final Phase-Out Logic Correction
-'      - Restored the phase-out calculation to match the user's original code.
-'      - The 'Phase Out %' now correctly represents the forecast % to RETAIN on the old product.
-'      - The successor product now correctly receives the inverse percentage (1 - Phase Out %).
+' V20.1: Compile Error Fix
+'      - Resolved "Variable not defined" error by correcting typos in property procedures.
+'      - Ensured all property procedures correctly reference their declared private member variables.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -62,17 +61,17 @@ Public Property Let PhaseOutPercent(ByVal Value As Double): m_PhaseOutPercent = 
 Public Property Get SupersededByProductID() As String: SupersededByProductID = m_SupersededByProductID: End Property
 Public Property Let SupersededByProductID(ByVal Value As String): m_SupersededByProductID = Value: End Property
 
-Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = m_blnIsPhasingOut: End Property
-Public Property Let IsPhasingOut(ByVal Value As Boolean): m_blnIsPhasingOut = Value: End Property
+Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = m_IsPhasingOut: End Property
+Public Property Let IsPhasingOut(ByVal Value As Boolean): m_IsPhasingOut = Value: End Property
 
-Public Property Get IsPhasingIn() As Boolean: IsPhasingIn = m_blnIsPhasingIn: End Property
-Public Property Let IsPhasingIn(ByVal Value As Boolean): m_blnIsPhasingIn = Value: End Property
+Public Property Get IsPhasingIn() As Boolean: IsPhasingIn = m_IsPhasingIn: End Property
+Public Property Let IsPhasingIn(ByVal Value As Boolean): m_IsPhasingIn = Value: End Property
 
-Public Property Get PhaseInDate() As Date: PhaseInDate = m_dtePhaseInDate: End Property
-Public Property Let PhaseInDate(ByVal Value As Date): m_dtePhaseInDate = Value: End Property
+Public Property Get PhaseInDate() As Date: PhaseInDate = m_PhaseInDate: End Property
+Public Property Let PhaseInDate(ByVal Value As Date): m_PhaseInDate = Value: End Property
 
-Public Property Get PhaseInPercent() As Double: PhaseInPercent = m_dblPhaseInPercent: End Property
-Public Property Let PhaseInPercent(ByVal Value As Double): m_dblPhaseInPercent = Value: End Property
+Public Property Get PhaseInPercent() As Double: PhaseInPercent = m_PhaseInPercent: End Property
+Public Property Let PhaseInPercent(ByVal Value As Double): m_PhaseInPercent = Value: End Property
 
 Public Property Get ForecastValues() As Object: Set ForecastValues = m_ForecastValues: End Property
 Public Property Set ForecastValues(ByVal Value As Object): Set m_ForecastValues = Value: End Property
