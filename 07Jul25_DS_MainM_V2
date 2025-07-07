@@ -3,9 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V19.2: Runtime Error Fix
-'      - Resolved "Select method of Range class failed" error by activating sheets
-'        before attempting to select ranges for formatting (Freeze Panes).
+' V20.0: Historical Data and Advanced Formatting
+'      - Reinstated historical sales months into the final report.
+'      - Implemented a new, efficient cache for monthly historical data lookups.
+'      - Overhauled FormatTierSheet to apply distinct formatting for historical vs. forecast columns.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -14,7 +15,6 @@ Option Explicit
 '--- Private Module-Level Variables ---
 Private wbHost As Workbook
 Private wsLog As Worksheet
-'Private lngWarningCount As Long 'Removed as per Rubberduck inspection (unused)
 Private dictStatusMap As Object
 Private arrStatusData As Variant
 Private arrHistoryData As Variant
@@ -22,6 +22,7 @@ Private arrDemandData As Variant
 Private dictLifecycleMap As Object
 Private dictAffiliates As Object
 Private dictKeyFigures As Object
+Private dictHistoryCache As Object ' NEW: For fast monthly historical lookups
 
 '================================================================================================
 ' 1. MAIN PUBLIC ORCHESTRATOR
@@ -86,7 +87,29 @@ Private Sub BuildCachesAndMaps()
     Set dictLifecycleMap = BuildLifecycleMap(arrStatusData)
     Set dictAffiliates = GetUniqueValues(arrDemandData, DF_AFFILIATE_COL)
     Set dictKeyFigures = GetUniqueValues(arrDemandData, DF_KEY_FIGURE_COL)
+    BuildHistoryCache ' Build the new cache
 End Sub
+
+Private Sub BuildHistoryCache()
+    Set dictHistoryCache = CreateObject("Scripting.Dictionary")
+    Dim r As Long, c As Long
+    Dim strKey As String
+    Dim dictMonthlyValues As Object
+    
+    For r = 2 To UBound(arrHistoryData, 1)
+        ' Key: Affiliate|KeyFigure|LocalItemNbr
+        strKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL) & "|" & arrHistoryData(r, 5) 'HS_LOCAL_ITEM_NBR_COL
+        
+        If Not dictHistoryCache.Exists(strKey) Then
+            Set dictMonthlyValues = CreateObject("Scripting.Dictionary")
+            For c = HS_START_OF_MONTHS_COL To UBound(arrHistoryData, 2)
+                dictMonthlyValues.Add CDate(arrHistoryData(1, c)), arrHistoryData(r, c)
+            Next c
+            dictHistoryCache.Add strKey, dictMonthlyValues
+        End If
+    Next r
+End Sub
+
 
 Private Sub ProcessAllAffiliates()
     Dim varAffiliate As Variant
@@ -108,20 +131,15 @@ End Sub
 '================================================================================================
 
 Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String)
-    ' --- Stage 1: Calculate all forecast values and store in memory ---
     CalculateAllForecastsForAffiliate strAffiliate
-    
-    ' --- Stage 2: Create the report workbook and generate all sheets from stored values ---
     GenerateAffiliateReport strAffiliate
 End Sub
 
 Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
     Dim objLifecycle As cProductLifecycle
-    Dim varProductKey As Variant
-    Dim varKeyFigure As Variant
+    Dim varProductKey As Variant, varKeyFigure As Variant
     Dim i As Long
     
-    ' Clear any old forecast data from previous runs
     For Each varProductKey In dictLifecycleMap.Keys
         Set objLifecycle = dictLifecycleMap.Item(varProductKey)
         If objLifecycle.Affiliate = strAffiliate Then
@@ -129,35 +147,31 @@ Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
         End If
     Next varProductKey
     
-    ' Calculate and store the new forecast values
     For Each varProductKey In dictLifecycleMap.Keys
         Set objLifecycle = dictLifecycleMap.Item(varProductKey)
         If objLifecycle.Affiliate = strAffiliate Then
             For Each varKeyFigure In dictKeyFigures.Keys
                 Dim strKeyFigure As String: strKeyFigure = CStr(varKeyFigure)
-                
                 Dim dblHistSubTierSum As Double, dblHistTierSum As Double
+                
                 dblHistSubTierSum = GetHistoricalSum(strAffiliate, objLifecycle.ForecastTier, objLifecycle.ForecastSubTier, strKeyFigure)
                 dblHistTierSum = GetHistoricalSum(strAffiliate, objLifecycle.ForecastTier, "", strKeyFigure)
                 
                 For i = 1 To UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
                     Dim dteForecastMonth As Date: dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
                     Dim dblDemandTierValue As Double: dblDemandTierValue = GetDemandValue(strAffiliate, objLifecycle.ForecastTier, strKeyFigure, dteForecastMonth)
-                    
                     Dim dblBaseForecast As Double
+                    
                     If dblHistTierSum > 0 Then
                         dblBaseForecast = (dblHistSubTierSum / dblHistTierSum) * dblDemandTierValue
                     End If
                     
-                    Dim forecastKey As String: forecastKey = strKeyFigure & "|" & dteForecastMonth
-                    objLifecycle.ForecastValues.Add forecastKey, dblBaseForecast
+                    objLifecycle.ForecastValues.Add strKeyFigure & "|" & dteForecastMonth, dblBaseForecast
                 Next i
             Next varKeyFigure
         End If
     Next varProductKey
     
-    ' --- Handle Successor Logic ---
-    ' This pass adjusts the already calculated values based on lifecycle links
     For Each varProductKey In dictLifecycleMap.Keys
         Set objLifecycle = dictLifecycleMap.Item(varProductKey)
         If objLifecycle.Affiliate = strAffiliate Then
@@ -167,44 +181,35 @@ Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
 End Sub
 
 Private Sub GenerateAffiliateReport(ByVal strAffiliate As String)
-    Dim wbReport As Workbook
-    Dim ws As Worksheet
+    Dim wbReport As Workbook, ws As Worksheet
     Dim varKeyFigure As Variant, varTier As Variant
-    Dim dictTiers As Object
-    Dim dictSheetToKeyFigureMap As Object
+    Dim dictTiers As Object, dictSheetToKeyFigureMap As Object
     Set dictSheetToKeyFigureMap = CreateObject("Scripting.Dictionary")
     
-    ' Create a new workbook for the affiliate's report
     Set wbReport = Workbooks.Add
     
-    ' Create a summary sheet for each key figure
     For Each varKeyFigure In dictKeyFigures.Keys
         Set ws = wbReport.Sheets.Add(Before:=wbReport.Sheets(1))
-        Dim sheetName As String
-        sheetName = SanitizeSheetName("Summary - " & CStr(varKeyFigure))
+        Dim sheetName As String: sheetName = SanitizeSheetName("Summary - " & CStr(varKeyFigure))
         ws.Name = sheetName
-        dictSheetToKeyFigureMap.Add sheetName, CStr(varKeyFigure) ' Store the mapping
+        dictSheetToKeyFigureMap.Add sheetName, CStr(varKeyFigure)
     Next varKeyFigure
     
     Application.DisplayAlerts = False
     wbReport.Sheets("Sheet1").Delete
     Application.DisplayAlerts = True
 
-    ' Get unique tiers for the affiliate
     Set dictTiers = GetUniqueTiersForAffiliate(strAffiliate)
     
-    ' Create a detailed sheet for each tier
     For Each varTier In dictTiers.Keys
         Set ws = wbReport.Sheets.Add(After:=wbReport.Sheets(wbReport.Sheets.Count))
         ws.Name = SanitizeSheetName(CStr(varTier))
         PopulateTierSheet ws, strAffiliate, CStr(varTier)
-        FormatTierSheet ws ' Apply formatting
+        FormatTierSheet ws
     Next varTier
     
-    ' Populate the summary sheets with the final calculated data
     PopulateSummarySheets wbReport, strAffiliate, dictSheetToKeyFigureMap
     
-    ' Save the final report
     If Not DEBUG_MODE Then
         Dim strFilePath As String
         strFilePath = GetOutputFilePath(wbHost.Path, strAffiliate)
@@ -216,37 +221,39 @@ End Sub
 
 Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As String, ByVal strTier As String)
     Dim arrOutput() As Variant, arrHeader() As Variant
-    Dim r As Long, i As Long
+    Dim i As Long, c As Long
     Dim objLifecycle As cProductLifecycle
     Dim varKeyFigure As Variant
-    Dim dteForecastMonth As Date
     Dim colProducts As Collection
-    Dim numForecastMonths As Long
-    Dim outputRowIndex As Long
-    Dim subtotalStartRow As Long
+    Dim numHistMonths As Long, numFcstMonths As Long
+    Dim outputRowIndex As Long, subtotalStartRow As Long
     
-    ' --- Get Products for this Tier ---
     Set colProducts = GetProductsForTier(strAffiliate, strTier)
     If colProducts.Count = 0 Then Exit Sub
     
-    ' --- Create Headers ---
-    numForecastMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
-    ReDim arrHeader(1 To 8 + numForecastMonths)
+    numHistMonths = UBound(arrHistoryData, 2) - HS_START_OF_MONTHS_COL + 1
+    numFcstMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
+    
+    ReDim arrHeader(1 To 8 + numHistMonths + numFcstMonths)
     
     arrHeader(1) = "Affiliate": arrHeader(2) = "Forecast Tier": arrHeader(3) = "Forecast Sub-Tier"
     arrHeader(4) = "Key Figures": arrHeader(5) = "Local Item Nbr": arrHeader(6) = "Desc"
     arrHeader(7) = "I-S-D": arrHeader(8) = "Status"
     
-    For i = 1 To numForecastMonths
-        arrHeader(8 + i) = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
+    c = 9
+    For i = 1 To numHistMonths
+        arrHeader(c) = arrHistoryData(1, HS_START_OF_MONTHS_COL + i - 1)
+        c = c + 1
+    Next i
+    For i = 1 To numFcstMonths
+        arrHeader(c) = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
+        c = c + 1
     Next i
     
-    ' --- Prepare Output Array ---
     ReDim arrOutput(1 To (colProducts.Count * dictKeyFigures.Count) + dictKeyFigures.Count, 1 To UBound(arrHeader))
     
     outputRowIndex = 1
     
-    ' --- Populate Data Array from Stored Values ---
     For Each varKeyFigure In dictKeyFigures.Keys
         subtotalStartRow = outputRowIndex
         
@@ -260,36 +267,47 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
             arrOutput(outputRowIndex, 7) = objLifecycle.ISD
             arrOutput(outputRowIndex, 8) = GetStatusString(objLifecycle.Status)
             
-            For i = 1 To numForecastMonths
-                dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
-                Dim forecastKey As String: forecastKey = CStr(varKeyFigure) & "|" & dteForecastMonth
-                
-                If objLifecycle.ForecastValues.Exists(forecastKey) Then
-                    arrOutput(outputRowIndex, 8 + i) = objLifecycle.ForecastValues.Item(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
+            c = 9
+            ' Populate Historical Data
+            Dim histKey As String: histKey = objLifecycle.Affiliate & "|" & CStr(varKeyFigure) & "|" & objLifecycle.LocalItemNbr
+            For i = 1 To numHistMonths
+                Dim dteHistMonth As Date: dteHistMonth = arrHistoryData(1, HS_START_OF_MONTHS_COL + i - 1)
+                If dictHistoryCache.Exists(histKey) Then
+                    If dictHistoryCache.Item(histKey).Exists(dteHistMonth) Then
+                        arrOutput(outputRowIndex, c) = dictHistoryCache.Item(histKey).Item(dteHistMonth)
+                    End If
                 End If
+                c = c + 1
+            Next i
+            
+            ' Populate Forecast Data
+            For i = 1 To numFcstMonths
+                Dim dteFcstMonth As Date: dteFcstMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
+                Dim fcstKey As String: fcstKey = CStr(varKeyFigure) & "|" & dteFcstMonth
+                If objLifecycle.ForecastValues.Exists(fcstKey) Then
+                    arrOutput(outputRowIndex, c) = objLifecycle.ForecastValues.Item(fcstKey) * objLifecycle.GetForecastMultiplier(dteFcstMonth)
+                End If
+                c = c + 1
             Next i
             outputRowIndex = outputRowIndex + 1
         Next objLifecycle
         
-        ' --- Add and Calculate Subtotal Row ---
         arrOutput(outputRowIndex, 1) = "TOTAL"
         arrOutput(outputRowIndex, 2) = strTier
         arrOutput(outputRowIndex, 4) = CStr(varKeyFigure)
-        For i = 1 To numForecastMonths
-            Dim monthlyTotal As Double
-            Dim productRow As Long
+        For c = 9 To UBound(arrOutput, 2)
+            Dim monthlyTotal As Double, productRow As Long
             For productRow = subtotalStartRow To outputRowIndex - 1
-                If IsNumeric(arrOutput(productRow, 8 + i)) Then
-                    monthlyTotal = monthlyTotal + arrOutput(productRow, 8 + i)
+                If IsNumeric(arrOutput(productRow, c)) Then
+                    monthlyTotal = monthlyTotal + arrOutput(productRow, c)
                 End If
             Next productRow
-            arrOutput(outputRowIndex, 8 + i) = monthlyTotal
-        Next i
+            arrOutput(outputRowIndex, c) = monthlyTotal
+        Next c
         outputRowIndex = outputRowIndex + 1
         
     Next varKeyFigure
     
-    ' --- Write to Sheet ---
     ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
     ws.Range("A2").Resize(outputRowIndex - 1, UBound(arrHeader)).Value = arrOutput
 End Sub
@@ -297,45 +315,53 @@ End Sub
 Private Sub FormatTierSheet(ByVal ws As Worksheet)
     Dim lastRow As Long, lastCol As Long
     Dim dataRange As Range, headerRange As Range
-    Dim i As Long
-
-    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).row
+    Dim i As Long, histColEnd As Long
+    
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).row
     If lastRow <= 1 Then Exit Sub
     
     lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    histColEnd = 8 + (UBound(arrHistoryData, 2) - HS_START_OF_MONTHS_COL + 1)
     
-    Set headerRange = ws.Range(ws.Cells(1, 1), ws.Cells(1, lastCol))
-    Set dataRange = ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastCol))
+    Set headerRange = ws.Range("A1").Resize(1, lastCol)
+    Set dataRange = ws.Range("A1").Resize(lastRow, lastCol)
     
-    ' Format Header
-    With headerRange
+    ' Format Static and Forecast Headers (Dark Blue)
+    With Union(ws.Range("A1:H1"), ws.Range(ws.Cells(1, histColEnd + 1), ws.Cells(1, lastCol)))
         .Font.Bold = True
         .Font.Color = vbWhite
-        .Interior.Color = RGB(0, 32, 96) ' Dark Blue
+        .Interior.Color = RGB(0, 32, 96)
         .VerticalAlignment = xlCenter
     End With
+    
+    ' Format Historical Headers (Gray)
+    With ws.Range(ws.Cells(1, 9), ws.Cells(1, histColEnd))
+        .Font.Bold = True
+        .Font.Color = vbBlack
+        .Interior.Color = RGB(217, 217, 217)
+        .VerticalAlignment = xlCenter
+    End With
+    
+    ' Format Historical Data Area (Light Fill)
+    ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, histColEnd)).Interior.Color = RGB(242, 242, 242)
     
     ' Format Subtotal Rows
     For i = 2 To lastRow
         If ws.Cells(i, 1).Value = "TOTAL" Then
             With ws.Range(ws.Cells(i, 1), ws.Cells(i, lastCol))
                 .Font.Bold = True
-                .Interior.Color = RGB(242, 242, 242) ' Light Gray
+                .Interior.Color = RGB(220, 230, 241) ' Light Blue
             End With
         End If
     Next i
     
-    ' Format Forecast Numbers
     ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
     
-    ' Apply Borders
     With dataRange.Borders
         .LineStyle = xlContinuous
         .Weight = xlThin
-        .ColorIndex = xlAutomatic
     End With
     
-    ' AutoFit Columns and Freeze Panes
     ws.Columns.AutoFit
     ws.Activate
     ws.Rows(2).Select
@@ -352,28 +378,23 @@ Private Sub FormatSummarySheet(ByVal ws As Worksheet)
     
     lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
     
-    Set headerRange = ws.Range(ws.Cells(1, 1), ws.Cells(1, lastCol))
-    Set dataRange = ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastCol))
+    Set headerRange = ws.Range("A1").Resize(1, lastCol)
+    Set dataRange = ws.Range("A1").Resize(lastRow, lastCol)
     
-    ' Format Header
     With headerRange
         .Font.Bold = True
         .Font.Color = vbWhite
-        .Interior.Color = RGB(0, 32, 96) ' Dark Blue
+        .Interior.Color = RGB(0, 32, 96)
         .VerticalAlignment = xlCenter
     End With
     
-    ' Format Forecast Numbers (Starts in Column 8 for summary)
     ws.Range(ws.Cells(2, 8), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
     
-    ' Apply Borders
     With dataRange.Borders
         .LineStyle = xlContinuous
         .Weight = xlThin
-        .ColorIndex = xlAutomatic
     End With
     
-    ' AutoFit Columns and Freeze Panes
     ws.Columns.AutoFit
     ws.Activate
     ws.Rows(2).Select
@@ -389,7 +410,6 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             Dim strFullKeyFigure As String
             strFullKeyFigure = dictMap.Item(ws.Name)
             
-            ' Set up headers
             Dim arrHeader As Variant
             Dim numForecastMonths As Long: numForecastMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
             ReDim arrHeader(1 To 7 + numForecastMonths)
@@ -402,7 +422,6 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             Next i
             ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
             
-            ' Populate data
             Dim lngRow As Long: lngRow = 2
             Dim objLifecycle As cProductLifecycle
             Dim varKey As Variant
@@ -426,7 +445,6 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                 End If
             Next varKey
             
-            ' Format the populated sheet
             FormatSummarySheet ws
         End If
     Next ws
@@ -438,8 +456,7 @@ End Sub
 
 Private Function BuildLifecycleMap(ByVal arrStatus As Variant) As Object
     Dim dictMap As Object: Set dictMap = CreateObject("Scripting.Dictionary")
-    Dim r As Long
-    Dim obj As cProductLifecycle
+    Dim r As Long, obj As cProductLifecycle
     
     For r = 2 To UBound(arrStatus, 1)
         Dim strKey As String: strKey = BuildCompositeKey(arrStatus(r, PS_AFFILIATE_COL), arrStatus(r, PS_ISD_COL))
@@ -476,9 +493,7 @@ Private Function GetDemandValue(strAffiliate As String, strTier As String, strKe
     Dim r As Long, c As Long
     For c = DF_START_OF_MONTHS_COL To UBound(arrDemandData, 2)
         If IsDate(arrDemandData(1, c)) Then
-            If CDate(arrDemandData(1, c)) = dteMonth Then
-                Exit For
-            End If
+            If CDate(arrDemandData(1, c)) = dteMonth Then Exit For
         End If
     Next c
     If c > UBound(arrDemandData, 2) Then Exit Function
@@ -497,8 +512,7 @@ End Function
 
 Private Function GetProductsForTier(strAffiliate As String, strTier As String) As Collection
     Set GetProductsForTier = New Collection
-    Dim varKey As Variant
-    Dim obj As cProductLifecycle
+    Dim varKey As Variant, obj As cProductLifecycle
     For Each varKey In dictLifecycleMap.Keys
         Set obj = dictLifecycleMap.Item(varKey)
         If obj.Affiliate = strAffiliate And obj.ForecastTier = strTier Then
@@ -570,6 +584,7 @@ Private Sub CleanupMemory()
     Set dictLifecycleMap = Nothing
     Set dictAffiliates = Nothing
     Set dictKeyFigures = Nothing
+    Set dictHistoryCache = Nothing
     Erase arrStatusData
     Erase arrHistoryData
     Erase arrDemandData
