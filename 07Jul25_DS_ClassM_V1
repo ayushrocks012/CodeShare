@@ -3,12 +3,12 @@ Option Explicit
 
 '================================================================================================
 ' CLASS MODULE: cProductLifecycle
-' V16.0: Key Figure Upgrade
-'      - Aligned properties with the official Product Status sheet layout.
-'      - Enhanced forecast multiplier logic to be more dynamic.
+' V17.0: Final Key Figure Implementation
+'      - Added ForecastValues dictionary to store calculated results per key figure and month.
+'      - Refined successor logic to transfer phased-out forecast values correctly.
 '
 ' Author:      Ayush Goyal
-' Date:        06-Jul-2025
+' Date:        07-Jul-2025
 ' Purpose:     Defines a Product Lifecycle object to store and manage the status,
 '              phase-in/out dates, and successor information for a single product.
 '================================================================================================
@@ -28,6 +28,12 @@ Public IsPhasingOut As Boolean
 Public IsPhasingIn As Boolean
 Public PhaseInDate As Date
 Public PhaseInPercent As Double
+Public ForecastValues As Object ' Dictionary to store [KeyFigure|Month] -> [Value]
+
+Private Sub Class_Initialize()
+    ' Initialize the dictionary when a new object is created
+    Set ForecastValues = CreateObject("Scripting.Dictionary")
+End Sub
 
 '--- Purpose: Initializes the object's properties from a row of data in the status array.
 '------------------------------------------------------------------------------------------------
@@ -78,25 +84,22 @@ Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
     '--- Handle Phase-Out logic ---
     If Me.IsPhasingOut And Me.PhaseOutDate > 0 And dteForecastDate >= Me.PhaseOutDate Then
         If IsSameMonthAndYear(dteForecastDate, Me.PhaseOutDate) Then
-            'In the final month, the multiplier is the specified phase-out percentage
             GetForecastMultiplier = (1 - Me.PhaseOutPercent)
         Else
-            'After the final month, the forecast is zero
             GetForecastMultiplier = 0
         End If
     End If
     
     '--- Handle outright Discontinued status ---
-    If Me.Status = psDiscontinued And dteForecastDate >= Me.PhaseOutDate Then
+    If Me.Status = psDiscontinued And dteForecastDate >= Me.PhaseOutDate And Me.PhaseOutDate > 0 Then
         GetForecastMultiplier = 0
     End If
     
 End Function
 
-'--- Purpose: Finds the successor product (if any) in the main lifecycle map and
-'---          sets its phase-in properties based on this object's phase-out data.
+'--- Purpose: Finds the successor product (if any) and transfers the phased-out portion of the forecast.
 '------------------------------------------------------------------------------------------------
-Public Sub LinkSuccessor(ByVal dictMap As Object)
+Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
     If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
     
     Dim strSuccessorKey As String
@@ -106,19 +109,36 @@ Public Sub LinkSuccessor(ByVal dictMap As Object)
         Dim objSuccessor As cProductLifecycle
         Set objSuccessor = dictMap.Item(strSuccessorKey)
         
-        '--- Set the successor's phase-in details ---
-        With objSuccessor
-            .IsPhasingIn = True
-            .PhaseInDate = Me.PhaseOutDate
-            .PhaseInPercent = Me.PhaseOutPercent 'Successor's volume is the inverse of predecessor's
-        End With
+        ' Set the successor's phase-in details
+        objSuccessor.IsPhasingIn = True
+        objSuccessor.PhaseInDate = Me.PhaseOutDate
+        objSuccessor.PhaseInPercent = Me.PhaseOutPercent
+        
+        ' Transfer the phased-out value to the successor
+        Dim varForecastKey As Variant
+        For Each varForecastKey In Me.ForecastValues.Keys
+            Dim dblOriginalValue As Double, dblMultiplier As Double, dblTransferValue As Double
+            Dim arrKeyParts() As String
+            
+            arrKeyParts = Split(varForecastKey, "|")
+            Dim dteForecastMonth As Date: dteForecastMonth = CDate(arrKeyParts(1))
+            
+            dblOriginalValue = Me.ForecastValues(varForecastKey)
+            dblMultiplier = Me.GetForecastMultiplier(dteForecastMonth)
+            
+            ' The value to transfer is the portion that was removed by the phase-out
+            If dblMultiplier > 0 Then ' Avoid division by zero
+                dblTransferValue = (dblOriginalValue / dblMultiplier) * (1 - dblMultiplier)
+            End If
+            
+            If objSuccessor.ForecastValues.Exists(varForecastKey) Then
+                objSuccessor.ForecastValues(varForecastKey) = objSuccessor.ForecastValues(varForecastKey) + dblTransferValue
+            Else
+                objSuccessor.ForecastValues.Add varForecastKey, dblTransferValue
+            End If
+        Next varForecastKey
     End If
 End Sub
-
-
-'================================================================================================
-'--- PRIVATE HELPER METHODS ---
-'================================================================================================
 
 '--- Purpose: Compares two dates to see if they fall in the same month and year.
 '------------------------------------------------------------------------------------------------
