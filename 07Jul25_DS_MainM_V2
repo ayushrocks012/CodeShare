@@ -3,10 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V19.0: Report Formatting and Layout Overhaul
-'      - Reworked PopulateTierSheet to generate a "long" stacked format instead of "wide".
-'      - Added automatic subtotal rows for each Tier/Key Figure combination.
-'      - Created a new FormatTierSheet subroutine to apply all visual styling (colors, borders, etc.).
+' V19.1: Final Report Fixes
+'      - Fixed subtotal calculation logic to sum from the array, not the worksheet.
+'      - Corrected the position of the subtotal row text ("TOTAL" in column A).
+'      - Added a new subroutine to apply professional formatting to all Summary sheets.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -224,7 +224,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Dim colProducts As Collection
     Dim numForecastMonths As Long
     Dim outputRowIndex As Long
-    Dim subtotalRow As Long
+    Dim subtotalStartRow As Long
     
     ' --- Get Products for this Tier ---
     Set colProducts = GetProductsForTier(strAffiliate, strTier)
@@ -243,14 +243,13 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Next i
     
     ' --- Prepare Output Array ---
-    ' Total rows = (Products * Key Figures) + (Key Figures for subtotals)
     ReDim arrOutput(1 To (colProducts.Count * dictKeyFigures.Count) + dictKeyFigures.Count, 1 To UBound(arrHeader))
     
     outputRowIndex = 1
     
     ' --- Populate Data Array from Stored Values ---
     For Each varKeyFigure In dictKeyFigures.Keys
-        subtotalRow = outputRowIndex
+        subtotalStartRow = outputRowIndex
         
         For Each objLifecycle In colProducts
             arrOutput(outputRowIndex, 1) = objLifecycle.Affiliate
@@ -273,11 +272,19 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
             outputRowIndex = outputRowIndex + 1
         Next objLifecycle
         
-        ' Add Subtotal Row
-        arrOutput(outputRowIndex, 2) = "TOTAL"
+        ' --- Add and Calculate Subtotal Row ---
+        arrOutput(outputRowIndex, 1) = "TOTAL"
+        arrOutput(outputRowIndex, 2) = strTier
         arrOutput(outputRowIndex, 4) = CStr(varKeyFigure)
         For i = 1 To numForecastMonths
-            arrOutput(outputRowIndex, 8 + i) = Application.WorksheetFunction.Sum(ws.Range(ws.Cells(subtotalRow + 1, 8 + i), ws.Cells(outputRowIndex, 8 + i)))
+            Dim monthlyTotal As Double
+            Dim productRow As Long
+            For productRow = subtotalStartRow To outputRowIndex - 1
+                If IsNumeric(arrOutput(productRow, 8 + i)) Then
+                    monthlyTotal = monthlyTotal + arrOutput(productRow, 8 + i)
+                End If
+            Next productRow
+            arrOutput(outputRowIndex, 8 + i) = monthlyTotal
         Next i
         outputRowIndex = outputRowIndex + 1
         
@@ -285,7 +292,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     
     ' --- Write to Sheet ---
     ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
-    ws.Range("A2").Resize(UBound(arrOutput, 1), UBound(arrOutput, 2)).Value = arrOutput
+    ws.Range("A2").Resize(outputRowIndex - 1, UBound(arrHeader)).Value = arrOutput
 End Sub
 
 Private Sub FormatTierSheet(ByVal ws As Worksheet)
@@ -311,7 +318,7 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
     
     ' Format Subtotal Rows
     For i = 2 To lastRow
-        If ws.Cells(i, 2).Value = "TOTAL" Then
+        If ws.Cells(i, 1).Value = "TOTAL" Then
             With ws.Range(ws.Cells(i, 1), ws.Cells(i, lastCol))
                 .Font.Bold = True
                 .Interior.Color = RGB(242, 242, 242) ' Light Gray
@@ -321,6 +328,43 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
     
     ' Format Forecast Numbers
     ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
+    
+    ' Apply Borders
+    With dataRange.Borders
+        .LineStyle = xlContinuous
+        .Weight = xlThin
+        .ColorIndex = xlAutomatic
+    End With
+    
+    ' AutoFit Columns and Freeze Panes
+    ws.Columns.AutoFit
+    ws.Rows(2).Select
+    ActiveWindow.FreezePanes = True
+    ws.Cells(1, 1).Select
+End Sub
+
+Private Sub FormatSummarySheet(ByVal ws As Worksheet)
+    Dim lastRow As Long, lastCol As Long
+    Dim dataRange As Range, headerRange As Range
+
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).row
+    If lastRow <= 1 Then Exit Sub
+    
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    
+    Set headerRange = ws.Range(ws.Cells(1, 1), ws.Cells(1, lastCol))
+    Set dataRange = ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastCol))
+    
+    ' Format Header
+    With headerRange
+        .Font.Bold = True
+        .Font.Color = vbWhite
+        .Interior.Color = RGB(0, 32, 96) ' Dark Blue
+        .VerticalAlignment = xlCenter
+    End With
+    
+    ' Format Forecast Numbers (Starts in Column 8 for summary)
+    ws.Range(ws.Cells(2, 8), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
     
     ' Apply Borders
     With dataRange.Borders
@@ -380,7 +424,9 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                     lngRow = lngRow + 1
                 End If
             Next varKey
-            ws.Columns.AutoFit
+            
+            ' Format the populated sheet
+            FormatSummarySheet ws
         End If
     Next ws
 End Sub
