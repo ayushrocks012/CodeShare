@@ -1,0 +1,195 @@
+'@Folder("Classes")
+Option Explicit
+
+'================================================================================================
+' CLASS MODULE: cProductLifecycle
+' V18.0: Rubberduck Code Quality Refinements
+'      - Implemented full encapsulation using Property Get/Let procedures for all fields.
+'      - Resolved all warnings related to unbound default member access in dictionaries.
+'
+' Author:      Ayush Goyal
+' Date:        07-Jul-2025
+' Purpose:     Defines a Product Lifecycle object to store and manage the status,
+'              phase-in/out dates, and successor information for a single product.
+'================================================================================================
+
+'--- Private Member Variables (for Encapsulation) ---
+Private m_Affiliate As String
+Private m_ForecastTier As String
+Private m_ForecastSubTier As String
+Private m_LocalItemNbr As String
+Private m_Description As String
+Private m_ISD As String
+Private m_Status As ProductStatus
+Private m_PhaseOutDate As Date
+Private m_PhaseOutPercent As Double
+Private m_SupersededByProductID As String
+Private m_IsPhasingOut As Boolean
+Private m_IsPhasingIn As Boolean
+Private m_PhaseInDate As Date
+Private m_PhaseInPercent As Double
+Private m_ForecastValues As Object ' Dictionary
+
+'--- Public Properties (Get/Let) ---
+Public Property Get Affiliate() As String: Affiliate = m_Affiliate: End Property
+Public Property Let Affiliate(ByVal Value As String): m_Affiliate = Value: End Property
+
+Public Property Get ForecastTier() As String: ForecastTier = m_ForecastTier: End Property
+Public Property Let ForecastTier(ByVal Value As String): m_ForecastTier = Value: End Property
+
+Public Property Get ForecastSubTier() As String: ForecastSubTier = m_ForecastSubTier: End Property
+Public Property Let ForecastSubTier(ByVal Value As String): m_ForecastSubTier = Value: End Property
+
+Public Property Get LocalItemNbr() As String: LocalItemNbr = m_LocalItemNbr: End Property
+Public Property Let LocalItemNbr(ByVal Value As String): m_LocalItemNbr = Value: End Property
+
+Public Property Get Description() As String: Description = m_Description: End Property
+Public Property Let Description(ByVal Value As String): m_Description = Value: End Property
+
+Public Property Get ISD() As String: ISD = m_ISD: End Property
+Public Property Let ISD(ByVal Value As String): m_ISD = Value: End Property
+
+Public Property Get Status() As ProductStatus: Status = m_Status: End Property
+Public Property Let Status(ByVal Value As ProductStatus): m_Status = Value: End Property
+
+Public Property Get PhaseOutDate() As Date: PhaseOutDate = m_PhaseOutDate: End Property
+Public Property Let PhaseOutDate(ByVal Value As Date): m_PhaseOutDate = Value: End Property
+
+Public Property Get PhaseOutPercent() As Double: PhaseOutPercent = m_PhaseOutPercent: End Property
+Public Property Let PhaseOutPercent(ByVal Value As Double): m_PhaseOutPercent = Value: End Property
+
+Public Property Get SupersededByProductID() As String: SupersededByProductID = m_SupersededByProductID: End Property
+Public Property Let SupersededByProductID(ByVal Value As String): m_SupersededByProductID = Value: End Property
+
+Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = m_IsPhasingOut: End Property
+Public Property Let IsPhasingOut(ByVal Value As Boolean): m_IsPhasingOut = Value: End Property
+
+Public Property Get IsPhasingIn() As Boolean: IsPhasingIn = m_IsPhasingIn: End Property
+Public Property Let IsPhasingIn(ByVal Value As Boolean): m_IsPhasingIn = Value: End Property
+
+Public Property Get PhaseInDate() As Date: PhaseInDate = m_PhaseInDate: End Property
+Public Property Let PhaseInDate(ByVal Value As Date): m_PhaseInDate = Value: End Property
+
+Public Property Get PhaseInPercent() As Double: PhaseInPercent = m_PhaseInPercent: End Property
+Public Property Let PhaseInPercent(ByVal Value As Double): m_PhaseInPercent = Value: End Property
+
+Public Property Get ForecastValues() As Object: Set ForecastValues = m_ForecastValues: End Property
+Public Property Set ForecastValues(ByVal Value As Object): Set m_ForecastValues = Value: End Property
+
+
+Private Sub Class_Initialize()
+    ' Initialize the dictionary when a new object is created
+    Set m_ForecastValues = CreateObject("Scripting.Dictionary")
+End Sub
+
+'--- Purpose: Initializes the object's properties from a row of data in the status array.
+'------------------------------------------------------------------------------------------------
+Public Sub Init(ByVal arrDataSource As Variant, ByVal lngRow As Long)
+    On Error Resume Next
+    Me.Affiliate = Trim$(arrDataSource(lngRow, PS_AFFILIATE_COL))
+    Me.ForecastTier = Trim$(arrDataSource(lngRow, PS_TIER_COL))
+    Me.ForecastSubTier = Trim$(arrDataSource(lngRow, PS_SUB_TIER_COL))
+    Me.LocalItemNbr = Trim$(arrDataSource(lngRow, PS_LOCAL_ITEM_NBR_COL))
+    Me.Description = Trim$(arrDataSource(lngRow, PS_DESC_COL))
+    Me.ISD = Trim$(arrDataSource(lngRow, PS_ISD_COL))
+    Me.Status = GetStatusEnum(Trim$(arrDataSource(lngRow, PS_STATUS_COL)))
+    Me.SupersededByProductID = Trim$(arrDataSource(lngRow, PS_SUPERSEDED_BY_COL))
+    
+    Dim varPhaseOutPct As Variant: varPhaseOutPct = arrDataSource(lngRow, PS_PHASE_OUT_PCT_COL)
+    If IsNumeric(varPhaseOutPct) And varPhaseOutPct >= 0 And varPhaseOutPct <= 1 Then
+        Me.PhaseOutPercent = CDbl(varPhaseOutPct)
+    Else
+        Me.PhaseOutPercent = 1 ' Default to 100% if blank or invalid
+    End If
+
+    If Me.Status = psPhaseInOut Or Me.Status = psDiscontinued Then
+        Me.IsPhasingOut = True
+        If IsDate(arrDataSource(lngRow, PS_PHASE_OUT_DATE_COL)) Then
+            Me.PhaseOutDate = CDate(arrDataSource(lngRow, PS_PHASE_OUT_DATE_COL))
+        End If
+    End If
+    On Error GoTo 0
+End Sub
+
+'--- Purpose: Calculates the forecast multiplier for a given month based on the object's status.
+'--- Returns: A Double (e.g., 1.0, 0.5, 0.0) to adjust the base forecast.
+'------------------------------------------------------------------------------------------------
+Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
+    GetForecastMultiplier = 1 'Default to 100% for active products
+
+    '--- Handle Phase-In logic ---
+    If Me.IsPhasingIn Then
+        If dteForecastDate < Me.PhaseInDate Then
+            GetForecastMultiplier = 0 'Forecast is zero before phase-in starts
+            Exit Function
+        ElseIf IsSameMonthAndYear(dteForecastDate, Me.PhaseInDate) Then
+            GetForecastMultiplier = Me.PhaseInPercent 'Apply phase-in percentage for the first month
+            Exit Function
+        End If
+    End If
+
+    '--- Handle Phase-Out logic ---
+    If Me.IsPhasingOut And Me.PhaseOutDate > 0 And dteForecastDate >= Me.PhaseOutDate Then
+        If IsSameMonthAndYear(dteForecastDate, Me.PhaseOutDate) Then
+            GetForecastMultiplier = (1 - Me.PhaseOutPercent)
+        Else
+            GetForecastMultiplier = 0
+        End If
+    End If
+    
+    '--- Handle outright Discontinued status ---
+    If Me.Status = psDiscontinued And dteForecastDate >= Me.PhaseOutDate And Me.PhaseOutDate > 0 Then
+        GetForecastMultiplier = 0
+    End If
+    
+End Function
+
+'--- Purpose: Finds the successor product (if any) and transfers the phased-out portion of the forecast.
+'------------------------------------------------------------------------------------------------
+Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
+    If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
+    
+    Dim strSuccessorKey As String
+    strSuccessorKey = BuildCompositeKey(Me.Affiliate, Me.SupersededByProductID)
+    
+    If dictMap.Exists(strSuccessorKey) Then
+        Dim objSuccessor As cProductLifecycle
+        Set objSuccessor = dictMap.Item(strSuccessorKey)
+        
+        ' Set the successor's phase-in details
+        objSuccessor.IsPhasingIn = True
+        objSuccessor.PhaseInDate = Me.PhaseOutDate
+        objSuccessor.PhaseInPercent = Me.PhaseOutPercent
+        
+        ' Transfer the phased-out value to the successor
+        Dim varForecastKey As Variant
+        For Each varForecastKey In Me.ForecastValues.Keys
+            Dim dblOriginalValue As Double, dblMultiplier As Double, dblTransferValue As Double
+            Dim arrKeyParts() As String
+            
+            arrKeyParts = Split(varForecastKey, "|")
+            Dim dteForecastMonth As Date: dteForecastMonth = CDate(arrKeyParts(1))
+            
+            dblOriginalValue = Me.ForecastValues.Item(varForecastKey)
+            dblMultiplier = Me.GetForecastMultiplier(dteForecastMonth)
+            
+            ' The value to transfer is the portion that was removed by the phase-out
+            If dblMultiplier > 0 Then ' Avoid division by zero
+                dblTransferValue = (dblOriginalValue / dblMultiplier) * (1 - dblMultiplier)
+            End If
+            
+            If objSuccessor.ForecastValues.Exists(varForecastKey) Then
+                objSuccessor.ForecastValues.Item(varForecastKey) = objSuccessor.ForecastValues.Item(varForecastKey) + dblTransferValue
+            Else
+                objSuccessor.ForecastValues.Add varForecastKey, dblTransferValue
+            End If
+        Next varForecastKey
+    End If
+End Sub
+
+'--- Purpose: Compares two dates to see if they fall in the same month and year.
+'------------------------------------------------------------------------------------------------
+Private Function IsSameMonthAndYear(ByVal date1 As Date, ByVal date2 As Date) As Boolean
+    If date1 = 0 Or date2 = 0 Then Exit Function
+    IsSameMonthAndYear = (Month(date1) = Month(date2) And Year(date1) = Year(date2))
+End Function
