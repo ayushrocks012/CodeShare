@@ -3,8 +3,8 @@ Option Explicit
 
 '================================================================================================
 ' CONFIGURATION MODULE (M_Config)
-' V18.0: Rubberduck Code Quality Refinements
-'      - Removed all unused constants as identified by the inspection report.
+' V19.0: Final Version
+'      - Reinstated all column constants for clarity and future maintenance.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -52,6 +52,9 @@ Public Const HS_AFFILIATE_COL As Long = 1
 Public Const HS_TIER_COL As Long = 2
 Public Const HS_SUB_TIER_COL As Long = 3
 Public Const HS_KEY_FIGURE_COL As Long = 4
+Public Const HS_LOCAL_ITEM_NBR_COL As Long = 5 ' Reinstated
+Public Const HS_DESC_COL As Long = 6         ' Reinstated
+Public Const HS_ISD_COL As Long = 7            ' Reinstated
 Public Const HS_START_OF_MONTHS_COL As Long = 8
 
 '-- 'Demand Forecast' Sheet Columns --
