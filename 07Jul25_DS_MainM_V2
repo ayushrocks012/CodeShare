@@ -3,9 +3,10 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V17.2: Duplicate Declaration Fix
-'      - Resolved "Duplicate declaration in current scope" compile error in PopulateTierSheet.
-'      - Consolidated variable declarations to the top of the subroutine for clarity.
+' V18.0: Rubberduck Code Quality Refinements
+'      - Resolved all warnings from Rubberduck inspection report.
+'      - Removed unused variables and used explicit dictionary access (.Item).
+'      - Replaced generic functions (Format, Left) with typed equivalents (Format$, Left$).
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -14,14 +15,14 @@ Option Explicit
 '--- Private Module-Level Variables ---
 Private wbHost As Workbook
 Private wsLog As Worksheet
-Private lngWarningCount As Long
+'Private lngWarningCount As Long 'Removed as per Rubberduck inspection (unused)
 Private dictStatusMap As Object
 Private arrStatusData As Variant
 Private arrHistoryData As Variant
 Private arrDemandData As Variant
 Private dictLifecycleMap As Object
 Private dictAffiliates As Object
-Private dictKeyFigures As Object ' NEW: To store unique Key Figures
+Private dictKeyFigures As Object
 
 '================================================================================================
 ' 1. MAIN PUBLIC ORCHESTRATOR
@@ -123,7 +124,7 @@ Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
     
     ' Clear any old forecast data from previous runs
     For Each varProductKey In dictLifecycleMap.Keys
-        Set objLifecycle = dictLifecycleMap(varProductKey)
+        Set objLifecycle = dictLifecycleMap.Item(varProductKey)
         If objLifecycle.Affiliate = strAffiliate Then
             Set objLifecycle.ForecastValues = CreateObject("Scripting.Dictionary")
         End If
@@ -131,7 +132,7 @@ Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
     
     ' Calculate and store the new forecast values
     For Each varProductKey In dictLifecycleMap.Keys
-        Set objLifecycle = dictLifecycleMap(varProductKey)
+        Set objLifecycle = dictLifecycleMap.Item(varProductKey)
         If objLifecycle.Affiliate = strAffiliate Then
             For Each varKeyFigure In dictKeyFigures.Keys
                 Dim strKeyFigure As String: strKeyFigure = CStr(varKeyFigure)
@@ -159,7 +160,7 @@ Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
     ' --- Handle Successor Logic ---
     ' This pass adjusts the already calculated values based on lifecycle links
     For Each varProductKey In dictLifecycleMap.Keys
-        Set objLifecycle = dictLifecycleMap(varProductKey)
+        Set objLifecycle = dictLifecycleMap.Item(varProductKey)
         If objLifecycle.Affiliate = strAffiliate Then
             objLifecycle.LinkAndTransferSuccessorForecast dictLifecycleMap
         End If
@@ -232,7 +233,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     For i = 1 To numForecastMonths
         dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
         For Each varKeyFigure In dictKeyFigures.Keys
-            arrHeader(c) = Format(dteForecastMonth, "mmm-yy") & " " & CStr(varKeyFigure)
+            arrHeader(c) = Format$(dteForecastMonth, "mmm-yy") & " " & CStr(varKeyFigure)
             c = c + 1
         Next varKeyFigure
     Next i
@@ -255,7 +256,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
                 Dim dblFinalForecast As Double
                 
                 If objLifecycle.ForecastValues.Exists(forecastKey) Then
-                    dblFinalForecast = objLifecycle.ForecastValues(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
+                    dblFinalForecast = objLifecycle.ForecastValues.Item(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
                     arrOutput(r, c) = dblFinalForecast
                 End If
                 c = c + 1
@@ -302,7 +303,7 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             Dim lngRow As Long: lngRow = 2
             Dim objLifecycle As cProductLifecycle
             For Each varKey In dictLifecycleMap.Keys
-                Set objLifecycle = dictLifecycleMap(varKey)
+                Set objLifecycle = dictLifecycleMap.Item(varKey)
                 If objLifecycle.Affiliate = strAffiliate Then
                     ws.Cells(lngRow, 1).Value = objLifecycle.Affiliate: ws.Cells(lngRow, 2).Value = objLifecycle.ForecastTier
                     ws.Cells(lngRow, 3).Value = objLifecycle.ForecastSubTier: ws.Cells(lngRow, 4).Value = objLifecycle.LocalItemNbr
@@ -314,7 +315,7 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                         Dim forecastKey As String: forecastKey = strFullKeyFigure & "|" & dteForecastMonth
                         
                         If objLifecycle.ForecastValues.Exists(forecastKey) Then
-                            ws.Cells(lngRow, 7 + i).Value = objLifecycle.ForecastValues(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
+                            ws.Cells(lngRow, 7 + i).Value = objLifecycle.ForecastValues.Item(forecastKey) * objLifecycle.GetForecastMultiplier(dteForecastMonth)
                         End If
                     Next i
                     lngRow = lngRow + 1
@@ -332,10 +333,12 @@ End Sub
 Private Function BuildLifecycleMap(ByVal arrStatus As Variant) As Object
     Dim dictMap As Object: Set dictMap = CreateObject("Scripting.Dictionary")
     Dim r As Long
+    Dim obj As cProductLifecycle
+    
     For r = 2 To UBound(arrStatus, 1)
         Dim strKey As String: strKey = BuildCompositeKey(arrStatus(r, PS_AFFILIATE_COL), arrStatus(r, PS_ISD_COL))
         If Not dictMap.Exists(strKey) Then
-            Dim obj As New cProductLifecycle
+            Set obj = New cProductLifecycle
             obj.Init arrStatus, r
             dictMap.Add strKey, obj
         End If
@@ -389,8 +392,9 @@ End Function
 Private Function GetProductsForTier(strAffiliate As String, strTier As String) As Collection
     Set GetProductsForTier = New Collection
     Dim varKey As Variant
+    Dim obj As cProductLifecycle
     For Each varKey In dictLifecycleMap.Keys
-        Dim obj As cProductLifecycle: Set obj = dictLifecycleMap(varKey)
+        Set obj = dictLifecycleMap.Item(varKey)
         If obj.Affiliate = strAffiliate And obj.ForecastTier = strTier Then
             GetProductsForTier.Add obj
         End If
@@ -441,13 +445,15 @@ Private Function GetUniqueValues(arrData As Variant, ByVal lngCol As Long) As Ob
 End Function
 
 Private Function SanitizeSheetName(ByVal strName As String) As String
-    strName = Replace(strName, "/", "-")
-    strName = Replace(strName, "\", "-")
-    strName = Replace(strName, "?", "")
-    strName = Replace(strName, "*", "")
-    strName = Replace(strName, "[", "")
-    strName = Replace(strName, "]", "")
-    SanitizeSheetName = Left(strName, 31)
+    Dim sanitizedString As String
+    sanitizedString = strName
+    sanitizedString = Replace(sanitizedString, "/", "-")
+    sanitizedString = Replace(sanitizedString, "\", "-")
+    sanitizedString = Replace(sanitizedString, "?", "")
+    sanitizedString = Replace(sanitizedString, "*", "")
+    sanitizedString = Replace(sanitizedString, "[", "")
+    sanitizedString = Replace(sanitizedString, "]", "")
+    SanitizeSheetName = Left$(sanitizedString, 31)
 End Function
 
 Private Function GetOutputFilePath(ByVal strBasePath As String, ByVal strAffiliate As String) As String
