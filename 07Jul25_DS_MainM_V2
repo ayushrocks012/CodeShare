@@ -3,9 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V22.1: Compile Error Fix
-'      - Reinstated the missing BuildHistoryCache subroutine to resolve "Sub not defined" error.
-'      - Merged detailed logging and status bar updates from the original code.
+' V22.2: Rubberduck Code Quality Fix
+'      - Corrected unhandled "On Error Resume Next" in the FinalizeRun subroutine.
+'      - Error handling is now correctly restored at the end of the procedure.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -182,6 +182,8 @@ Private Sub FinalizeRun(ByVal tStart As Double)
     strMessage = strMessage & "Warnings: " & lngWarningCount & " (see Log sheet for details)"
     
     MsgBox strMessage, IIf(lngWarningCount > 0, vbExclamation, vbInformation), "Forecast Update Complete"
+    
+    On Error GoTo 0 ' THE FIX: Restore default error handling.
 End Sub
 
 '================================================================================================
