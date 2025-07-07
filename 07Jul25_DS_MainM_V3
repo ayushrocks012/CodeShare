@@ -3,11 +3,8 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V23.0: Professional Refactoring
-'      - Implemented major structural improvements based on code review.
-'      - Broke down large procedures into smaller, single-responsibility subroutines.
-'      - Added caching for historical sums to significantly improve performance.
-'      - Improved variable naming, commenting, and code structure for readability and maintenance.
+' V23.1: Compile Error Fix
+'      - Reinstated the missing BuildHistoryCache subroutine to resolve "Sub not defined" error.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -115,6 +112,26 @@ Private Sub BuildCachesAndMaps()
     BuildHistoryCache
     
     LogPerformance tCheckpoint, "Build Caches and Maps"
+End Sub
+
+Private Sub BuildHistoryCache()
+    Set dictHistoryCache = CreateObject("Scripting.Dictionary")
+    Dim r As Long, c As Long
+    Dim strKey As String
+    Dim dictMonthlyValues As Object
+    
+    For r = 2 To UBound(arrHistoryData, 1)
+        ' Key: Affiliate|KeyFigure|LocalItemNbr
+        strKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL) & "|" & arrHistoryData(r, HS_LOCAL_ITEM_NBR_COL)
+        
+        If Not dictHistoryCache.Exists(strKey) Then
+            Set dictMonthlyValues = CreateObject("Scripting.Dictionary")
+            For c = HS_START_OF_MONTHS_COL To UBound(arrHistoryData, 2)
+                dictMonthlyValues.Add CDate(arrHistoryData(1, c)), arrHistoryData(r, c)
+            Next c
+            dictHistoryCache.Add strKey, dictMonthlyValues
+        End If
+    Next r
 End Sub
 
 Private Sub ProcessAllAffiliates()
