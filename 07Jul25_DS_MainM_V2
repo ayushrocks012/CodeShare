@@ -3,11 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V17.1: Compile Error Fix
-'      - Corrected variable name mismatch for HISTORICAL_SALES_SHEET constant.
-'      - Implemented complete logic for handling multiple Key Figures.
-'      - Reworked main processing loop to calculate all forecasts first, then generate reports.
-'      - Final reports now correctly include separate summary sheets per Key Figure.
+' V17.2: Duplicate Declaration Fix
+'      - Resolved "Duplicate declaration in current scope" compile error in PopulateTierSheet.
+'      - Consolidated variable declarations to the top of the subroutine for clarity.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -214,6 +212,8 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Dim arrOutput() As Variant, arrHeader() As Variant
     Dim lngProductCount As Long, r As Long, c As Long, i As Long
     Dim objLifecycle As cProductLifecycle
+    Dim varKeyFigure As Variant
+    Dim dteForecastMonth As Date
     
     ' --- Get Products for this Tier ---
     Dim colProducts As Collection: Set colProducts = GetProductsForTier(strAffiliate, strTier)
@@ -230,10 +230,9 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     
     c = 8
     For i = 1 To numForecastMonths
-        Dim dteMonth As Date: dteMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
-        Dim varKeyFigure As Variant
+        dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
         For Each varKeyFigure In dictKeyFigures.Keys
-            arrHeader(c) = Format(dteMonth, "mmm-yy") & " " & CStr(varKeyFigure)
+            arrHeader(c) = Format(dteForecastMonth, "mmm-yy") & " " & CStr(varKeyFigure)
             c = c + 1
         Next varKeyFigure
     Next i
@@ -250,8 +249,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
         
         c = 8
         For i = 1 To numForecastMonths
-            Dim dteForecastMonth As Date: dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
-            Dim varKeyFigure As Variant
+            dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
             For Each varKeyFigure In dictKeyFigures.Keys
                 Dim forecastKey As String: forecastKey = CStr(varKeyFigure) & "|" & dteForecastMonth
                 Dim dblFinalForecast As Double
