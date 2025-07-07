@@ -3,9 +3,9 @@ Option Explicit
 
 '================================================================================================
 ' FORECASTING ENGINE MODULE (M_Forecasting)
-' V21.0: Final Feature Addition
-'      - Reinstated the "Phase Out Month" column in all Tier and Summary sheets.
-'      - Updated all report generation and formatting routines to handle the new column.
+' V21.1: Zero-Demand Forecast Fix
+'      - Resolved critical bug where a forecast was generated for key figures with zero demand.
+'      - Ensured the base forecast variable is explicitly reset to zero before each calculation.
 '
 ' Author:      Ayush Goyal
 ' Date:        07-Jul-2025
@@ -159,6 +159,11 @@ Private Sub CalculateAllForecastsForAffiliate(ByVal strAffiliate As String)
                     Dim dteForecastMonth As Date: dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + i - 1)
                     Dim dblDemandTierValue As Double: dblDemandTierValue = GetDemandValue(strAffiliate, objLifecycle.ForecastTier, strKeyFigure, dteForecastMonth)
                     Dim dblBaseForecast As Double
+                    
+                    ' THE FIX: Explicitly reset the forecast to 0 before calculation.
+                    ' This prevents a value from a previous key figure loop from carrying over
+                    ' if the current key figure has no historical data (dblHistTierSum = 0).
+                    dblBaseForecast = 0
                     
                     If dblHistTierSum > 0 Then
                         dblBaseForecast = (dblHistSubTierSum / dblHistTierSum) * dblDemandTierValue
