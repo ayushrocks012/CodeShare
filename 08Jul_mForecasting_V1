@@ -4,14 +4,15 @@ Option Explicit
 '================================================================================================
 ' Module:      mForecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     39.0
+' Version:     40.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V39.0:       - Renamed main public procedure from UpdateForecast_V8 to UpdateForecast
-'                for simplicity and to remove versioning from the name.
-' V38.0:       - Applied Rubberduck code inspection fixes.
+' V40.0:       - Added detailed PERFORMANCE NOTE to the ComputeBaseForecasts procedure
+'                to document the trade-off between architectural flexibility and
+'                execution speed, and to outline a potential optimization path.
+' V39.0:       - Renamed main public procedure to UpdateForecast.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -316,6 +317,30 @@ Private Sub InitializeForecastValues(ByVal strAffiliate As String)
     Next itemKey
 End Sub
 
+'================================================================================
+' PERFORMANCE NOTE (For developers and AI assistants):
+'
+' This procedure uses the cCalculationEngine class to perform the forecast.
+' This approach offers maximum architectural flexibility but comes at a
+' performance cost due to repeated object creation within the loops.
+'
+' **THE TRADE-OFF:**
+'   - CURRENT STATE (Flexible): Easy to change the calculation logic by just
+'     modifying the CALC_... constants in mConfiguration.
+'   - OPTIMIZED STATE (Fast): Would require moving the calculation logic from
+'     the engine back into this sub and using direct string concatenation for
+'     cache lookups, which is significantly faster.
+'
+' **TO OPTIMIZE FOR SPEED:**
+'   1. Remove the cCalculationEngine.
+'   2. Re-implement the logic from the engine's Execute method directly inside
+'      the loops below.
+'   3. Build the cache lookup keys using simple string concatenation instead
+'      of the cDimensionKey class (e.g., `key = item.Affiliate & "|" & ...`).
+'
+' This optimization would restore the performance of the pre-refactoring version
+' while keeping the other benefits of the new architecture.
+'================================================================================
 '---------------------------------------------------------------------------------
 ' Procedure : ComputeBaseForecasts
 ' Purpose   : The core calculation engine. It iterates through every item for
