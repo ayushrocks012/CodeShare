@@ -3,17 +3,14 @@ Option Explicit
 
 '================================================================================================
 ' Class:       cForecastItem
-' Purpose:     Represents a single, generic item to be forecasted. Acts as a pure
-'              data container. All business logic is handled by other classes.
-' Version:     2.0
+' Purpose:     Represents a single, generic item to be forecasted.
+' Version:     1.2
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V2.0:        - Refactored to be a pure data container. Moved all lifecycle logic
-'                (multipliers, successor transfers) to the new cLifecycleManager class.
-' V1.3:        - Added a public 'GetProperty' function for performance optimization.
-' V1.2:        - Applied Rubberduck code inspection fixes.
+' V1.2:        - Applied Rubberduck code inspection fixes. Corrected auto-instantiation
+'                of the successorKey object.
 ' V1.1:        - BUGFIX: Changed PhaseOutDate property to return a Variant.
 ' V1.0:        - Initial creation, replacing cProductLifecycle.
 '================================================================================================
@@ -78,11 +75,6 @@ Public Property Get StatusString() As String
     StatusString = GetStatusString(Me.Status)
 End Property
 
-'@Ignore UnusedMember
-Public Function GetProperty(ByVal Key As String) As Variant
-    GetProperty = GetProp(Key)
-End Function
-
 '================================================================================================
 '--- INITIALIZATION AND LIFECYCLE LOGIC ---
 '================================================================================================
@@ -108,6 +100,67 @@ Public Sub Init(ByVal ds As cDataSource, ByVal arrDataSource As Variant, ByVal l
     AddProp "SupersededBy", arrDataSource(lngRow, ds.GetCol("SupersededBy"))
     
     HandlePhaseOutInit ds, arrDataSource, lngRow
+End Sub
+
+Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
+    GetForecastMultiplier = 1
+
+    If GetProp("IsPhasingIn", False) And GetProp("PhaseInDate", #1/1/1900#) > 0 Then
+        If FirstDayOfMonth(dteForecastDate) < FirstDayOfMonth(GetProp("PhaseInDate")) Then
+            GetForecastMultiplier = 0
+            Exit Function
+        ElseIf FirstDayOfMonth(dteForecastDate) = FirstDayOfMonth(GetProp("PhaseInDate")) Then
+            GetForecastMultiplier = GetProp("PhaseInPercent", 0)
+            Exit Function
+        End If
+    End If
+
+    If GetProp("IsPhasingOut", False) And Me.PhaseOutDate > 0 Then
+        If FirstDayOfMonth(dteForecastDate) > FirstDayOfMonth(Me.PhaseOutDate) Then
+            GetForecastMultiplier = 0
+        ElseIf FirstDayOfMonth(dteForecastDate) = FirstDayOfMonth(Me.PhaseOutDate) Then
+            GetForecastMultiplier = GetProp("PhaseOutPercent", 1)
+        End If
+    End If
+End Function
+
+Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
+    If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
+    
+    Dim successorKey As cDimensionKey
+    Set successorKey = New cDimensionKey
+    successorKey.Add "Affiliate", Me.Affiliate
+    successorKey.Add "ISD", Me.SupersededByProductID
+    
+    If dictMap.Exists(successorKey.ToString()) Then
+        Dim objSuccessor As cForecastItem
+        Set objSuccessor = dictMap.Item(successorKey.ToString())
+        
+        objSuccessor.AddProp "IsPhasingIn", True
+        objSuccessor.AddProp "PhaseInDate", Me.PhaseOutDate
+        objSuccessor.AddProp "PhaseInPercent", 1 - Me.PhaseOutPercent
+        
+        Dim varForecastKey As Variant, dteForecastMonth As Date
+        For Each varForecastKey In Me.ForecastValues.Keys
+            dteForecastMonth = CDate(Split(varForecastKey, "|")(1))
+            
+            If FirstDayOfMonth(dteForecastMonth) = FirstDayOfMonth(Me.PhaseOutDate) Then
+                Dim dblOriginalValue As Double: dblOriginalValue = Me.ForecastValues.Item(varForecastKey)
+                Dim dblMultiplier As Double: dblMultiplier = Me.GetForecastMultiplier(dteForecastMonth)
+                Dim dblTransferValue As Double
+                
+                If dblOriginalValue > 0 Then
+                    dblTransferValue = dblOriginalValue * (1 - dblMultiplier)
+                End If
+                
+                If objSuccessor.ForecastValues.Exists(varForecastKey) Then
+                    objSuccessor.ForecastValues.Item(varForecastKey) = objSuccessor.ForecastValues.Item(varForecastKey) + dblTransferValue
+                Else
+                    objSuccessor.ForecastValues.Add varForecastKey, dblTransferValue
+                End If
+            End If
+        Next varForecastKey
+    End If
 End Sub
 
 Public Function DebugSummary() As String
@@ -165,3 +218,7 @@ Private Sub HandlePhaseOutInit(ByVal ds As cDataSource, ByVal arrDataSource As V
         AddProp "IsPhasingOut", False
     End If
 End Sub
+
+Private Function FirstDayOfMonth(ByVal d As Date) As Date
+    FirstDayOfMonth = DateSerial(Year(d), Month(d), 1)
+End Function
