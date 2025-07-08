@@ -8,16 +8,16 @@ Option Explicit
 '              forecast formula, completely decoupling the business rule from the main
 '              orchestration module (mForecasting).
 '
-' Version:     1.3
+' Version:     1.1
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
-' Change Log:
-' V1.3:        - BUGFIX: Changed the Execute method to handle cases where a forecast key
-'                already exists. It now correctly accumulates values instead of
-'                erroring, fixing the "key is already associated" error (457).
-' V1.2:        - Replaced slow 'CallByName' function with a direct property lookup.
-' V1.1:        - Applied Rubberduck code inspection fixes.
+' PERFORMANCE NOTE: This class-based approach provides excellent architectural flexibility.
+' However, because it relies on the cDimensionKey class, it introduces performance
+' overhead from repeated object creation in the main calculation loop. For large
+' datasets, this can be noticeably slower than direct string concatenation.
+' See the PERFORMANCE NOTE in mForecasting.ComputeBaseForecasts for details on
+' a potential optimization path.
 '================================================================================================
 
 ' --- Private Member Variables ---
@@ -77,7 +77,7 @@ Public Sub Execute(ByVal item As cForecastItem, _
             ' --- Get the tier's demand value from the cache ---
             Set demandKey = BuildDemandKey(item, strKeyFigure, forecastMonth)
             demandTierValue = GetValueFromCache(demandCache, demandKey.ToString())
-             
+            
             ' --- CORE FORECAST LOGIC ---
             Dim productShareOfTier As Double
             If histTierSum <> 0 Then productShareOfTier = histSubTierSum / histTierSum
@@ -85,24 +85,15 @@ Public Sub Execute(ByVal item As cForecastItem, _
             Dim baseForecast As Double
             baseForecast = productShareOfTier * demandTierValue
             
-            ' --- BUG FIX: Check if key exists before adding to prevent error 457 ---
-            Dim forecastKey As String: forecastKey = strKeyFigure & "|" & forecastMonth
-            If item.ForecastValues.Exists(forecastKey) Then
-                item.ForecastValues.Item(forecastKey) = item.ForecastValues.Item(forecastKey) + baseForecast
-            Else
-                item.ForecastValues.Add forecastKey, baseForecast
-            End If
+            ' Store the calculated value in the item object's dictionary
+            item.ForecastValues.Add strKeyFigure & "|" & forecastMonth, baseForecast
         Next monthIndex
     Else
         ' --- If tier has no history, all forecasts for this key figure are zero ---
         Dim i As Long
         For i = 1 To UBound(demandDataArray, 2) - demandMonthsCol + 1
             Dim fMonth As Date: fMonth = demandDataArray(1, demandMonthsCol + i - 1)
-            Dim fKey As String: fKey = strKeyFigure & "|" & fMonth
-            ' Also check here for safety, though less likely to be an issue
-            If Not item.ForecastValues.Exists(fKey) Then
-                item.ForecastValues.Add fKey, 0
-            End If
+            item.ForecastValues.Add strKeyFigure & "|" & fMonth, 0
         Next i
     End If
 End Sub
@@ -119,7 +110,7 @@ Private Function BuildTotalLevelKey(ByVal item As cForecastItem, ByVal strKeyFig
     Set BuildTotalLevelKey = New cDimensionKey
     With BuildTotalLevelKey
         .Add m_AffiliateDim, item.Affiliate
-        .Add m_TotalLevelDim, item.GetProperty(m_TotalLevelDim) ' e.g., item.GetProperty("Tier")
+        .Add m_TotalLevelDim, CallByName(item, m_TotalLevelDim, VbGet) ' e.g., item.ForecastTier
         .Add m_KeyFigureDim, strKeyFigure
     End With
 End Function
@@ -132,8 +123,8 @@ Private Function BuildShareLevelKey(ByVal item As cForecastItem, ByVal strKeyFig
     Set BuildShareLevelKey = New cDimensionKey
     With BuildShareLevelKey
         .Add m_AffiliateDim, item.Affiliate
-        .Add m_TotalLevelDim, item.GetProperty(m_TotalLevelDim)
-        .Add m_ShareLevelDim, item.GetProperty(m_ShareLevelDim) ' e.g., item.GetProperty("SubTier")
+        .Add m_TotalLevelDim, CallByName(item, m_TotalLevelDim, VbGet)
+        .Add m_ShareLevelDim, CallByName(item, m_ShareLevelDim, VbGet) ' e.g., item.ForecastSubTier
         .Add m_KeyFigureDim, strKeyFigure
     End With
 End Function
@@ -146,7 +137,7 @@ Private Function BuildDemandKey(ByVal item As cForecastItem, ByVal strKeyFigure 
     Set BuildDemandKey = New cDimensionKey
     With BuildDemandKey
         .Add m_AffiliateDim, item.Affiliate
-        .Add m_TotalLevelDim, item.GetProperty(m_TotalLevelDim)
+        .Add m_TotalLevelDim, CallByName(item, m_TotalLevelDim, VbGet)
         .Add m_KeyFigureDim, strKeyFigure
         .Add "Month", dteMonth
     End With
