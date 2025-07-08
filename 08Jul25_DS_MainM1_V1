@@ -4,16 +4,19 @@ Option Explicit
 '================================================================================================
 ' Module:      M_Forecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     32.0
+' Version:     32.2
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V32.2:       - CRITICAL FIX: Restored the BuildHistoryCache and BuildDataCaches
+'                subroutines that were missing, causing a "Sub or Function not defined"
+'                compile error. This version is now complete.
+' V32.1:       - Corrected CleanupMemory sub to call the public cleanup routine in M_Config.
 ' V32.0:       - Applied Rubberduck code inspection fixes.
-'              - Updated report generation to use getter functions for report configs.
-'              - Removed unused variable from ValidateSingleChain.
-' V31.1:       - CRITICAL FIX: Restored the BuildHistoryCache and BuildDataCaches subs.
 ' V31.0:       - Implemented Stage 5 Data-Driven Summary Sheets.
+' V30.0:       - Implemented Stage 4 Advanced Validation for circular references.
+' V29.0:       - Added comprehensive, AI-friendly documentation comments.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -156,90 +159,6 @@ Private Sub BuildCachesAndMaps()
     BuildDataCaches   ' For high-speed calculation lookups.
     
     LogPerformance tCheckpoint, "Build Caches and Maps"
-End Sub
-
-'---------------------------------------------------------------------------------
-' Procedure : BuildHistoryCache
-' Purpose   : Builds a cache (dictHistoryCache) for monthly historical data.
-'             This cache is structured for reporting, to easily retrieve the
-'             historical value for a specific product in a specific month.
-'             Key: Affiliate|KeyFigure|LocalItemNbr -> Value: Dictionary(Month -> Value)
-'---------------------------------------------------------------------------------
-Private Sub BuildHistoryCache()
-    Set dictHistoryCache = CreateObject("Scripting.Dictionary")
-    Dim r As Long, c As Long
-    Dim strKey As String
-    Dim dictMonthlyValues As Object
-    
-    For r = 2 To UBound(arrHistoryData, 1)
-        ' Key: Affiliate|KeyFigure|LocalItemNbr
-        strKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL) & "|" & arrHistoryData(r, HS_LOCAL_ITEM_NBR_COL)
-        
-        If Not dictHistoryCache.Exists(strKey) Then
-            Set dictMonthlyValues = CreateObject("Scripting.Dictionary")
-            For c = HS_START_OF_MONTHS_COL To UBound(arrHistoryData, 2)
-                dictMonthlyValues.Add CDate(arrHistoryData(1, c)), arrHistoryData(r, c)
-            Next c
-            dictHistoryCache.Add strKey, dictMonthlyValues
-        End If
-    Next r
-End Sub
-
-'---------------------------------------------------------------------------------
-' Procedure : BuildDataCaches
-' Purpose   : Builds high-performance caches for historical sums and demand
-'             values by iterating through the source data only once. This is
-'             a critical optimization to speed up the main calculation loop.
-'---------------------------------------------------------------------------------
-Private Sub BuildDataCaches()
-    Dim r As Long, c As Long
-    Dim dblSum As Double
-    Dim strSubTierKey As String, strTierKey As String, strDemandKey As String
-    
-    ' --- Build Historical Sum Cache ---
-    ' This cache stores the total historical sales for a given combination
-    ' of Affiliate, Tier, Sub-Tier, and Key Figure.
-    Set dictHistSumCache = CreateObject("Scripting.Dictionary")
-    dictHistSumCache.CompareMode = vbTextCompare
-    For r = 2 To UBound(arrHistoryData, 1)
-        ' Key for the specific sub-tier
-        strSubTierKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_TIER_COL) & "|" & _
-                        arrHistoryData(r, HS_SUB_TIER_COL) & "|" & arrHistoryData(r, HS_KEY_FIGURE_COL)
-        
-        ' Key for the overall tier (blank sub-tier)
-        strTierKey = arrHistoryData(r, HS_AFFILIATE_COL) & "|" & arrHistoryData(r, HS_TIER_COL) & "|" & _
-                     "|" & arrHistoryData(r, HS_KEY_FIGURE_COL)
-                 
-        dblSum = 0
-        For c = HS_START_OF_MONTHS_COL To UBound(arrHistoryData, 2)
-            If IsNumeric(arrHistoryData(r, c)) Then
-                dblSum = dblSum + CDbl(arrHistoryData(r, c))
-            End If
-        Next c
-        
-        ' Add the sum to both keys. The .Item property will add if not exists, or update if it does.
-        dictHistSumCache.Item(strSubTierKey) = dictHistSumCache.Item(strSubTierKey) + dblSum
-        dictHistSumCache.Item(strTierKey) = dictHistSumCache.Item(strTierKey) + dblSum
-    Next r
-
-    ' --- Build Demand Forecast Cache ---
-    ' This cache stores the future demand value for a given combination
-    ' of Affiliate, Tier, Key Figure, and Month.
-    Set dictDemandCache = CreateObject("Scripting.Dictionary")
-    dictDemandCache.CompareMode = vbTextCompare
-    For r = 2 To UBound(arrDemandData, 1)
-        For c = DF_START_OF_MONTHS_COL To UBound(arrDemandData, 2)
-            ' Key: Affiliate|Tier|KeyFigure|Month
-            strDemandKey = arrDemandData(r, DF_AFFILIATE_COL) & "|" & arrDemandData(r, DF_TIER_COL) & "|" & _
-                           arrDemandData(r, DF_KEY_FIGURE_COL) & "|" & CDate(arrDemandData(1, c))
-            
-            If IsNumeric(arrDemandData(r, c)) Then
-                dictDemandCache.Add strDemandKey, CDbl(arrDemandData(r, c))
-            Else
-                dictDemandCache.Add strDemandKey, 0
-            End If
-        Next c
-    Next r
 End Sub
 
 '---------------------------------------------------------------------------------
@@ -1095,9 +1014,11 @@ Private Sub CleanupMemory()
     Set dictHistoryCache = Nothing
     Set dictHistSumCache = Nothing
     Set dictDemandCache = Nothing
-    Set pTierReportCols = Nothing
-    Set pSummaryReportCols = Nothing
     Set dictValidatedChains = Nothing
+    
+    ' Call the public cleanup routine in the config module.
+    CleanupAllReportConfigs
+    
     Erase arrStatusData
     Erase arrHistoryData
     Erase arrDemandData
