@@ -2,18 +2,17 @@
 Option Explicit
 
 '================================================================================================
-' Module:      M_Config
+' Module:      mConfig
 ' Purpose:     This module defines all global constants and utility functions for the project.
 '              It acts as a central control panel for sheet names, column positions,
 '              and business logic enumerations.
-' Version:     35.0
+' Version:     36.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V36.0:       - Renamed module to mConfig for naming consistency with class modules.
 ' V35.0:       - STAGE 4 REFACTOR: Isolate Calculation Logic.
-'              - Added CALC_... constants to define the dimension names used by the
-'                new cCalculationEngine, making the core formula configurable.
 ' V34.0:       - STAGE 2 REFACTOR: Implement Dimension Key Pattern.
 '================================================================================================
 
@@ -83,7 +82,7 @@ End Sub
 '---------------------------------------------------------------------------------
 ' Procedure : CleanupAllConfigs
 ' Purpose   : A public routine to release all configuration objects from memory.
-'             Called by M_Forecasting during its cleanup phase.
+'             Called by mForecasting during its cleanup phase.
 '---------------------------------------------------------------------------------
 Public Sub CleanupAllConfigs()
     ' --- Cleanup Report Configs ---
