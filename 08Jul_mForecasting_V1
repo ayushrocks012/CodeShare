@@ -4,15 +4,14 @@ Option Explicit
 '================================================================================================
 ' Module:      mForecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     37.0
+' Version:     38.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V37.0:       - Renamed module to mForecasting for naming consistency with class modules.
-' V36.1:       - BUGFIX: Corrected key creation in BuildDataCaches to use shared
-'                dimension name constants, fixing the blank forecast issue.
-' V36.0:       - STAGE 4 REFACTOR: Isolate Calculation Logic.
+' V38.0:       - Applied Rubberduck code inspection fixes. Corrected all instances
+'                of object auto-instantiation to use explicit Dim/Set pattern.
+' V37.0:       - Renamed module to mForecasting.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -37,6 +36,7 @@ Private dictValidatedChains As Object
 ' 1. MAIN PUBLIC ORCHESTRATOR
 '================================================================================================
 
+'@Ignore UnusedMember
 '---------------------------------------------------------------------------------
 ' Procedure : UpdateForecast_V8
 ' Purpose   : This is the main public entry point for the entire forecasting process.
@@ -154,9 +154,10 @@ Private Sub BuildHistoryCache()
     Dim r As Long, c As Long
     Dim strKey As String
     Dim dictMonthlyValues As Object
+    Dim key As cDimensionKey
     
     For r = 2 To UBound(arrHistoryData, 1)
-        Dim key As New cDimensionKey
+        Set key = New cDimensionKey
         key.Add "Affiliate", arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
         key.Add "KeyFigure", arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
         key.Add "LocalItemNbr", arrHistoryData(r, g_dsHistory.GetCol("LocalItemNbr"))
@@ -325,9 +326,10 @@ End Sub
 Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
     Dim forecastItem As cForecastItem
     Dim itemKey As Variant, keyFigure As Variant
+    Dim engine As cCalculationEngine
     
     ' --- Create and configure the calculation engine ---
-    Dim engine As New cCalculationEngine
+    Set engine = New cCalculationEngine
     engine.AffiliateDim = CALC_AFFILIATE_DIM
     engine.TotalLevelDim = CALC_TOTAL_LEVEL_DIM
     engine.ShareLevelDim = CALC_SHARE_LEVEL_DIM
@@ -421,6 +423,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Dim colProducts As Collection
     Dim numHistMonths As Long, numFcstMonths As Long
     Dim outputRowIndex As Long, subtotalStartRow As Long
+    Dim histKey As cDimensionKey
     
     Set colProducts = GetItemsForTier(strAffiliate, strTier)
     If colProducts.Count = 0 Then Exit Sub
@@ -457,7 +460,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
                 End If
             Next colIndex
             
-            Dim histKey As New cDimensionKey
+            Set histKey = New cDimensionKey
             histKey.Add "Affiliate", forecastItem.Affiliate
             histKey.Add "KeyFigure", CStr(varKeyFigure)
             histKey.Add "LocalItemNbr", forecastItem.LocalItemNbr
@@ -659,10 +662,12 @@ End Sub
 '---------------------------------------------------------------------------------
 Private Function BuildForecastItemMap(ByVal arrStatus As Variant) As Object
     Dim dictMap As Object: Set dictMap = CreateObject("Scripting.Dictionary")
-    Dim rowIndex As Long, obj As cForecastItem
+    Dim rowIndex As Long
+    Dim obj As cForecastItem
+    Dim key As cDimensionKey
     
     For rowIndex = 2 To UBound(arrStatus, 1)
-        Dim key As New cDimensionKey
+        Set key = New cDimensionKey
         key.Add "Affiliate", arrStatus(rowIndex, g_dsProductStatus.GetCol("Affiliate"))
         key.Add "ISD", arrStatus(rowIndex, g_dsProductStatus.GetCol("ISD"))
         Dim strKey As String: strKey = key.ToString()
@@ -705,7 +710,8 @@ End Sub
 Private Sub ValidateSingleChain(ByVal startItem As cForecastItem)
     Dim pathTracker As Object: Set pathTracker = CreateObject("Scripting.Dictionary")
     Dim currentItem As cForecastItem: Set currentItem = startItem
-    Dim successorKey As cDimensionKey, strSuccessorKey As String, chainIsValid As Boolean: chainIsValid = True
+    Dim successorKey As cDimensionKey
+    Dim strSuccessorKey As String, chainIsValid As Boolean: chainIsValid = True
     
     Do While True
         If pathTracker.Exists(currentItem.ISD) Then
@@ -738,8 +744,9 @@ Private Sub ValidateSingleChain(ByVal startItem As cForecastItem)
     Loop
     
     Dim pathKey As Variant
+    Dim itemMapKey As cDimensionKey
     For Each pathKey In pathTracker.Keys
-        Dim itemMapKey As New cDimensionKey
+        Set itemMapKey = New cDimensionKey
         itemMapKey.Add "Affiliate", startItem.Affiliate
         itemMapKey.Add "ISD", pathKey
         
