@@ -11,9 +11,9 @@ Option Explicit
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V34.0:       - STAGE 2 REFACTOR: Implemented Dimension Key pattern.
-'              - Marked the old `BuildCompositeKey` function as deprecated. The new
-'                `cDimensionKey` class is now the standard for creating cache keys.
+' V34.0:       - STAGE 2 REFACTOR: Implement Dimension Key Pattern.
+'              - Removed the obsolete BuildCompositeKey function. Its functionality
+'                is now handled by the new cDimensionKey class.
 ' V33.0:       - STAGE 1 REFACTOR: Abstracted Data Sources.
 '================================================================================================
 
@@ -221,16 +221,6 @@ Private Sub InitializeDemandSource()
         .StartOfMonthsCol = 4
     End With
 End Sub
-
-'---------------------------------------------------------------------------------
-' Procedure : BuildCompositeKey
-' Purpose   : DEPRECATED. This function is obsolete and will be removed in a future
-'             version. Use the cDimensionKey class to build dictionary keys instead.
-'---------------------------------------------------------------------------------
-Public Function BuildCompositeKey(ByVal keyPart1 As String, ByVal keyPart2 As String) As String
-    Const SEPARATOR As String = "|"
-    BuildCompositeKey = Trim$(keyPart1) & SEPARATOR & Trim$(keyPart2)
-End Function
 
 '---------------------------------------------------------------------------------
 ' Procedure : GetStatusString
