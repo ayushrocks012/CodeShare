@@ -6,16 +6,16 @@ Option Explicit
 ' Purpose:     This module defines all global constants and utility functions for the project.
 '              It acts as a central control panel for sheet names, column positions,
 '              and business logic enumerations.
-' Version:     31.0
+' Version:     32.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V32.0:       - Applied Rubberduck code inspection fixes.
+'              - Improved encapsulation for report collections (gTierReportCols, etc.)
+'                by making them private and adding public "getter" functions.
+'              - Removed unused constants (HS_DESC_COL, HS_ISD_COL).
 ' V31.0:       - Implemented Stage 5 Data-Driven Summary Sheets.
-'              - Added gSummaryReportCols collection and its initialization routine.
-'              - The entire report generation process is now configurable from this module.
-' V29.0:       - Added comprehensive, AI-friendly documentation comments.
-' V28.1:       - Replaced ReportColumn UDT with cReportColumn class to fix compile error.
 '================================================================================================
 
 ' --- DEBUGGING & LOGGING FLAGS ---
@@ -27,10 +27,9 @@ Public Const SHEET_DEMAND As String = "Demand Forecast"
 Public Const SHEET_HISTORY As String = "Historical Sales"
 Public Const SHEET_LOG As String = "Log"
 
-' --- REPORT CONFIGURATION ---
-' Global collections to hold the configuration for the report columns.
-Public gTierReportCols As Collection
-Public gSummaryReportCols As Collection
+' --- REPORT CONFIGURATION (Private for Encapsulation) ---
+Private pTierReportCols As Collection
+Private pSummaryReportCols As Collection
 
 ' --- ENUMERATIONS ---
 Public Enum ProductStatus
@@ -68,8 +67,7 @@ Public Const HS_TIER_COL As Long = 2
 Public Const HS_SUB_TIER_COL As Long = 3
 Public Const HS_KEY_FIGURE_COL As Long = 4
 Public Const HS_LOCAL_ITEM_NBR_COL As Long = 5
-Public Const HS_DESC_COL As Long = 6
-Public Const HS_ISD_COL As Long = 7
+' Unused constants removed based on Rubberduck inspection.
 Public Const HS_START_OF_MONTHS_COL As Long = 8
 
 '-- 'Demand Forecast' Sheet Columns --
@@ -93,42 +91,62 @@ Public Sub InitializeAllReportConfigs()
 End Sub
 
 '---------------------------------------------------------------------------------
+' Procedure : GetTierReportCols
+' Purpose   : Provides safe, read-only public access to the private Tier Report
+'             configuration collection.
+' @return  : Collection - The configured collection of cReportColumn objects.
+'---------------------------------------------------------------------------------
+Public Function GetTierReportCols() As Collection
+    Set GetTierReportCols = pTierReportCols
+End Function
+
+'---------------------------------------------------------------------------------
+' Procedure : GetSummaryReportCols
+' Purpose   : Provides safe, read-only public access to the private Summary Report
+'             configuration collection.
+' @return  : Collection - The configured collection of cReportColumn objects.
+'---------------------------------------------------------------------------------
+Public Function GetSummaryReportCols() As Collection
+    Set GetSummaryReportCols = pSummaryReportCols
+End Function
+
+'---------------------------------------------------------------------------------
 ' Procedure : InitializeTierReportConfig
-' Purpose   : Populates the global collection (gTierReportCols) that defines the
+' Purpose   : Populates the private collection (pTierReportCols) that defines the
 '             structure of the detailed Tier report.
 '---------------------------------------------------------------------------------
 Private Sub InitializeTierReportConfig()
-    Set gTierReportCols = New Collection
+    Set pTierReportCols = New Collection
     
     ' Add each column by defining its header, source property, width, and format.
-    AddReportColumn gTierReportCols, "Key Figures", "KeyFigure", 25, "@"
-    AddReportColumn gTierReportCols, "Affiliate", "Affiliate", 10, "@"
-    AddReportColumn gTierReportCols, "Forecast Tier", "ForecastTier", 30, "@"
-    AddReportColumn gTierReportCols, "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
-    AddReportColumn gTierReportCols, "Local Item Nbr", "LocalItemNbr", 18, "@"
-    AddReportColumn gTierReportCols, "Desc", "Description", 40, "@"
-    AddReportColumn gTierReportCols, "I-S-D", "ISD", 15, "@"
-    AddReportColumn gTierReportCols, "Status", "StatusString", 20, "@"
-    AddReportColumn gTierReportCols, "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
+    AddReportColumn pTierReportCols, "Key Figures", "KeyFigure", 25, "@"
+    AddReportColumn pTierReportCols, "Affiliate", "Affiliate", 10, "@"
+    AddReportColumn pTierReportCols, "Forecast Tier", "ForecastTier", 30, "@"
+    AddReportColumn pTierReportCols, "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
+    AddReportColumn pTierReportCols, "Local Item Nbr", "LocalItemNbr", 18, "@"
+    AddReportColumn pTierReportCols, "Desc", "Description", 40, "@"
+    AddReportColumn pTierReportCols, "I-S-D", "ISD", 15, "@"
+    AddReportColumn pTierReportCols, "Status", "StatusString", 20, "@"
+    AddReportColumn pTierReportCols, "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
 End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : InitializeSummaryReportConfig
-' Purpose   : Populates the global collection (gSummaryReportCols) that defines
+' Purpose   : Populates the private collection (pSummaryReportCols) that defines
 '             the structure of the Summary report.
 '---------------------------------------------------------------------------------
 Private Sub InitializeSummaryReportConfig()
-    Set gSummaryReportCols = New Collection
+    Set pSummaryReportCols = New Collection
     
     ' The summary sheet has a slightly different layout (no Key Figure column).
-    AddReportColumn gSummaryReportCols, "Affiliate", "Affiliate", 10, "@"
-    AddReportColumn gSummaryReportCols, "Forecast Tier", "ForecastTier", 30, "@"
-    AddReportColumn gSummaryReportCols, "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
-    AddReportColumn gSummaryReportCols, "Local Item Nbr", "LocalItemNbr", 18, "@"
-    AddReportColumn gSummaryReportCols, "Desc", "Description", 40, "@"
-    AddReportColumn gSummaryReportCols, "I-S-D", "ISD", 15, "@"
-    AddReportColumn gSummaryReportCols, "Status", "StatusString", 20, "@"
-    AddReportColumn gSummaryReportCols, "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
+    AddReportColumn pSummaryReportCols, "Affiliate", "Affiliate", 10, "@"
+    AddReportColumn pSummaryReportCols, "Forecast Tier", "ForecastTier", 30, "@"
+    AddReportColumn pSummaryReportCols, "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
+    AddReportColumn pSummaryReportCols, "Local Item Nbr", "LocalItemNbr", 18, "@"
+    AddReportColumn pSummaryReportCols, "Desc", "Description", 40, "@"
+    AddReportColumn pSummaryReportCols, "I-S-D", "ISD", 15, "@"
+    AddReportColumn pSummaryReportCols, "Status", "StatusString", 20, "@"
+    AddReportColumn pSummaryReportCols, "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
 End Sub
 
 '---------------------------------------------------------------------------------
