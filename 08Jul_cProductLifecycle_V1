@@ -10,10 +10,9 @@ Option Explicit
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V31.0:       - STAGE 2 REFACTOR: Implemented Dimension Key pattern.
+' V31.0:       - STAGE 2 REFACTOR: Implement Dimension Key Pattern.
 '              - Updated LinkAndTransferSuccessorForecast to use the new cDimensionKey
-'                class for finding the successor product, removing the dependency
-'                on the deprecated BuildCompositeKey function.
+'                class for creating the successor lookup key.
 ' V30.0:       - STAGE 1 REFACTOR: Abstracted Data Sources.
 '================================================================================================
 
@@ -178,15 +177,16 @@ Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
     ' Exit if this product is not phasing out or has no successor defined.
     If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
     
-    ' Build the key to find the successor product in the master dictionary using the new class.
-    Dim successorKey As cDimensionKey
-    Set successorKey = New cDimensionKey
+    ' Build the key to find the successor product using the new cDimensionKey class.
+    Dim successorKey As New cDimensionKey
     successorKey.Add "Affiliate", Me.Affiliate
     successorKey.Add "ISD", Me.SupersededByProductID
     
-    If dictMap.Exists(successorKey.KeyString) Then
+    Dim strSuccessorKey As String: strSuccessorKey = successorKey.ToString()
+    
+    If dictMap.Exists(strSuccessorKey) Then
         Dim objSuccessor As cProductLifecycle
-        Set objSuccessor = dictMap.Item(successorKey.KeyString)
+        Set objSuccessor = dictMap.Item(strSuccessorKey)
         
         ' --- Configure the successor product for phase-in ---
         objSuccessor.IsPhasingIn = True
