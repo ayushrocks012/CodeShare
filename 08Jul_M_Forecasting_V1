@@ -4,16 +4,16 @@ Option Explicit
 '================================================================================================
 ' Module:      M_Forecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     33.0
+' Version:     34.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V34.0:       - STAGE 2 REFACTOR: Implement Dimension Key Pattern.
+'              - Replaced all manual, pipe-delimited key creation with the new
+'                cDimensionKey class. This affects all cache creation and lookup
+'                procedures, making them more robust and scalable.
 ' V33.0:       - STAGE 1 REFACTOR: Abstracted Data Sources.
-'              - Updated all data access to use the global cDataSource objects
-'                (e.g., g_dsProductStatus) instead of hard-coded column constants.
-'              - Changed calls from InitializeAllReportConfigs to InitializeAllConfigs.
-' V32.2:       - CRITICAL FIX: Restored missing BuildHistoryCache and BuildDataCaches subs.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -172,8 +172,11 @@ Private Sub BuildHistoryCache()
     Dim dictMonthlyValues As Object
     
     For r = 2 To UBound(arrHistoryData, 1)
-        ' Key: Affiliate|KeyFigure|LocalItemNbr
-        strKey = arrHistoryData(r, g_dsHistory.GetCol("Affiliate")) & "|" & arrHistoryData(r, g_dsHistory.GetCol("KeyFigure")) & "|" & arrHistoryData(r, g_dsHistory.GetCol("LocalItemNbr"))
+        Dim key As New cDimensionKey
+        key.Add "Affiliate", arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
+        key.Add "KeyFigure", arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
+        key.Add "LocalItemNbr", arrHistoryData(r, g_dsHistory.GetCol("LocalItemNbr"))
+        strKey = key.ToString()
         
         If Not dictHistoryCache.Exists(strKey) Then
             Set dictMonthlyValues = CreateObject("Scripting.Dictionary")
@@ -194,21 +197,24 @@ End Sub
 Private Sub BuildDataCaches()
     Dim r As Long, c As Long
     Dim dblSum As Double
-    Dim strSubTierKey As String, strTierKey As String, strDemandKey As String
+    Dim subTierKey As cDimensionKey, tierKey As cDimensionKey, demandKey As cDimensionKey
     
     ' --- Build Historical Sum Cache ---
-    ' This cache stores the total historical sales for a given combination
-    ' of Affiliate, Tier, Sub-Tier, and Key Figure.
     Set dictHistSumCache = CreateObject("Scripting.Dictionary")
     dictHistSumCache.CompareMode = vbTextCompare
     For r = 2 To UBound(arrHistoryData, 1)
         ' Key for the specific sub-tier
-        strSubTierKey = arrHistoryData(r, g_dsHistory.GetCol("Affiliate")) & "|" & arrHistoryData(r, g_dsHistory.GetCol("Tier")) & "|" & _
-                        arrHistoryData(r, g_dsHistory.GetCol("SubTier")) & "|" & arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
+        Set subTierKey = New cDimensionKey
+        subTierKey.Add "Affiliate", arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
+        subTierKey.Add "Tier", arrHistoryData(r, g_dsHistory.GetCol("Tier"))
+        subTierKey.Add "SubTier", arrHistoryData(r, g_dsHistory.GetCol("SubTier"))
+        subTierKey.Add "KeyFigure", arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
         
-        ' Key for the overall tier (blank sub-tier)
-        strTierKey = arrHistoryData(r, g_dsHistory.GetCol("Affiliate")) & "|" & arrHistoryData(r, g_dsHistory.GetCol("Tier")) & "|" & _
-                     "|" & arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
+        ' Key for the overall tier (SubTier dimension is omitted)
+        Set tierKey = New cDimensionKey
+        tierKey.Add "Affiliate", arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
+        tierKey.Add "Tier", arrHistoryData(r, g_dsHistory.GetCol("Tier"))
+        tierKey.Add "KeyFigure", arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
                  
         dblSum = 0
         For c = g_dsHistory.StartOfMonthsCol To UBound(arrHistoryData, 2)
@@ -218,25 +224,25 @@ Private Sub BuildDataCaches()
         Next c
         
         ' Add the sum to both keys. The .Item property will add if not exists, or update if it does.
-        dictHistSumCache.Item(strSubTierKey) = dictHistSumCache.Item(strSubTierKey) + dblSum
-        dictHistSumCache.Item(strTierKey) = dictHistSumCache.Item(strTierKey) + dblSum
+        dictHistSumCache.Item(subTierKey.ToString()) = dictHistSumCache.Item(subTierKey.ToString()) + dblSum
+        dictHistSumCache.Item(tierKey.ToString()) = dictHistSumCache.Item(tierKey.ToString()) + dblSum
     Next r
 
     ' --- Build Demand Forecast Cache ---
-    ' This cache stores the future demand value for a given combination
-    ' of Affiliate, Tier, Key Figure, and Month.
     Set dictDemandCache = CreateObject("Scripting.Dictionary")
     dictDemandCache.CompareMode = vbTextCompare
     For r = 2 To UBound(arrDemandData, 1)
         For c = g_dsDemand.StartOfMonthsCol To UBound(arrDemandData, 2)
-            ' Key: Affiliate|Tier|KeyFigure|Month
-            strDemandKey = arrDemandData(r, g_dsDemand.GetCol("Affiliate")) & "|" & arrDemandData(r, g_dsDemand.GetCol("Tier")) & "|" & _
-                           arrDemandData(r, g_dsDemand.GetCol("KeyFigure")) & "|" & CDate(arrDemandData(1, c))
+            Set demandKey = New cDimensionKey
+            demandKey.Add "Affiliate", arrDemandData(r, g_dsDemand.GetCol("Affiliate"))
+            demandKey.Add "Tier", arrDemandData(r, g_dsDemand.GetCol("Tier"))
+            demandKey.Add "KeyFigure", arrDemandData(r, g_dsDemand.GetCol("KeyFigure"))
+            demandKey.Add "Month", CDate(arrDemandData(1, c))
             
             If IsNumeric(arrDemandData(r, c)) Then
-                dictDemandCache.Add strDemandKey, CDbl(arrDemandData(r, c))
+                dictDemandCache.Add demandKey.ToString(), CDbl(arrDemandData(r, c))
             Else
-                dictDemandCache.Add strDemandKey, 0
+                dictDemandCache.Add demandKey.ToString(), 0
             End If
         Next c
     Next r
@@ -378,39 +384,50 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
             For Each keyFigure In dictKeyFigures.Keys
                 Dim strKeyFigure As String: strKeyFigure = CStr(keyFigure)
                 Dim histSubTierSum As Double, histTierSum As Double
-                Dim tierSumKey As String, subTierSumKey As String
+                Dim tierSumKey As cDimensionKey, subTierSumKey As cDimensionKey
                 
                 ' --- Get historical sums directly from the high-speed cache ---
-                tierSumKey = strAffiliate & "|" & productLifecycle.ForecastTier & "||" & strKeyFigure
-                subTierSumKey = strAffiliate & "|" & productLifecycle.ForecastTier & "|" & productLifecycle.ForecastSubTier & "|" & strKeyFigure
+                Set tierSumKey = New cDimensionKey
+                tierSumKey.Add "Affiliate", strAffiliate
+                tierSumKey.Add "Tier", productLifecycle.ForecastTier
+                tierSumKey.Add "KeyFigure", strKeyFigure
                 
-                histTierSum = GetHistoricalSumFromCache(tierSumKey)
+                Set subTierSumKey = New cDimensionKey
+                subTierSumKey.Add "Affiliate", strAffiliate
+                subTierSumKey.Add "Tier", productLifecycle.ForecastTier
+                subTierSumKey.Add "SubTier", productLifecycle.ForecastSubTier
+                subTierSumKey.Add "KeyFigure", strKeyFigure
+                
+                histTierSum = GetHistoricalSumFromCache(tierSumKey.ToString())
                 
                 ' --- Only proceed if the overall tier has a sales history ---
                 If histTierSum > 0 Then
-                    histSubTierSum = GetHistoricalSumFromCache(subTierSumKey)
+                    histSubTierSum = GetHistoricalSumFromCache(subTierSumKey.ToString())
                     
                     ' Loop through all future months defined in the Demand Forecast sheet.
                     For monthIndex = 1 To UBound(arrDemandData, 2) - g_dsDemand.StartOfMonthsCol + 1
                         forecastMonth = arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1)
                         Dim demandTierValue As Double
-                        Dim demandKey As String
+                        Dim demandKey As cDimensionKey
                         
                         ' --- Get the overall tier's demand value from the high-speed cache ---
-                        demandKey = strAffiliate & "|" & productLifecycle.ForecastTier & "|" & strKeyFigure & "|" & forecastMonth
-                        demandTierValue = GetDemandValueFromCache(demandKey)
+                        Set demandKey = New cDimensionKey
+                        demandKey.Add "Affiliate", strAffiliate
+                        demandKey.Add "Tier", productLifecycle.ForecastTier
+                        demandKey.Add "KeyFigure", strKeyFigure
+                        demandKey.Add "Month", forecastMonth
+                        
+                        demandTierValue = GetDemandValueFromCache(demandKey.ToString())
                         
                         ' --- CORE FORECAST LOGIC ---
-                        ' 1. Calculate the product's historical market share within its tier.
                         Dim productShareOfTier As Double
                         If histTierSum <> 0 Then productShareOfTier = histSubTierSum / histTierSum
 
-                        ' 2. Apply this historical share to the tier's overall future demand forecast
-                        '    to calculate the base forecast for this specific product.
                         Dim baseForecast As Double
                         baseForecast = productShareOfTier * demandTierValue
                         
                         ' Store the calculated value in the product object.
+                        ' The key for this dictionary is still simple as it's per-product.
                         productLifecycle.ForecastValues.Add strKeyFigure & "|" & forecastMonth, baseForecast
                     Next monthIndex
                 Else
@@ -553,18 +570,22 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
                 If propName = "KeyFigure" Then
                     arrOutput(outputRowIndex, colIndex) = CStr(varKeyFigure)
                 Else
-                    ' Use CallByName to get the value from the object property specified in the config.
                     arrOutput(outputRowIndex, colIndex) = CallByName(productLifecycle, propName, VbGet)
                 End If
             Next colIndex
             
             ' --- Populate Historical Data ---
-            Dim histKey As String: histKey = productLifecycle.Affiliate & "|" & CStr(varKeyFigure) & "|" & productLifecycle.LocalItemNbr
+            Dim histKey As New cDimensionKey
+            histKey.Add "Affiliate", productLifecycle.Affiliate
+            histKey.Add "KeyFigure", CStr(varKeyFigure)
+            histKey.Add "LocalItemNbr", productLifecycle.LocalItemNbr
+            Dim strHistKey As String: strHistKey = histKey.ToString()
+            
             For monthIndex = 1 To numHistMonths
                 Dim dteHistMonth As Date: dteHistMonth = arrHistoryData(1, g_dsHistory.StartOfMonthsCol + monthIndex - 1)
-                If dictHistoryCache.Exists(histKey) Then
-                    If dictHistoryCache.Item(histKey).Exists(dteHistMonth) Then
-                        arrOutput(outputRowIndex, staticColCount + monthIndex) = dictHistoryCache.Item(histKey).Item(dteHistMonth)
+                If dictHistoryCache.Exists(strHistKey) Then
+                    If dictHistoryCache.Item(strHistKey).Exists(dteHistMonth) Then
+                        arrOutput(outputRowIndex, staticColCount + monthIndex) = dictHistoryCache.Item(strHistKey).Item(dteHistMonth)
                     End If
                 End If
             Next monthIndex
@@ -574,7 +595,6 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
                 Dim dteFcstMonth As Date: dteFcstMonth = arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1)
                 Dim fcstKey As String: fcstKey = CStr(varKeyFigure) & "|" & dteFcstMonth
                 If productLifecycle.ForecastValues.Exists(fcstKey) Then
-                    ' Apply the final lifecycle multiplier to the base forecast.
                     Dim baseValue As Double: baseValue = productLifecycle.ForecastValues.Item(fcstKey)
                     Dim finalValue As Double: finalValue = baseValue * productLifecycle.GetForecastMultiplier(dteFcstMonth)
                     arrOutput(outputRowIndex, staticColCount + numHistMonths + monthIndex) = finalValue
@@ -590,7 +610,6 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
         For colIndex = staticColCount + 1 To UBound(arrOutput, 2)
             Dim monthlyTotal As Double: monthlyTotal = 0
             Dim productRow As Long
-            ' Sum up all the values in the block above.
             For productRow = subtotalStartRow To outputRowIndex - 1
                 If IsNumeric(arrOutput(productRow, colIndex)) Then
                     monthlyTotal = monthlyTotal + CDbl(arrOutput(productRow, colIndex))
@@ -681,8 +700,7 @@ End Sub
 '---------------------------------------------------------------------------------
 ' Procedure : PopulateSummarySheets
 ' Purpose   : Populates a single "Summary" sheet for a given Key Figure with
-'             all relevant product data and final forecast values. This is now a
-'             fully data-driven procedure using the global report configuration.
+'             all relevant product data and final forecast values.
 ' @param   : wbReport As Workbook - The report workbook.
 ' @param   : strAffiliate As String - The current affiliate.
 ' @param   : dictMap As Object - Dictionary mapping summary sheet names to key figures.
@@ -753,7 +771,6 @@ End Sub
 '---------------------------------------------------------------------------------
 ' Procedure : FormatSummarySheet
 ' Purpose   : Applies all professional formatting to a completed Summary sheet.
-'             This is also data-driven via the global report configuration.
 ' @param   : ws As Worksheet - The worksheet to format.
 '---------------------------------------------------------------------------------
 Private Sub FormatSummarySheet(ByVal ws As Worksheet)
@@ -809,8 +826,6 @@ End Sub
 '---------------------------------------------------------------------------------
 ' Procedure : BuildLifecycleMap
 ' Purpose   : Creates the master dictionary of all product objects (cProductLifecycle).
-'             It iterates through the product status data, creates an object for
-'             each unique product, and adds it to the dictionary.
 ' @param   : arrStatus As Variant - The array of product status data.
 ' @return  : Object - The completed dictionary of product objects.
 '---------------------------------------------------------------------------------
@@ -819,10 +834,13 @@ Private Function BuildLifecycleMap(ByVal arrStatus As Variant) As Object
     Dim rowIndex As Long, obj As cProductLifecycle
     
     For rowIndex = 2 To UBound(arrStatus, 1)
-        Dim strKey As String: strKey = BuildCompositeKey(arrStatus(rowIndex, g_dsProductStatus.GetCol("Affiliate")), arrStatus(rowIndex, g_dsProductStatus.GetCol("ISD")))
+        Dim key As New cDimensionKey
+        key.Add "Affiliate", arrStatus(rowIndex, g_dsProductStatus.GetCol("Affiliate"))
+        key.Add "ISD", arrStatus(rowIndex, g_dsProductStatus.GetCol("ISD"))
+        Dim strKey As String: strKey = key.ToString()
+        
         If Not dictMap.Exists(strKey) Then
             Set obj = New cProductLifecycle
-            ' Pass the data source config object to the Init method
             obj.Init g_dsProductStatus, arrStatus, rowIndex
             dictMap.Add strKey, obj
         Else
@@ -836,8 +854,7 @@ End Function
 '---------------------------------------------------------------------------------
 ' Procedure : ValidateLifecycleLinks
 ' Purpose   : Iterates through all product objects to validate the integrity of
-'             their successor links, checking for broken links, self-references,
-'             and complex circular references. Logs warnings for any issues found.
+'             their successor links.
 '---------------------------------------------------------------------------------
 Private Sub ValidateLifecycleLinks()
     Dim tCheckpoint As Double: tCheckpoint = Timer
@@ -845,13 +862,11 @@ Private Sub ValidateLifecycleLinks()
     Dim currentProduct As cProductLifecycle
     
     WriteToLog ltInfo, "ValidateLifecycleLinks", "Starting validation of successor product links..."
-    ' Initialize a cache to store the results of chain validations to avoid redundant checks.
     Set dictValidatedChains = CreateObject("Scripting.Dictionary")
     
     For Each productKey In dictLifecycleMap.Keys
         Set currentProduct = dictLifecycleMap.Item(productKey)
         
-        ' Check the chain starting from this product, but only if it hasn't been validated already.
         If Not dictValidatedChains.Exists(productKey) Then
             ValidateSingleChain currentProduct
         End If
@@ -869,11 +884,11 @@ End Sub
 Private Sub ValidateSingleChain(ByVal startProduct As cProductLifecycle)
     Dim pathTracker As Object: Set pathTracker = CreateObject("Scripting.Dictionary")
     Dim currentProduct As cProductLifecycle: Set currentProduct = startProduct
-    Dim successorKey As String
+    Dim successorKey As cDimensionKey
+    Dim strSuccessorKey As String
     Dim chainIsValid As Boolean: chainIsValid = True
     
     Do While True ' Loop until the end of the chain is reached or a problem is found.
-        ' Add the current product to the path. If it's already there, we have a loop.
         If pathTracker.Exists(currentProduct.ISD) Then
             lngWarningCount = lngWarningCount + 1
             WriteToLog ltWarning, "ValidateLifecycleLinks", "Circular reference detected.", , _
@@ -883,23 +898,24 @@ Private Sub ValidateSingleChain(ByVal startProduct As cProductLifecycle)
         End If
         pathTracker.Add currentProduct.ISD, 1
         
-        ' If the current product has no successor, the chain ends here and is valid.
         If Len(currentProduct.SupersededByProductID) = 0 Then
             Exit Do
         End If
         
-        ' Check if the next link in the chain has already been validated.
-        Dim currentProductKey As String: currentProductKey = BuildCompositeKey(currentProduct.Affiliate, currentProduct.ISD)
-        If dictValidatedChains.Exists(currentProductKey) Then
-            ' If the sub-chain is invalid, this whole chain is invalid.
-            If Not dictValidatedChains.Item(currentProductKey) Then chainIsValid = False
+        Dim currentProductKey As New cDimensionKey
+        currentProductKey.Add "Affiliate", currentProduct.Affiliate
+        currentProductKey.Add "ISD", currentProduct.ISD
+        If dictValidatedChains.Exists(currentProductKey.ToString()) Then
+            If Not dictValidatedChains.Item(currentProductKey.ToString()) Then chainIsValid = False
             Exit Do
         End If
         
-        successorKey = BuildCompositeKey(currentProduct.Affiliate, currentProduct.SupersededByProductID)
+        Set successorKey = New cDimensionKey
+        successorKey.Add "Affiliate", currentProduct.Affiliate
+        successorKey.Add "ISD", currentProduct.SupersededByProductID
+        strSuccessorKey = successorKey.ToString()
         
-        ' Check if the successor exists.
-        If Not dictLifecycleMap.Exists(successorKey) Then
+        If Not dictLifecycleMap.Exists(strSuccessorKey) Then
             lngWarningCount = lngWarningCount + 1
             WriteToLog ltWarning, "ValidateLifecycleLinks", "Successor product not found (broken link).", , _
                 "Product '" & currentProduct.DebugSummary() & "' lists successor ISD '" & currentProduct.SupersededByProductID & "' which does not exist in the same affiliate."
@@ -907,16 +923,18 @@ Private Sub ValidateSingleChain(ByVal startProduct As cProductLifecycle)
             Exit Do
         End If
         
-        ' Move to the next product in the chain.
-        Set currentProduct = dictLifecycleMap.Item(successorKey)
+        Set currentProduct = dictLifecycleMap.Item(strSuccessorKey)
     Loop
     
-    ' Cache the validation result for every product in the path we just checked.
     Dim pathKey As Variant
     For Each pathKey In pathTracker.Keys
-        Dim productMapKey As String: productMapKey = BuildCompositeKey(startProduct.Affiliate, pathKey)
-        If Not dictValidatedChains.Exists(productMapKey) Then
-            dictValidatedChains.Add productMapKey, chainIsValid
+        Dim productMapKey As New cDimensionKey
+        productMapKey.Add "Affiliate", startProduct.Affiliate
+        productMapKey.Add "ISD", pathKey
+        
+        Dim strProductMapKey As String: strProductMapKey = productMapKey.ToString()
+        If Not dictValidatedChains.Exists(strProductMapKey) Then
+            dictValidatedChains.Add strProductMapKey, chainIsValid
         End If
     Next pathKey
 End Sub
