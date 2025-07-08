@@ -4,11 +4,14 @@ Option Explicit
 '================================================================================================
 ' Module:      mForecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     40.0
+' Version:     41.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V41.0:       - Refactored lifecycle logic into the new cLifecycleManager class.
+'                The main module now delegates all phase-in/out and successor
+'                calculations, making the workflow clearer and more focused.
 ' V40.0:       - Added detailed PERFORMANCE NOTE to the ComputeBaseForecasts procedure
 '                to document the trade-off between architectural flexibility and
 '                execution speed, and to outline a potential optimization path.
@@ -279,7 +282,7 @@ Private Sub FinalizeRun(ByVal tStart As Double)
     Application.DisplayAlerts = True
     
     Dim strMessage As String
-    strMessage = "Forecast process completed in " & format$(Timer - tStart, "#,##0.00") & " seconds." & vbCrLf & vbCrLf
+    strMessage = "Forecast process completed in " & Format$(Timer - tStart, "#,##0.00") & " seconds." & vbCrLf & vbCrLf
     strMessage = strMessage & "Affiliates Processed: " & dictAffiliates.Count & vbCrLf
     strMessage = strMessage & "Warnings: " & lngWarningCount & " (see Log sheet for details)"
     
@@ -377,14 +380,19 @@ End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : ApplySuccessorAdjustments
-' Purpose   : Iterates through all items and applies successor forecast transfers.
+' Purpose   : Iterates through all items and applies successor forecast transfers
+'             by delegating to the cLifecycleManager.
 '---------------------------------------------------------------------------------
 Private Sub ApplySuccessorAdjustments(ByVal strAffiliate As String)
     Dim forecastItem As cForecastItem, itemKey As Variant
+    Dim manager As cLifecycleManager
+    Set manager = New cLifecycleManager
+    
     For Each itemKey In dictForecastItemMap.Keys
         Set forecastItem = dictForecastItemMap.Item(itemKey)
         If forecastItem.Affiliate = strAffiliate Then
-            forecastItem.LinkAndTransferSuccessorForecast dictForecastItemMap
+            ' Delegate the transfer logic to the specialized manager class
+            manager.ApplySuccessorTransfer forecastItem, dictForecastItemMap
         End If
     Next itemKey
 End Sub
@@ -449,7 +457,9 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Dim numHistMonths As Long, numFcstMonths As Long
     Dim outputRowIndex As Long, subtotalStartRow As Long
     Dim histKey As cDimensionKey
+    Dim manager As cLifecycleManager
     
+    Set manager = New cLifecycleManager
     Set colProducts = GetItemsForTier(strAffiliate, strTier)
     If colProducts.Count = 0 Then Exit Sub
     
@@ -463,10 +473,10 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Next colIndex
     
     For monthIndex = 1 To numHistMonths
-        arrHeader(staticColCount + monthIndex) = format$(arrHistoryData(1, g_dsHistory.StartOfMonthsCol + monthIndex - 1), "mmm-yy")
+        arrHeader(staticColCount + monthIndex) = Format$(arrHistoryData(1, g_dsHistory.StartOfMonthsCol + monthIndex - 1), "mmm-yy")
     Next monthIndex
     For monthIndex = 1 To numFcstMonths
-        arrHeader(staticColCount + numHistMonths + monthIndex) = format$(arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1), "mmm-yy")
+        arrHeader(staticColCount + numHistMonths + monthIndex) = Format$(arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1), "mmm-yy")
     Next monthIndex
     
     ReDim arrOutput(1 To (colProducts.Count * dictKeyFigures.Count) + dictKeyFigures.Count, 1 To UBound(arrHeader))
@@ -505,7 +515,8 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
                 Dim fcstKey As String: fcstKey = CStr(varKeyFigure) & "|" & dteFcstMonth
                 If forecastItem.ForecastValues.Exists(fcstKey) Then
                     Dim baseValue As Double: baseValue = forecastItem.ForecastValues.Item(fcstKey)
-                    Dim finalValue As Double: finalValue = baseValue * forecastItem.GetForecastMultiplier(dteFcstMonth)
+                    ' Use the manager to get the lifecycle multiplier
+                    Dim finalValue As Double: finalValue = baseValue * manager.CalculateMultiplier(forecastItem, dteFcstMonth)
                     arrOutput(outputRowIndex, staticColCount + numHistMonths + monthIndex) = finalValue
                 End If
             Next monthIndex
@@ -592,7 +603,9 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
     Dim monthIndex As Long, colIndex As Long, staticColCount As Long
     Dim numFcstMonths As Long, outputRowIndex As Long
     Dim strFullKeyFigure As String, varKey As Variant
+    Dim manager As cLifecycleManager
     
+    Set manager = New cLifecycleManager
     staticColCount = GetSummaryReportCols().Count
     numFcstMonths = UBound(arrDemandData, 2) - g_dsDemand.StartOfMonthsCol + 1
     
@@ -601,7 +614,7 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
         arrHeader(colIndex) = GetSummaryReportCols()(colIndex).HeaderText
     Next colIndex
     For monthIndex = 1 To numFcstMonths
-        arrHeader(staticColCount + monthIndex) = format$(arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1), "mmm-yy")
+        arrHeader(staticColCount + monthIndex) = Format$(arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1), "mmm-yy")
     Next monthIndex
     
     For Each ws In wbReport.Worksheets
@@ -623,7 +636,8 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                         
                         If forecastItem.ForecastValues.Exists(forecastKey) Then
                             Dim baseValue As Double: baseValue = forecastItem.ForecastValues.Item(forecastKey)
-                            Dim finalValue As Double: finalValue = baseValue * forecastItem.GetForecastMultiplier(dteFcstMonth)
+                            ' Use the manager to get the lifecycle multiplier
+                            Dim finalValue As Double: finalValue = baseValue * manager.CalculateMultiplier(forecastItem, dteFcstMonth)
                             arrOutput(outputRowIndex, staticColCount + monthIndex) = finalValue
                         End If
                     Next monthIndex
@@ -886,7 +900,7 @@ End Function
 ' Purpose   : Constructs the full file path for saving a completed report.
 '---------------------------------------------------------------------------------
 Private Function GetOutputFilePath(ByVal strBasePath As String, ByVal strAffiliate As String) As String
-    GetOutputFilePath = strBasePath & "\Demand Forecast - " & strAffiliate & " - " & format$(Now, "ddmmyyyy_hhmmss") & ".xlsx"
+    GetOutputFilePath = strBasePath & "\Demand Forecast - " & strAffiliate & " - " & Format$(Now, "ddmmyyyy_hhmmss") & ".xlsx"
 End Function
 
 '---------------------------------------------------------------------------------
@@ -945,7 +959,7 @@ End Sub
 ' Purpose   : A specialized logging function to record the time taken for major stages.
 '---------------------------------------------------------------------------------
 Private Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
-    WriteToLog ltProfile, strStageName, "Stage completed in " & format$(Timer - tCheckpoint, "#,##0.00") & "s"
+    WriteToLog ltProfile, strStageName, "Stage completed in " & Format$(Timer - tCheckpoint, "#,##0.00") & "s"
     tCheckpoint = Timer
 End Sub
 
