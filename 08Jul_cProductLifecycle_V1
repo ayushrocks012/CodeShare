@@ -5,15 +5,16 @@ Option Explicit
 ' Class:       cProductLifecycle
 ' Purpose:     Represents a single product's entire lifecycle, including its status,
 '              phase-in/out dates, successor relationships, and calculated forecast values.
-' Version:     30.0
+' Version:     31.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V31.0:       - STAGE 2 REFACTOR: Implemented Dimension Key pattern.
+'              - Updated LinkAndTransferSuccessorForecast to use the new cDimensionKey
+'                class for finding the successor product, removing the dependency
+'                on the deprecated BuildCompositeKey function.
 ' V30.0:       - STAGE 1 REFACTOR: Abstracted Data Sources.
-'              - Modified Init and HandlePhaseOutInit methods to accept a cDataSource
-'                object instead of relying on hard-coded column constants.
-' V29.1:       - CRITICAL FIX: Restored Property Let procedures.
 '================================================================================================
 
 ' --- Constants ---
@@ -177,13 +178,15 @@ Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
     ' Exit if this product is not phasing out or has no successor defined.
     If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
     
-    ' Build the key to find the successor product in the master dictionary.
-    Dim strSuccessorKey As String
-    strSuccessorKey = BuildCompositeKey(Me.Affiliate, Me.SupersededByProductID)
+    ' Build the key to find the successor product in the master dictionary using the new class.
+    Dim successorKey As cDimensionKey
+    Set successorKey = New cDimensionKey
+    successorKey.Add "Affiliate", Me.Affiliate
+    successorKey.Add "ISD", Me.SupersededByProductID
     
-    If dictMap.Exists(strSuccessorKey) Then
+    If dictMap.Exists(successorKey.KeyString) Then
         Dim objSuccessor As cProductLifecycle
-        Set objSuccessor = dictMap.Item(strSuccessorKey)
+        Set objSuccessor = dictMap.Item(successorKey.KeyString)
         
         ' --- Configure the successor product for phase-in ---
         objSuccessor.IsPhasingIn = True
