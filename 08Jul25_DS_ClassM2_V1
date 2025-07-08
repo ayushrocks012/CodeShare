@@ -5,11 +5,13 @@ Option Explicit
 ' Class:       cProductLifecycle
 ' Purpose:     Represents a single product's entire lifecycle, including its status,
 '              phase-in/out dates, successor relationships, and calculated forecast values.
-' Version:     29.0
+' Version:     29.1
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V29.1:       - CRITICAL FIX: Restored the Property Let procedures that were accidentally
+'                removed, causing a "Can't assign to read-only property" compile error.
 ' V29.0:       - Added comprehensive, AI-friendly documentation comments to all procedures.
 ' V28.1:       - Added StatusString property to support data-driven reporting via CallByName.
 '================================================================================================
@@ -43,19 +45,47 @@ Private m_ForecastValues As Object ' Dictionary
 
 '--- Public Properties (Get/Let) ---
 Public Property Get Affiliate() As String: Affiliate = m_Affiliate: End Property
+Public Property Let Affiliate(ByVal Value As String): m_Affiliate = Value: End Property
+
 Public Property Get ForecastTier() As String: ForecastTier = m_ForecastTier: End Property
+Public Property Let ForecastTier(ByVal Value As String): m_ForecastTier = Value: End Property
+
 Public Property Get ForecastSubTier() As String: ForecastSubTier = m_ForecastSubTier: End Property
+Public Property Let ForecastSubTier(ByVal Value As String): m_ForecastSubTier = Value: End Property
+
 Public Property Get LocalItemNbr() As String: LocalItemNbr = m_LocalItemNbr: End Property
+Public Property Let LocalItemNbr(ByVal Value As String): m_LocalItemNbr = Value: End Property
+
 Public Property Get Description() As String: Description = m_Description: End Property
+Public Property Let Description(ByVal Value As String): m_Description = Value: End Property
+
 Public Property Get ISD() As String: ISD = m_ISD: End Property
+Public Property Let ISD(ByVal Value As String): m_ISD = Value: End Property
+
 Public Property Get Status() As ProductStatus: Status = m_Status: End Property
+Public Property Let Status(ByVal Value As ProductStatus): m_Status = Value: End Property
+
 Public Property Get PhaseOutDate() As Date: PhaseOutDate = m_PhaseOutDate: End Property
+Public Property Let PhaseOutDate(ByVal Value As Date): m_PhaseOutDate = Value: End Property
+
 Public Property Get PhaseOutPercent() As Double: PhaseOutPercent = m_PhaseOutPercent: End Property
+Public Property Let PhaseOutPercent(ByVal Value As Double): m_PhaseOutPercent = Value: End Property
+
 Public Property Get SupersededByProductID() As String: SupersededByProductID = m_SupersededByProductID: End Property
+Public Property Let SupersededByProductID(ByVal Value As String): m_SupersededByProductID = Value: End Property
+
 Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = m_IsPhasingOut: End Property
+Public Property Let IsPhasingOut(ByVal Value As Boolean): m_IsPhasingOut = Value: End Property
+
 Public Property Get IsPhasingIn() As Boolean: IsPhasingIn = m_IsPhasingIn: End Property
+Public Property Let IsPhasingIn(ByVal Value As Boolean): m_IsPhasingIn = Value: End Property
+
 Public Property Get PhaseInDate() As Date: PhaseInDate = m_PhaseInDate: End Property
+Public Property Let PhaseInDate(ByVal Value As Date): m_PhaseInDate = Value: End Property
+
 Public Property Get PhaseInPercent() As Double: PhaseInPercent = m_PhaseInPercent: End Property
+Public Property Let PhaseInPercent(ByVal Value As Double): m_PhaseInPercent = Value: End Property
+
 Public Property Get ForecastValues() As Object: Set ForecastValues = m_ForecastValues: End Property
 Public Property Set ForecastValues(ByVal Value As Object): Set m_ForecastValues = Value: End Property
 
