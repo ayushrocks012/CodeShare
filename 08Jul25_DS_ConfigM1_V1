@@ -6,14 +6,16 @@ Option Explicit
 ' Purpose:     This module defines all global constants and utility functions for the project.
 '              It acts as a central control panel for sheet names, column positions,
 '              and business logic enumerations.
-' Version:     29.0
+' Version:     31.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V29.0:       - Added comprehensive, AI-friendly documentation comments to all procedures.
+' V31.0:       - Implemented Stage 5 Data-Driven Summary Sheets.
+'              - Added gSummaryReportCols collection and its initialization routine.
+'              - The entire report generation process is now configurable from this module.
+' V29.0:       - Added comprehensive, AI-friendly documentation comments.
 ' V28.1:       - Replaced ReportColumn UDT with cReportColumn class to fix compile error.
-'              - Moved GetStatusString function here to avoid circular dependencies.
 '================================================================================================
 
 ' --- DEBUGGING & LOGGING FLAGS ---
@@ -26,12 +28,11 @@ Public Const SHEET_HISTORY As String = "Historical Sales"
 Public Const SHEET_LOG As String = "Log"
 
 ' --- REPORT CONFIGURATION ---
-' Global collection to hold the configuration for the Tier report columns.
+' Global collections to hold the configuration for the report columns.
 Public gTierReportCols As Collection
+Public gSummaryReportCols As Collection
 
 ' --- ENUMERATIONS ---
-' Provides type-safe, case-insensitive values for use throughout the code.
-
 Public Enum ProductStatus
     psUnknown = 0
     psActive = 1
@@ -49,8 +50,6 @@ Public Enum logType
 End Enum
 
 ' --- COLUMN INDEX CONSTANTS ---
-' Defines the column numbers for key data fields. Adjust these if the source file layout changes.
-
 '-- 'Product Status' Sheet Columns --
 Public Const PS_AFFILIATE_COL As Long = 1
 Public Const PS_TIER_COL As Long = 2
@@ -84,37 +83,65 @@ Public Const DF_START_OF_MONTHS_COL As Long = 4
 '================================================================================================
 
 '---------------------------------------------------------------------------------
-' Procedure : InitializeReportConfig
-' Purpose   : Populates the global collection (gTierReportCols) that defines the
-'             structure of the detailed Tier report. This centralizes the report
-'             layout, making it easy to add, remove, or reorder columns by
-'             editing only this one subroutine.
+' Procedure : InitializeAllReportConfigs
+' Purpose   : A master routine that calls the individual initialization
+'             procedures for each report type (Tier, Summary).
 '---------------------------------------------------------------------------------
-Public Sub InitializeReportConfig()
+Public Sub InitializeAllReportConfigs()
+    InitializeTierReportConfig
+    InitializeSummaryReportConfig
+End Sub
+
+'---------------------------------------------------------------------------------
+' Procedure : InitializeTierReportConfig
+' Purpose   : Populates the global collection (gTierReportCols) that defines the
+'             structure of the detailed Tier report.
+'---------------------------------------------------------------------------------
+Private Sub InitializeTierReportConfig()
     Set gTierReportCols = New Collection
     
     ' Add each column by defining its header, source property, width, and format.
-    AddReportColumn "Key Figures", "KeyFigure", 25, "@"
-    AddReportColumn "Affiliate", "Affiliate", 10, "@"
-    AddReportColumn "Forecast Tier", "ForecastTier", 30, "@"
-    AddReportColumn "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
-    AddReportColumn "Local Item Nbr", "LocalItemNbr", 18, "@"
-    AddReportColumn "Desc", "Description", 40, "@"
-    AddReportColumn "I-S-D", "ISD", 15, "@"
-    AddReportColumn "Status", "StatusString", 20, "@"
-    AddReportColumn "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
+    AddReportColumn gTierReportCols, "Key Figures", "KeyFigure", 25, "@"
+    AddReportColumn gTierReportCols, "Affiliate", "Affiliate", 10, "@"
+    AddReportColumn gTierReportCols, "Forecast Tier", "ForecastTier", 30, "@"
+    AddReportColumn gTierReportCols, "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
+    AddReportColumn gTierReportCols, "Local Item Nbr", "LocalItemNbr", 18, "@"
+    AddReportColumn gTierReportCols, "Desc", "Description", 40, "@"
+    AddReportColumn gTierReportCols, "I-S-D", "ISD", 15, "@"
+    AddReportColumn gTierReportCols, "Status", "StatusString", 20, "@"
+    AddReportColumn gTierReportCols, "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
+End Sub
+
+'---------------------------------------------------------------------------------
+' Procedure : InitializeSummaryReportConfig
+' Purpose   : Populates the global collection (gSummaryReportCols) that defines
+'             the structure of the Summary report.
+'---------------------------------------------------------------------------------
+Private Sub InitializeSummaryReportConfig()
+    Set gSummaryReportCols = New Collection
+    
+    ' The summary sheet has a slightly different layout (no Key Figure column).
+    AddReportColumn gSummaryReportCols, "Affiliate", "Affiliate", 10, "@"
+    AddReportColumn gSummaryReportCols, "Forecast Tier", "ForecastTier", 30, "@"
+    AddReportColumn gSummaryReportCols, "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
+    AddReportColumn gSummaryReportCols, "Local Item Nbr", "LocalItemNbr", 18, "@"
+    AddReportColumn gSummaryReportCols, "Desc", "Description", 40, "@"
+    AddReportColumn gSummaryReportCols, "I-S-D", "ISD", 15, "@"
+    AddReportColumn gSummaryReportCols, "Status", "StatusString", 20, "@"
+    AddReportColumn gSummaryReportCols, "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
 End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : AddReportColumn
 ' Purpose   : A private helper function that creates a new cReportColumn object,
-'             populates its properties, and adds it to the global collection.
+'             populates its properties, and adds it to the specified collection.
+' @param   : colReport As Collection - The collection to add the new column to.
 ' @param   : header As String - The text for the column header.
 ' @param   : prop As String - The corresponding property name in the cProductLifecycle class.
 ' @param   : width As Double - The desired column width.
 ' @param   : format As String - The Excel number format string.
 '---------------------------------------------------------------------------------
-Private Sub AddReportColumn(ByVal header As String, ByVal prop As String, ByVal width As Double, ByVal format As String)
+Private Sub AddReportColumn(ByVal colReport As Collection, ByVal header As String, ByVal prop As String, ByVal width As Double, ByVal format As String)
     Dim col As cReportColumn
     Set col = New cReportColumn
     
@@ -123,7 +150,7 @@ Private Sub AddReportColumn(ByVal header As String, ByVal prop As String, ByVal 
     col.ColumnWidth = width
     col.NumberFormat = format
     
-    gTierReportCols.Add col
+    colReport.Add col
 End Sub
 
 '---------------------------------------------------------------------------------
