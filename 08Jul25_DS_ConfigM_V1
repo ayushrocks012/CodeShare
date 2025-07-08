@@ -1,0 +1,130 @@
+'@Folder("Configuration")
+Option Explicit
+
+'================================================================================================
+' Module:      M_Config
+' Purpose:     This module defines all global constants and utility functions for the project.
+'              It acts as a central control panel for sheet names, column positions,
+'              and business logic enumerations.
+'
+' Version:     28.0
+' Author:      Ayush Goyal
+' Date:        08-Jul-2025
+'
+' Change Log:
+' V28.0:       - Implemented Stage 3 maintainability improvements.
+'              - Added ReportColumn Type and gTierReportCols global collection.
+'              - Added InitializeReportConfig to create a data-driven report structure.
+'================================================================================================
+
+' --- DEBUGGING & LOGGING FLAGS ---
+Public Const DEBUG_MODE As Boolean = False 'TRUE: Prevents file saving, adds more logs. FALSE: Normal operation.
+
+' --- SHEET NAME CONSTANTS ---
+Public Const SHEET_STATUS As String = "Product Status"
+Public Const SHEET_DEMAND As String = "Demand Forecast"
+Public Const SHEET_HISTORY As String = "Historical Sales"
+Public Const SHEET_LOG As String = "Log"
+
+' --- REPORT CONFIGURATION ---
+' Defines the structure of a column in the final report.
+Public Type ReportColumn
+    HeaderText As String      ' The text to display in the header row
+    SourceProperty As String  ' The name of the property in the cProductLifecycle class
+    ColumnWidth As Double     ' The width of the column in the report
+    NumberFormat As String    ' The number format to apply (e.g., "#,##0", "dd/mm/yyyy")
+End Type
+
+' Global collection to hold the configuration for the Tier report columns.
+Public gTierReportCols As Collection
+
+' --- ENUMERATIONS ---
+' Provides type-safe, case-insensitive values for use throughout the code.
+
+Public Enum ProductStatus
+    psUnknown = 0
+    psActive = 1
+    psPhaseInOut = 2
+    psDiscontinued = 3
+    psNew = 4
+End Enum
+
+Public Enum logType
+    ltInfo
+    ltWarning
+    ltError
+    ltFatal
+    ltProfile ' For performance timing
+End Enum
+
+' --- COLUMN INDEX CONSTANTS ---
+' Defines the column numbers for key data fields. Adjust these if the source file layout changes.
+
+'-- 'Product Status' Sheet Columns --
+Public Const PS_AFFILIATE_COL As Long = 1
+Public Const PS_TIER_COL As Long = 2
+Public Const PS_SUB_TIER_COL As Long = 3
+Public Const PS_LOCAL_ITEM_NBR_COL As Long = 4
+Public Const PS_DESC_COL As Long = 5
+Public Const PS_ISD_COL As Long = 6
+Public Const PS_STATUS_COL As Long = 7
+Public Const PS_PHASE_OUT_DATE_COL As Long = 8
+Public Const PS_PHASE_OUT_PCT_COL As Long = 9
+Public Const PS_SUPERSEDED_BY_COL As Long = 10
+
+'-- 'Historical Sales' Sheet Columns --
+Public Const HS_AFFILIATE_COL As Long = 1
+Public Const HS_TIER_COL As Long = 2
+Public Const HS_SUB_TIER_COL As Long = 3
+Public Const HS_KEY_FIGURE_COL As Long = 4
+Public Const HS_LOCAL_ITEM_NBR_COL As Long = 5
+Public Const HS_DESC_COL As Long = 6
+Public Const HS_ISD_COL As Long = 7
+Public Const HS_START_OF_MONTHS_COL As Long = 8
+
+'-- 'Demand Forecast' Sheet Columns --
+Public Const DF_AFFILIATE_COL As Long = 1
+Public Const DF_KEY_FIGURE_COL As Long = 2
+Public Const DF_TIER_COL As Long = 3
+Public Const DF_START_OF_MONTHS_COL As Long = 4
+
+'================================================================================================
+'--- GLOBAL INITIALIZATION & UTILITY FUNCTIONS ---
+'================================================================================================
+
+Public Sub InitializeReportConfig()
+    ' Purpose: Populates the global collection that defines the Tier report structure.
+    '          To add, remove, or reorder a column, simply edit this subroutine.
+    ' -------------------------------------------------------------------------------------------
+    Set gTierReportCols = New Collection
+    
+    ' Special column for "Key Figures" which is not a direct property
+    AddReportColumn "Key Figures", "KeyFigure", 25, "@"
+    
+    AddReportColumn "Affiliate", "Affiliate", 10, "@"
+    AddReportColumn "Forecast Tier", "ForecastTier", 30, "@"
+    AddReportColumn "Forecast Sub-Tier", "ForecastSubTier", 20, "@"
+    AddReportColumn "Local Item Nbr", "LocalItemNbr", 18, "@"
+    AddReportColumn "Desc", "Description", 40, "@"
+    AddReportColumn "I-S-D", "ISD", 15, "@"
+    AddReportColumn "Status", "StatusString", 20, "@" ' Using a helper property
+    AddReportColumn "Phase Out Month", "PhaseOutDate", 15, "mmm-yy"
+End Sub
+
+Private Sub AddReportColumn(ByVal header As String, ByVal prop As String, ByVal width As Double, ByVal format As String)
+    ' Helper to add a new ReportColumn object to the global collection
+    Dim col As ReportColumn
+    col.HeaderText = header
+    col.SourceProperty = prop
+    col.ColumnWidth = width
+    col.NumberFormat = format
+    gTierReportCols.Add col
+End Sub
+
+Public Function BuildCompositeKey(ByVal keyPart1 As String, ByVal keyPart2 As String) As String
+    ' Purpose: Creates a standardized composite key for dictionary lookups.
+    ' Example: BuildCompositeKey("UK", "12345") returns "UK|12345"
+    ' -------------------------------------------------------------------------------------------
+    Const SEPARATOR As String = "|"
+    BuildCompositeKey = Trim$(keyPart1) & SEPARATOR & Trim$(keyPart2)
+End Function
