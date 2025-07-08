@@ -4,16 +4,16 @@ Option Explicit
 '================================================================================================
 ' Module:      M_Forecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     31.1
+' Version:     32.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V31.1:       - CRITICAL FIX: Restored the BuildHistoryCache and BuildDataCaches
-'                subroutines that were accidentally removed, causing a compile error.
+' V32.0:       - Applied Rubberduck code inspection fixes.
+'              - Updated report generation to use getter functions for report configs.
+'              - Removed unused variable from ValidateSingleChain.
+' V31.1:       - CRITICAL FIX: Restored the BuildHistoryCache and BuildDataCaches subs.
 ' V31.0:       - Implemented Stage 5 Data-Driven Summary Sheets.
-' V30.0:       - Implemented Stage 4 Advanced Validation for circular references.
-' V29.0:       - Added comprehensive, AI-friendly documentation comments.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -521,14 +521,14 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Set colProducts = GetProductsForTier(strAffiliate, strTier)
     If colProducts.Count = 0 Then Exit Sub
     
-    staticColCount = gTierReportCols.Count
+    staticColCount = GetTierReportCols().Count
     numHistMonths = UBound(arrHistoryData, 2) - HS_START_OF_MONTHS_COL + 1
     numFcstMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
     
     ' --- Build Header Array from Config ---
     ReDim arrHeader(1 To staticColCount + numHistMonths + numFcstMonths)
     For colIndex = 1 To staticColCount
-        arrHeader(colIndex) = gTierReportCols(colIndex).HeaderText
+        arrHeader(colIndex) = GetTierReportCols()(colIndex).HeaderText
     Next colIndex
     
     ' --- Add Date Headers ---
@@ -549,7 +549,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
         For Each productLifecycle In colProducts
             ' --- Populate static columns dynamically using CallByName ---
             For colIndex = 1 To staticColCount
-                Dim propName As String: propName = gTierReportCols(colIndex).SourceProperty
+                Dim propName As String: propName = GetTierReportCols()(colIndex).SourceProperty
                 If propName = "KeyFigure" Then
                     arrOutput(outputRowIndex, colIndex) = CStr(varKeyFigure)
                 Else
@@ -623,7 +623,7 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
     lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
     If lastRow <= 1 Then Exit Sub
     
-    staticColCount = gTierReportCols.Count
+    staticColCount = GetTierReportCols().Count
     histColStart = staticColCount + 1
     fcstColStart = histColStart + (UBound(arrHistoryData, 2) - HS_START_OF_MONTHS_COL + 1)
     lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
@@ -646,9 +646,9 @@ Private Sub FormatTierSheet(ByVal ws As Worksheet)
     
     ' --- Apply Column Widths and Formats from Config ---
     For col = 1 To staticColCount
-        ws.Columns(col).ColumnWidth = gTierReportCols(col).ColumnWidth
-        If Len(gTierReportCols(col).NumberFormat) > 0 Then
-            ws.Range("A1").Offset(, col - 1).EntireColumn.NumberFormat = gTierReportCols(col).NumberFormat
+        ws.Columns(col).ColumnWidth = GetTierReportCols()(col).ColumnWidth
+        If Len(GetTierReportCols()(col).NumberFormat) > 0 Then
+            ws.Range("A1").Offset(, col - 1).EntireColumn.NumberFormat = GetTierReportCols()(col).NumberFormat
         End If
     Next col
     
@@ -694,13 +694,13 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
     Dim numFcstMonths As Long, outputRowIndex As Long
     Dim strFullKeyFigure As String, varKey As Variant
     
-    staticColCount = gSummaryReportCols.Count
+    staticColCount = GetSummaryReportCols().Count
     numFcstMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
     
     ' --- Build Header Array from Config ---
     ReDim arrHeader(1 To staticColCount + numFcstMonths)
     For colIndex = 1 To staticColCount
-        arrHeader(colIndex) = gSummaryReportCols(colIndex).HeaderText
+        arrHeader(colIndex) = GetSummaryReportCols()(colIndex).HeaderText
     Next colIndex
     
     ' --- Add Date Headers ---
@@ -722,7 +722,7 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                 If productLifecycle.Affiliate = strAffiliate Then
                     ' --- Populate static columns dynamically ---
                     For colIndex = 1 To staticColCount
-                        arrOutput(outputRowIndex, colIndex) = CallByName(productLifecycle, gSummaryReportCols(colIndex).SourceProperty, VbGet)
+                        arrOutput(outputRowIndex, colIndex) = CallByName(productLifecycle, GetSummaryReportCols()(colIndex).SourceProperty, VbGet)
                     Next colIndex
                     
                     ' --- Populate Forecast Data ---
@@ -742,7 +742,9 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             
             ' --- Write data to sheet and format ---
             ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
-            ws.Range("A2").Resize(outputRowIndex - 1, UBound(arrHeader)).Value = arrOutput
+            If outputRowIndex > 1 Then
+                ws.Range("A2").Resize(outputRowIndex - 1, UBound(arrHeader)).Value = arrOutput
+            End If
             FormatSummarySheet ws
         End If
     Next ws
@@ -762,7 +764,7 @@ Private Sub FormatSummarySheet(ByVal ws As Worksheet)
     lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
     If lastRow <= 1 Then Exit Sub
     
-    staticColCount = gSummaryReportCols.Count
+    staticColCount = GetSummaryReportCols().Count
     lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
     
     Set headerRange = ws.Range("A1").Resize(1, lastCol)
@@ -778,9 +780,9 @@ Private Sub FormatSummarySheet(ByVal ws As Worksheet)
     
     ' --- Apply Column Widths and Formats from Config ---
     For col = 1 To staticColCount
-        ws.Columns(col).ColumnWidth = gSummaryReportCols(col).ColumnWidth
-        If Len(gSummaryReportCols(col).NumberFormat) > 0 Then
-            ws.Range("A1").Offset(, col - 1).EntireColumn.NumberFormat = gSummaryReportCols(col).NumberFormat
+        ws.Columns(col).ColumnWidth = GetSummaryReportCols()(col).ColumnWidth
+        If Len(GetSummaryReportCols()(col).NumberFormat) > 0 Then
+            ws.Range("A1").Offset(, col - 1).EntireColumn.NumberFormat = GetSummaryReportCols()(col).NumberFormat
         End If
     Next col
     
@@ -866,7 +868,6 @@ End Sub
 Private Sub ValidateSingleChain(ByVal startProduct As cProductLifecycle)
     Dim pathTracker As Object: Set pathTracker = CreateObject("Scripting.Dictionary")
     Dim currentProduct As cProductLifecycle: Set currentProduct = startProduct
-    Dim successorProduct As cProductLifecycle
     Dim successorKey As String
     Dim chainIsValid As Boolean: chainIsValid = True
     
@@ -1094,8 +1095,8 @@ Private Sub CleanupMemory()
     Set dictHistoryCache = Nothing
     Set dictHistSumCache = Nothing
     Set dictDemandCache = Nothing
-    Set gTierReportCols = Nothing
-    Set gSummaryReportCols = Nothing
+    Set pTierReportCols = Nothing
+    Set pSummaryReportCols = Nothing
     Set dictValidatedChains = Nothing
     Erase arrStatusData
     Erase arrHistoryData
