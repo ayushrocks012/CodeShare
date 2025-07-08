@@ -4,16 +4,18 @@ Option Explicit
 '================================================================================================
 ' Module:      M_Forecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     34.0
+' Version:     35.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V35.0:       - STAGE 3 REFACTOR: Generalize Product Object.
+'              - Replaced all usage of cProductLifecycle with the new, more flexible
+'                cForecastItem class.
+'              - Renamed dictLifecycleMap to dictForecastItemMap.
+'              - Renamed BuildLifecycleMap to BuildForecastItemMap.
+'              - Updated all logic to work with the new cForecastItem object model.
 ' V34.0:       - STAGE 2 REFACTOR: Implement Dimension Key Pattern.
-'              - Replaced all manual, pipe-delimited key creation with the new
-'                cDimensionKey class. This affects all cache creation and lookup
-'                procedures, making them more robust and scalable.
-' V33.0:       - STAGE 1 REFACTOR: Abstracted Data Sources.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -24,7 +26,7 @@ Private dictStatusMap As Object
 Private arrStatusData As Variant
 Private arrHistoryData As Variant
 Private arrDemandData As Variant
-Private dictLifecycleMap As Object
+Private dictForecastItemMap As Object ' Formerly dictLifecycleMap
 Private dictAffiliates As Object
 Private dictKeyFigures As Object
 Private dictHistoryCache As Object
@@ -142,10 +144,10 @@ Private Sub BuildCachesAndMaps()
     Dim tCheckpoint As Double: tCheckpoint = Timer
     Application.StatusBar = "Building data caches and maps..."
     
-    ' Create the master map of all product objects.
-    Set dictLifecycleMap = BuildLifecycleMap(arrStatusData)
+    ' Create the master map of all forecast item objects.
+    Set dictForecastItemMap = BuildForecastItemMap(arrStatusData)
     ' Validate the integrity of successor links in the product data.
-    ValidateLifecycleLinks
+    ValidateSuccessorLinks
     
     ' Get unique lists of affiliates and key figures to iterate over.
     Set dictAffiliates = GetUniqueValues(arrDemandData, g_dsDemand.GetCol("Affiliate"))
@@ -336,7 +338,7 @@ Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String)
     ' --- Stage 1: Calculate all forecast values and store in memory ---
     InitializeForecastValues strAffiliate
     ComputeBaseForecasts strAffiliate
-    ApplyLifecycleAdjustments strAffiliate
+    ApplySuccessorAdjustments strAffiliate
     
     ' --- Stage 2: Create the report workbook and generate all sheets from stored values ---
     GenerateAffiliateReport strAffiliate
@@ -344,42 +346,41 @@ End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : InitializeForecastValues
-' Purpose   : Resets the forecast data for a given affiliate's products by
-'             creating a new, empty dictionary inside each relevant product object.
-'             This ensures no data from a previous run is carried over.
-' @param   : strAffiliate As String - The affiliate whose products will be initialized.
+' Purpose   : Resets the forecast data for a given affiliate's items by
+'             creating a new, empty dictionary inside each relevant item object.
+' @param   : strAffiliate As String - The affiliate whose items will be initialized.
 '---------------------------------------------------------------------------------
 Private Sub InitializeForecastValues(ByVal strAffiliate As String)
-    Dim productLifecycle As cProductLifecycle
-    Dim productKey As Variant
+    Dim forecastItem As cForecastItem
+    Dim itemKey As Variant
     
-    For Each productKey In dictLifecycleMap.Keys
-        Set productLifecycle = dictLifecycleMap.Item(productKey)
-        If productLifecycle.Affiliate = strAffiliate Then
+    For Each itemKey In dictForecastItemMap.Keys
+        Set forecastItem = dictForecastItemMap.Item(itemKey)
+        If forecastItem.Affiliate = strAffiliate Then
             ' Re-create the dictionary to clear any old values.
-            Set productLifecycle.ForecastValues = CreateObject("Scripting.Dictionary")
+            Set forecastItem.ForecastValues = CreateObject("Scripting.Dictionary")
         End If
-    Next productKey
+    Next itemKey
 End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : ComputeBaseForecasts
-' Purpose   : The core calculation engine. It iterates through every product for
+' Purpose   : The core calculation engine. It iterates through every item for
 '             the affiliate, calculates its base forecast using the main formula,
-'             and stores the result in the product object's forecast dictionary.
+'             and stores the result in the item object's forecast dictionary.
 ' @param   : strAffiliate As String - The affiliate being processed.
 '---------------------------------------------------------------------------------
 Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
-    Dim productLifecycle As cProductLifecycle
-    Dim productKey As Variant, keyFigure As Variant
+    Dim forecastItem As cForecastItem
+    Dim itemKey As Variant, keyFigure As Variant
     Dim monthIndex As Long
     Dim forecastMonth As Date
     
-    For Each productKey In dictLifecycleMap.Keys
-        Set productLifecycle = dictLifecycleMap.Item(productKey)
-        If productLifecycle.Affiliate = strAffiliate Then
+    For Each itemKey In dictForecastItemMap.Keys
+        Set forecastItem = dictForecastItemMap.Item(itemKey)
+        If forecastItem.Affiliate = strAffiliate Then
             
-            If DEBUG_MODE Then WriteToLog ltInfo, "ComputeBaseForecasts", "Processing: " & productLifecycle.DebugSummary()
+            If DEBUG_MODE Then WriteToLog ltInfo, "ComputeBaseForecasts", "Processing: " & forecastItem.DebugSummary()
             
             For Each keyFigure In dictKeyFigures.Keys
                 Dim strKeyFigure As String: strKeyFigure = CStr(keyFigure)
@@ -389,13 +390,13 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
                 ' --- Get historical sums directly from the high-speed cache ---
                 Set tierSumKey = New cDimensionKey
                 tierSumKey.Add "Affiliate", strAffiliate
-                tierSumKey.Add "Tier", productLifecycle.ForecastTier
+                tierSumKey.Add "Tier", forecastItem.ForecastTier
                 tierSumKey.Add "KeyFigure", strKeyFigure
                 
                 Set subTierSumKey = New cDimensionKey
                 subTierSumKey.Add "Affiliate", strAffiliate
-                subTierSumKey.Add "Tier", productLifecycle.ForecastTier
-                subTierSumKey.Add "SubTier", productLifecycle.ForecastSubTier
+                subTierSumKey.Add "Tier", forecastItem.ForecastTier
+                subTierSumKey.Add "SubTier", forecastItem.ForecastSubTier
                 subTierSumKey.Add "KeyFigure", strKeyFigure
                 
                 histTierSum = GetHistoricalSumFromCache(tierSumKey.ToString())
@@ -413,7 +414,7 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
                         ' --- Get the overall tier's demand value from the high-speed cache ---
                         Set demandKey = New cDimensionKey
                         demandKey.Add "Affiliate", strAffiliate
-                        demandKey.Add "Tier", productLifecycle.ForecastTier
+                        demandKey.Add "Tier", forecastItem.ForecastTier
                         demandKey.Add "KeyFigure", strKeyFigure
                         demandKey.Add "Month", forecastMonth
                         
@@ -426,39 +427,38 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
                         Dim baseForecast As Double
                         baseForecast = productShareOfTier * demandTierValue
                         
-                        ' Store the calculated value in the product object.
-                        ' The key for this dictionary is still simple as it's per-product.
-                        productLifecycle.ForecastValues.Add strKeyFigure & "|" & forecastMonth, baseForecast
+                        ' Store the calculated value in the item object.
+                        forecastItem.ForecastValues.Add strKeyFigure & "|" & forecastMonth, baseForecast
                     Next monthIndex
                 Else
                     ' --- If tier has no history, all forecasts for this key figure are zero ---
                      For monthIndex = 1 To UBound(arrDemandData, 2) - g_dsDemand.StartOfMonthsCol + 1
                         forecastMonth = arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1)
-                        productLifecycle.ForecastValues.Add strKeyFigure & "|" & forecastMonth, 0
+                        forecastItem.ForecastValues.Add strKeyFigure & "|" & forecastMonth, 0
                     Next monthIndex
                 End If
             Next keyFigure
         End If
-    Next productKey
+    Next itemKey
 End Sub
 
 '---------------------------------------------------------------------------------
-' Procedure : ApplyLifecycleAdjustments
-' Purpose   : Iterates through all products for the affiliate and calls the
+' Procedure : ApplySuccessorAdjustments
+' Purpose   : Iterates through all items for the affiliate and calls the
 '             method on each object that handles the transfer of forecast volume
-'             from a phasing-out product to its successor.
+'             from a phasing-out item to its successor.
 ' @param   : strAffiliate As String - The affiliate being processed.
 '---------------------------------------------------------------------------------
-Private Sub ApplyLifecycleAdjustments(ByVal strAffiliate As String)
-    Dim productLifecycle As cProductLifecycle
-    Dim productKey As Variant
+Private Sub ApplySuccessorAdjustments(ByVal strAffiliate As String)
+    Dim forecastItem As cForecastItem
+    Dim itemKey As Variant
     
-    For Each productKey In dictLifecycleMap.Keys
-        Set productLifecycle = dictLifecycleMap.Item(productKey)
-        If productLifecycle.Affiliate = strAffiliate Then
-            productLifecycle.LinkAndTransferSuccessorForecast dictLifecycleMap
+    For Each itemKey In dictForecastItemMap.Keys
+        Set forecastItem = dictForecastItemMap.Item(itemKey)
+        If forecastItem.Affiliate = strAffiliate Then
+            forecastItem.LinkAndTransferSuccessorForecast dictForecastItemMap
         End If
-    Next productKey
+    Next itemKey
 End Sub
 
 
@@ -519,9 +519,8 @@ End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : PopulateTierSheet
-' Purpose   : Populates a single "Tier" sheet with all relevant product data,
-'             historical sales, and final forecast values. This is now a
-'             fully data-driven procedure using the global report configuration.
+' Purpose   : Populates a single "Tier" sheet with all relevant item data,
+'             historical sales, and final forecast values.
 ' @param   : ws As Worksheet - The worksheet object to populate.
 ' @param   : strAffiliate As String - The current affiliate.
 ' @param   : strTier As String - The tier for this specific sheet.
@@ -529,13 +528,13 @@ End Sub
 Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As String, ByVal strTier As String)
     Dim arrOutput() As Variant, arrHeader() As Variant
     Dim monthIndex As Long, colIndex As Long, staticColCount As Long
-    Dim productLifecycle As cProductLifecycle
+    Dim forecastItem As cForecastItem
     Dim varKeyFigure As Variant
     Dim colProducts As Collection
     Dim numHistMonths As Long, numFcstMonths As Long
     Dim outputRowIndex As Long, subtotalStartRow As Long
     
-    Set colProducts = GetProductsForTier(strAffiliate, strTier)
+    Set colProducts = GetItemsForTier(strAffiliate, strTier)
     If colProducts.Count = 0 Then Exit Sub
     
     staticColCount = GetTierReportCols().Count
@@ -563,22 +562,22 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     For Each varKeyFigure In dictKeyFigures.Keys
         subtotalStartRow = outputRowIndex
         
-        For Each productLifecycle In colProducts
+        For Each forecastItem In colProducts
             ' --- Populate static columns dynamically using CallByName ---
             For colIndex = 1 To staticColCount
                 Dim propName As String: propName = GetTierReportCols()(colIndex).SourceProperty
                 If propName = "KeyFigure" Then
                     arrOutput(outputRowIndex, colIndex) = CStr(varKeyFigure)
                 Else
-                    arrOutput(outputRowIndex, colIndex) = CallByName(productLifecycle, propName, VbGet)
+                    arrOutput(outputRowIndex, colIndex) = CallByName(forecastItem, propName, VbGet)
                 End If
             Next colIndex
             
             ' --- Populate Historical Data ---
             Dim histKey As New cDimensionKey
-            histKey.Add "Affiliate", productLifecycle.Affiliate
+            histKey.Add "Affiliate", forecastItem.Affiliate
             histKey.Add "KeyFigure", CStr(varKeyFigure)
-            histKey.Add "LocalItemNbr", productLifecycle.LocalItemNbr
+            histKey.Add "LocalItemNbr", forecastItem.LocalItemNbr
             Dim strHistKey As String: strHistKey = histKey.ToString()
             
             For monthIndex = 1 To numHistMonths
@@ -594,14 +593,14 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
             For monthIndex = 1 To numFcstMonths
                 Dim dteFcstMonth As Date: dteFcstMonth = arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1)
                 Dim fcstKey As String: fcstKey = CStr(varKeyFigure) & "|" & dteFcstMonth
-                If productLifecycle.ForecastValues.Exists(fcstKey) Then
-                    Dim baseValue As Double: baseValue = productLifecycle.ForecastValues.Item(fcstKey)
-                    Dim finalValue As Double: finalValue = baseValue * productLifecycle.GetForecastMultiplier(dteFcstMonth)
+                If forecastItem.ForecastValues.Exists(fcstKey) Then
+                    Dim baseValue As Double: baseValue = forecastItem.ForecastValues.Item(fcstKey)
+                    Dim finalValue As Double: finalValue = baseValue * forecastItem.GetForecastMultiplier(dteFcstMonth)
                     arrOutput(outputRowIndex, staticColCount + numHistMonths + monthIndex) = finalValue
                 End If
             Next monthIndex
             outputRowIndex = outputRowIndex + 1
-        Next productLifecycle
+        Next forecastItem
         
         ' --- Add Subtotal Row for the Key Figure block ---
         arrOutput(outputRowIndex, 1) = CStr(varKeyFigure) ' Key Figure in first column for total
@@ -628,9 +627,7 @@ End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : FormatTierSheet
-' Purpose   : Applies all professional formatting to a completed Tier sheet,
-'             including colors, borders, number formats, and frozen panes.
-'             This is also data-driven via the global report configuration.
+' Purpose   : Applies all professional formatting to a completed Tier sheet.
 ' @param   : ws As Worksheet - The worksheet to format.
 '---------------------------------------------------------------------------------
 Private Sub FormatTierSheet(ByVal ws As Worksheet)
@@ -700,13 +697,13 @@ End Sub
 '---------------------------------------------------------------------------------
 ' Procedure : PopulateSummarySheets
 ' Purpose   : Populates a single "Summary" sheet for a given Key Figure with
-'             all relevant product data and final forecast values.
+'             all relevant item data and final forecast values.
 ' @param   : wbReport As Workbook - The report workbook.
 ' @param   : strAffiliate As String - The current affiliate.
 ' @param   : dictMap As Object - Dictionary mapping summary sheet names to key figures.
 '---------------------------------------------------------------------------------
 Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate As String, ByVal dictMap As Object)
-    Dim ws As Worksheet, productLifecycle As cProductLifecycle
+    Dim ws As Worksheet, forecastItem As cForecastItem
     Dim arrOutput() As Variant, arrHeader() As Variant
     Dim monthIndex As Long, colIndex As Long, staticColCount As Long
     Dim numFcstMonths As Long, outputRowIndex As Long
@@ -732,15 +729,15 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
             strFullKeyFigure = dictMap.Item(ws.Name)
             
             ' --- Prepare Output Array ---
-            ReDim arrOutput(1 To dictLifecycleMap.Count, 1 To UBound(arrHeader))
+            ReDim arrOutput(1 To dictForecastItemMap.Count, 1 To UBound(arrHeader))
             outputRowIndex = 1
             
-            For Each varKey In dictLifecycleMap.Keys
-                Set productLifecycle = dictLifecycleMap.Item(varKey)
-                If productLifecycle.Affiliate = strAffiliate Then
+            For Each varKey In dictForecastItemMap.Keys
+                Set forecastItem = dictForecastItemMap.Item(varKey)
+                If forecastItem.Affiliate = strAffiliate Then
                     ' --- Populate static columns dynamically ---
                     For colIndex = 1 To staticColCount
-                        arrOutput(outputRowIndex, colIndex) = CallByName(productLifecycle, GetSummaryReportCols()(colIndex).SourceProperty, VbGet)
+                        arrOutput(outputRowIndex, colIndex) = CallByName(forecastItem, GetSummaryReportCols()(colIndex).SourceProperty, VbGet)
                     Next colIndex
                     
                     ' --- Populate Forecast Data ---
@@ -748,9 +745,9 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                         Dim dteFcstMonth As Date: dteFcstMonth = arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1)
                         Dim forecastKey As String: forecastKey = strFullKeyFigure & "|" & dteFcstMonth
                         
-                        If productLifecycle.ForecastValues.Exists(forecastKey) Then
-                            Dim baseValue As Double: baseValue = productLifecycle.ForecastValues.Item(forecastKey)
-                            Dim finalValue As Double: finalValue = baseValue * productLifecycle.GetForecastMultiplier(dteFcstMonth)
+                        If forecastItem.ForecastValues.Exists(forecastKey) Then
+                            Dim baseValue As Double: baseValue = forecastItem.ForecastValues.Item(forecastKey)
+                            Dim finalValue As Double: finalValue = baseValue * forecastItem.GetForecastMultiplier(dteFcstMonth)
                             arrOutput(outputRowIndex, staticColCount + monthIndex) = finalValue
                         End If
                     Next monthIndex
@@ -824,14 +821,14 @@ End Sub
 '================================================================================================
 
 '---------------------------------------------------------------------------------
-' Procedure : BuildLifecycleMap
-' Purpose   : Creates the master dictionary of all product objects (cProductLifecycle).
+' Procedure : BuildForecastItemMap
+' Purpose   : Creates the master dictionary of all forecast item objects (cForecastItem).
 ' @param   : arrStatus As Variant - The array of product status data.
-' @return  : Object - The completed dictionary of product objects.
+' @return  : Object - The completed dictionary of forecast item objects.
 '---------------------------------------------------------------------------------
-Private Function BuildLifecycleMap(ByVal arrStatus As Variant) As Object
+Private Function BuildForecastItemMap(ByVal arrStatus As Variant) As Object
     Dim dictMap As Object: Set dictMap = CreateObject("Scripting.Dictionary")
-    Dim rowIndex As Long, obj As cProductLifecycle
+    Dim rowIndex As Long, obj As cForecastItem
     
     For rowIndex = 2 To UBound(arrStatus, 1)
         Dim key As New cDimensionKey
@@ -840,101 +837,99 @@ Private Function BuildLifecycleMap(ByVal arrStatus As Variant) As Object
         Dim strKey As String: strKey = key.ToString()
         
         If Not dictMap.Exists(strKey) Then
-            Set obj = New cProductLifecycle
+            Set obj = New cForecastItem
             obj.Init g_dsProductStatus, arrStatus, rowIndex
             dictMap.Add strKey, obj
         Else
             lngWarningCount = lngWarningCount + 1
-            WriteToLog ltWarning, "BuildLifecycleMap", "Duplicate product found. Ignoring duplicate on row " & rowIndex & ".", , "Original: " & dictMap.Item(strKey).DebugSummary()
+            WriteToLog ltWarning, "BuildForecastItemMap", "Duplicate item found. Ignoring duplicate on row " & rowIndex & ".", , "Original: " & dictMap.Item(strKey).DebugSummary()
         End If
     Next rowIndex
-    Set BuildLifecycleMap = dictMap
+    Set BuildForecastItemMap = dictMap
 End Function
 
 '---------------------------------------------------------------------------------
-' Procedure : ValidateLifecycleLinks
-' Purpose   : Iterates through all product objects to validate the integrity of
+' Procedure : ValidateSuccessorLinks
+' Purpose   : Iterates through all item objects to validate the integrity of
 '             their successor links.
 '---------------------------------------------------------------------------------
-Private Sub ValidateLifecycleLinks()
+Private Sub ValidateSuccessorLinks()
     Dim tCheckpoint As Double: tCheckpoint = Timer
-    Dim productKey As Variant
-    Dim currentProduct As cProductLifecycle
+    Dim itemKey As Variant
+    Dim currentItem As cForecastItem
     
-    WriteToLog ltInfo, "ValidateLifecycleLinks", "Starting validation of successor product links..."
+    WriteToLog ltInfo, "ValidateSuccessorLinks", "Starting validation of successor item links..."
     Set dictValidatedChains = CreateObject("Scripting.Dictionary")
     
-    For Each productKey In dictLifecycleMap.Keys
-        Set currentProduct = dictLifecycleMap.Item(productKey)
+    For Each itemKey In dictForecastItemMap.Keys
+        Set currentItem = dictForecastItemMap.Item(itemKey)
         
-        If Not dictValidatedChains.Exists(productKey) Then
-            ValidateSingleChain currentProduct
+        If Not dictValidatedChains.Exists(itemKey) Then
+            ValidateSingleChain currentItem
         End If
-    Next productKey
+    Next itemKey
     
-    LogPerformance tCheckpoint, "Validate Lifecycle Links"
+    LogPerformance tCheckpoint, "Validate Successor Links"
 End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : ValidateSingleChain
 ' Purpose   : A helper function that recursively checks a single chain of
-'             product successions for invalid links or circular references.
-' @param   : startProduct As cProductLifecycle - The product to start the chain from.
+'             item successions for invalid links or circular references.
+' @param   : startItem As cForecastItem - The item to start the chain from.
 '---------------------------------------------------------------------------------
-Private Sub ValidateSingleChain(ByVal startProduct As cProductLifecycle)
+Private Sub ValidateSingleChain(ByVal startItem As cForecastItem)
     Dim pathTracker As Object: Set pathTracker = CreateObject("Scripting.Dictionary")
-    Dim currentProduct As cProductLifecycle: Set currentProduct = startProduct
+    Dim currentItem As cForecastItem: Set currentItem = startItem
     Dim successorKey As cDimensionKey
     Dim strSuccessorKey As String
     Dim chainIsValid As Boolean: chainIsValid = True
     
     Do While True ' Loop until the end of the chain is reached or a problem is found.
-        If pathTracker.Exists(currentProduct.ISD) Then
+        If pathTracker.Exists(currentItem.ISD) Then
             lngWarningCount = lngWarningCount + 1
-            WriteToLog ltWarning, "ValidateLifecycleLinks", "Circular reference detected.", , _
-                "Product '" & startProduct.DebugSummary() & "' is part of a successor loop that includes '" & currentProduct.DebugSummary() & "'."
+            WriteToLog ltWarning, "ValidateSuccessorLinks", "Circular reference detected.", , _
+                "Item '" & startItem.DebugSummary() & "' is part of a successor loop that includes '" & currentItem.DebugSummary() & "'."
             chainIsValid = False
             Exit Do
         End If
-        pathTracker.Add currentProduct.ISD, 1
+        pathTracker.Add currentItem.ISD, 1
         
-        If Len(currentProduct.SupersededByProductID) = 0 Then
+        If Len(currentItem.SupersededByProductID) = 0 Then
             Exit Do
         End If
         
-        Dim currentProductKey As New cDimensionKey
-        currentProductKey.Add "Affiliate", currentProduct.Affiliate
-        currentProductKey.Add "ISD", currentProduct.ISD
-        If dictValidatedChains.Exists(currentProductKey.ToString()) Then
-            If Not dictValidatedChains.Item(currentProductKey.ToString()) Then chainIsValid = False
+        Dim currentItemKey As String: currentItemKey = currentItem.Dimensions.ToString()
+        If dictValidatedChains.Exists(currentItemKey) Then
+            If Not dictValidatedChains.Item(currentItemKey) Then chainIsValid = False
             Exit Do
         End If
         
         Set successorKey = New cDimensionKey
-        successorKey.Add "Affiliate", currentProduct.Affiliate
-        successorKey.Add "ISD", currentProduct.SupersededByProductID
+        successorKey.Add "Affiliate", currentItem.Affiliate
+        successorKey.Add "ISD", currentItem.SupersededByProductID
         strSuccessorKey = successorKey.ToString()
         
-        If Not dictLifecycleMap.Exists(strSuccessorKey) Then
+        If Not dictForecastItemMap.Exists(strSuccessorKey) Then
             lngWarningCount = lngWarningCount + 1
-            WriteToLog ltWarning, "ValidateLifecycleLinks", "Successor product not found (broken link).", , _
-                "Product '" & currentProduct.DebugSummary() & "' lists successor ISD '" & currentProduct.SupersededByProductID & "' which does not exist in the same affiliate."
+            WriteToLog ltWarning, "ValidateSuccessorLinks", "Successor item not found (broken link).", , _
+                "Item '" & currentItem.DebugSummary() & "' lists successor ISD '" & currentItem.SupersededByProductID & "' which does not exist in the same affiliate."
             chainIsValid = False
             Exit Do
         End If
         
-        Set currentProduct = dictLifecycleMap.Item(strSuccessorKey)
+        Set currentItem = dictForecastItemMap.Item(strSuccessorKey)
     Loop
     
     Dim pathKey As Variant
     For Each pathKey In pathTracker.Keys
-        Dim productMapKey As New cDimensionKey
-        productMapKey.Add "Affiliate", startProduct.Affiliate
-        productMapKey.Add "ISD", pathKey
+        Dim itemMapKey As New cDimensionKey
+        itemMapKey.Add "Affiliate", startItem.Affiliate
+        itemMapKey.Add "ISD", pathKey
         
-        Dim strProductMapKey As String: strProductMapKey = productMapKey.ToString()
-        If Not dictValidatedChains.Exists(strProductMapKey) Then
-            dictValidatedChains.Add strProductMapKey, chainIsValid
+        Dim strItemMapKey As String: strItemMapKey = itemMapKey.ToString()
+        If Not dictValidatedChains.Exists(strItemMapKey) Then
+            dictValidatedChains.Add strItemMapKey, chainIsValid
         End If
     Next pathKey
 End Sub
@@ -969,20 +964,20 @@ Private Function GetDemandValueFromCache(ByVal cacheKey As String) As Double
 End Function
 
 '---------------------------------------------------------------------------------
-' Procedure : GetProductsForTier
-' Purpose   : Retrieves a collection of all product objects belonging to a
+' Procedure : GetItemsForTier
+' Purpose   : Retrieves a collection of all forecast item objects belonging to a
 '             specific affiliate and forecast tier.
 ' @param   : strAffiliate As String - The affiliate to filter by.
 ' @param   : strTier As String - The tier to filter by.
-' @return  : Collection - A collection of matching cProductLifecycle objects.
+' @return  : Collection - A collection of matching cForecastItem objects.
 '---------------------------------------------------------------------------------
-Private Function GetProductsForTier(strAffiliate As String, strTier As String) As Collection
-    Set GetProductsForTier = New Collection
-    Dim varKey As Variant, obj As cProductLifecycle
-    For Each varKey In dictLifecycleMap.Keys
-        Set obj = dictLifecycleMap.Item(varKey)
+Private Function GetItemsForTier(strAffiliate As String, strTier As String) As Collection
+    Set GetItemsForTier = New Collection
+    Dim varKey As Variant, obj As cForecastItem
+    For Each varKey In dictForecastItemMap.Keys
+        Set obj = dictForecastItemMap.Item(varKey)
         If obj.Affiliate = strAffiliate And obj.ForecastTier = strTier Then
-            GetProductsForTier.Add obj
+            GetItemsForTier.Add obj
         End If
     Next varKey
 End Function
@@ -1108,7 +1103,7 @@ End Function
 '             to Nothing. This is a crucial step to prevent memory leaks in Excel.
 '---------------------------------------------------------------------------------
 Private Sub CleanupMemory()
-    Set dictLifecycleMap = Nothing
+    Set dictForecastItemMap = Nothing
     Set dictAffiliates = Nothing
     Set dictKeyFigures = Nothing
     Set dictHistoryCache = Nothing
