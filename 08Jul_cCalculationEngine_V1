@@ -6,10 +6,18 @@ Option Explicit
 ' Purpose:     Encapsulates the core forecast calculation logic. This class is configured
 '              with the names of the relevant business dimensions and executes the
 '              forecast formula, completely decoupling the business rule from the main
-'              orchestration module (M_Forecasting).
-' Version:     1.0
+'              orchestration module (mForecasting).
+'
+' Version:     1.1
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
+'
+' PERFORMANCE NOTE: This class-based approach provides excellent architectural flexibility.
+' However, because it relies on the cDimensionKey class, it introduces performance
+' overhead from repeated object creation in the main calculation loop. For large
+' datasets, this can be noticeably slower than direct string concatenation.
+' See the PERFORMANCE NOTE in mForecasting.ComputeBaseForecasts for details on
+' a potential optimization path.
 '================================================================================================
 
 ' --- Private Member Variables ---
