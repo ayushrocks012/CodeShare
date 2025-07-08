@@ -4,17 +4,16 @@ Option Explicit
 '================================================================================================
 ' Module:      M_Forecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     29.0
+' Version:     31.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V29.0:       - Added comprehensive, AI-friendly documentation comments to all procedures
-'              - Added descriptive inline comments for key business logic.
-' V28.1:       - Removed local GetStatusString function, which was moved to M_Config.
-' V28.0:       - Implemented Stage 3 maintainability improvements.
-' V27.0:       - Added ValidateLifecycleLinks for improved robustness.
-' V26.0:       - Implemented Stage 1 performance improvements by adding data caches.
+' V31.0:       - Implemented Stage 5 Data-Driven Summary Sheets.
+'              - PopulateSummarySheets and FormatSummarySheet are now fully data-driven.
+'              - The entire report generation process is now controlled from M_Config.
+' V30.0:       - Implemented Stage 4 Advanced Validation for circular references.
+' V29.0:       - Added comprehensive, AI-friendly documentation comments.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -33,6 +32,7 @@ Private dictHistoryCache As Object
 ' --- Performance Cache Dictionaries ---
 Private dictHistSumCache As Object ' Caches total historical sum for a given product tier/sub-tier
 Private dictDemandCache As Object  ' Caches demand value for a tier/month
+Private dictValidatedChains As Object ' Caches product chains confirmed to be free of circular refs
 
 '================================================================================================
 ' 1. MAIN PUBLIC ORCHESTRATOR
@@ -76,7 +76,7 @@ Private Function InitializeRun() As Boolean
     
     Set wbHost = ThisWorkbook
     InitializeStatusMap
-    InitializeReportConfig ' Initialize the report structure configuration
+    InitializeAllReportConfigs ' Initialize all report structure configurations
     lngWarningCount = 0
     
     '--- Safely re-create the log sheet ---
@@ -319,7 +319,7 @@ Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
                         ' --- CORE FORECAST LOGIC ---
                         ' 1. Calculate the product's historical market share within its tier.
                         Dim productShareOfTier As Double
-                        productShareOfTier = histSubTierSum / histTierSum
+                        If histTierSum <> 0 Then productShareOfTier = histSubTierSum / histTierSum
 
                         ' 2. Apply this historical share to the tier's overall future demand forecast
                         '    to calculate the base forecast for this specific product.
@@ -596,56 +596,69 @@ End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : PopulateSummarySheets
-' Purpose   : Populates the summary sheets. NOTE: This is not yet data-driven
-'             and could be a future enhancement if needed.
+' Purpose   : Populates a single "Summary" sheet for a given Key Figure with
+'             all relevant product data and final forecast values. This is now a
+'             fully data-driven procedure using the global report configuration.
 ' @param   : wbReport As Workbook - The report workbook.
 ' @param   : strAffiliate As String - The current affiliate.
 ' @param   : dictMap As Object - Dictionary mapping summary sheet names to key figures.
 '---------------------------------------------------------------------------------
 Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate As String, ByVal dictMap As Object)
-    Dim ws As Worksheet
+    Dim ws As Worksheet, productLifecycle As cProductLifecycle
+    Dim arrOutput() As Variant, arrHeader() As Variant
+    Dim monthIndex As Long, colIndex As Long, staticColCount As Long
+    Dim numFcstMonths As Long, outputRowIndex As Long
+    Dim strFullKeyFigure As String, varKey As Variant
+    
+    staticColCount = gSummaryReportCols.Count
+    numFcstMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
+    
+    ' --- Build Header Array from Config ---
+    ReDim arrHeader(1 To staticColCount + numFcstMonths)
+    For colIndex = 1 To staticColCount
+        arrHeader(colIndex) = gSummaryReportCols(colIndex).HeaderText
+    Next colIndex
+    
+    ' --- Add Date Headers ---
+    For monthIndex = 1 To numFcstMonths
+        arrHeader(staticColCount + monthIndex) = Format$(arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1), "mmm-yy")
+    Next monthIndex
+    
+    ' --- Loop through each summary sheet to populate it ---
     For Each ws In wbReport.Worksheets
         If dictMap.Exists(ws.Name) Then
-            Dim strFullKeyFigure As String
             strFullKeyFigure = dictMap.Item(ws.Name)
             
-            Dim arrHeader As Variant
-            Dim numForecastMonths As Long: numForecastMonths = UBound(arrDemandData, 2) - DF_START_OF_MONTHS_COL + 1
-            ReDim arrHeader(1 To 8 + numForecastMonths)
-            arrHeader(1) = "Affiliate": arrHeader(2) = "Forecast Tier": arrHeader(3) = "Forecast Sub-Tier"
-            arrHeader(4) = "Local Item Nbr": arrHeader(5) = "Desc": arrHeader(6) = "I-S-D"
-            arrHeader(7) = "Status": arrHeader(8) = "Phase Out Month"
+            ' --- Prepare Output Array ---
+            ReDim arrOutput(1 To dictLifecycleMap.Count, 1 To UBound(arrHeader))
+            outputRowIndex = 1
             
-            Dim monthIndex As Long
-            For monthIndex = 1 To numForecastMonths
-                arrHeader(8 + monthIndex) = Format$(arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1), "mmm-yy")
-            Next monthIndex
-            ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
-            
-            Dim lngRow As Long: lngRow = 2
-            Dim productLifecycle As cProductLifecycle
-            Dim varKey As Variant
             For Each varKey In dictLifecycleMap.Keys
                 Set productLifecycle = dictLifecycleMap.Item(varKey)
                 If productLifecycle.Affiliate = strAffiliate Then
-                    ws.Cells(lngRow, 1).Value = productLifecycle.Affiliate: ws.Cells(lngRow, 2).Value = productLifecycle.ForecastTier
-                    ws.Cells(lngRow, 3).Value = productLifecycle.ForecastSubTier: ws.Cells(lngRow, 4).Value = productLifecycle.LocalItemNbr
-                    ws.Cells(lngRow, 5).Value = productLifecycle.Description: ws.Cells(lngRow, 6).Value = productLifecycle.ISD
-                    ws.Cells(lngRow, 7).Value = GetStatusString(productLifecycle.Status)
-                    If productLifecycle.PhaseOutDate > 0 Then ws.Cells(lngRow, 8).Value = productLifecycle.PhaseOutDate
+                    ' --- Populate static columns dynamically ---
+                    For colIndex = 1 To staticColCount
+                        arrOutput(outputRowIndex, colIndex) = CallByName(productLifecycle, gSummaryReportCols(colIndex).SourceProperty, VbGet)
+                    Next colIndex
                     
-                    For monthIndex = 1 To numForecastMonths
-                        Dim dteForecastMonth As Date: dteForecastMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1)
-                        Dim forecastKey As String: forecastKey = strFullKeyFigure & "|" & dteForecastMonth
+                    ' --- Populate Forecast Data ---
+                    For monthIndex = 1 To numFcstMonths
+                        Dim dteFcstMonth As Date: dteFcstMonth = arrDemandData(1, DF_START_OF_MONTHS_COL + monthIndex - 1)
+                        Dim forecastKey As String: forecastKey = strFullKeyFigure & "|" & dteFcstMonth
                         
                         If productLifecycle.ForecastValues.Exists(forecastKey) Then
-                            ws.Cells(lngRow, 8 + monthIndex).Value = productLifecycle.ForecastValues.Item(forecastKey) * productLifecycle.GetForecastMultiplier(dteForecastMonth)
+                            Dim baseValue As Double: baseValue = productLifecycle.ForecastValues.Item(forecastKey)
+                            Dim finalValue As Double: finalValue = baseValue * productLifecycle.GetForecastMultiplier(dteFcstMonth)
+                            arrOutput(outputRowIndex, staticColCount + monthIndex) = finalValue
                         End If
                     Next monthIndex
-                    lngRow = lngRow + 1
+                    outputRowIndex = outputRowIndex + 1
                 End If
             Next varKey
             
+            ' --- Write data to sheet and format ---
+            ws.Range("A1").Resize(1, UBound(arrHeader)).Value = arrHeader
+            ws.Range("A2").Resize(outputRowIndex - 1, UBound(arrHeader)).Value = arrOutput
             FormatSummarySheet ws
         End If
     Next ws
@@ -653,37 +666,49 @@ End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : FormatSummarySheet
-' Purpose   : Applies formatting to a summary sheet.
+' Purpose   : Applies all professional formatting to a completed Summary sheet.
+'             This is also data-driven via the global report configuration.
 ' @param   : ws As Worksheet - The worksheet to format.
 '---------------------------------------------------------------------------------
 Private Sub FormatSummarySheet(ByVal ws As Worksheet)
-    Dim lastRow As Long, lastCol As Long
+    Dim lastRow As Long, lastCol As Long, staticColCount As Long
     Dim dataRange As Range, headerRange As Range
+    Dim col As Long
 
     lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
     If lastRow <= 1 Then Exit Sub
     
+    staticColCount = gSummaryReportCols.Count
     lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
     
     Set headerRange = ws.Range("A1").Resize(1, lastCol)
     Set dataRange = ws.Range("A1").Resize(lastRow, lastCol)
     
+    ' --- Format Header ---
     With headerRange
         .Font.Bold = True
         .Font.Color = vbWhite
-        .Interior.Color = RGB(0, 32, 96)
+        .Interior.Color = RGB(0, 32, 96) ' Dark Blue
         .VerticalAlignment = xlCenter
     End With
     
-    ws.Range(ws.Cells(2, 9), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
-    ws.Columns("H").NumberFormat = "dd/mm/yyyy"
+    ' --- Apply Column Widths and Formats from Config ---
+    For col = 1 To staticColCount
+        ws.Columns(col).ColumnWidth = gSummaryReportCols(col).ColumnWidth
+        If Len(gSummaryReportCols(col).NumberFormat) > 0 Then
+            ws.Range("A1").Offset(, col - 1).EntireColumn.NumberFormat = gSummaryReportCols(col).NumberFormat
+        End If
+    Next col
     
+    ' --- Format Forecast Data Area ---
+    ws.Range(ws.Cells(2, staticColCount + 1), ws.Cells(lastRow, lastCol)).NumberFormat = "#,##0"
+    
+    ' --- Apply Borders and Freeze Panes ---
     With dataRange.Borders
         .LineStyle = xlContinuous
         .Weight = xlThin
     End With
     
-    ws.Columns.AutoFit
     ws.Activate
     ws.Rows(2).Select
     ActiveWindow.FreezePanes = True
@@ -725,53 +750,91 @@ End Function
 ' Procedure : ValidateLifecycleLinks
 ' Purpose   : Iterates through all product objects to validate the integrity of
 '             their successor links, checking for broken links, self-references,
-'             and circular references. Logs warnings for any issues found.
+'             and complex circular references. Logs warnings for any issues found.
 '---------------------------------------------------------------------------------
 Private Sub ValidateLifecycleLinks()
     Dim tCheckpoint As Double: tCheckpoint = Timer
     Dim productKey As Variant
     Dim currentProduct As cProductLifecycle
-    Dim successorProduct As cProductLifecycle
-    Dim successorKey As String
     
     WriteToLog ltInfo, "ValidateLifecycleLinks", "Starting validation of successor product links..."
+    ' Initialize a cache to store the results of chain validations to avoid redundant checks.
+    Set dictValidatedChains = CreateObject("Scripting.Dictionary")
     
     For Each productKey In dictLifecycleMap.Keys
         Set currentProduct = dictLifecycleMap.Item(productKey)
         
-        '--- Proceed only if the product has a designated successor ---
-        If Len(currentProduct.SupersededByProductID) > 0 Then
-            successorKey = BuildCompositeKey(currentProduct.Affiliate, currentProduct.SupersededByProductID)
-            
-            ' 1. Check if the successor product exists in the same affiliate.
-            If Not dictLifecycleMap.Exists(successorKey) Then
-                lngWarningCount = lngWarningCount + 1
-                WriteToLog ltWarning, "ValidateLifecycleLinks", "Successor product not found.", , _
-                    "Product '" & currentProduct.DebugSummary() & "' lists successor ISD '" & currentProduct.SupersededByProductID & "' which does not exist in the same affiliate."
-            Else
-                Set successorProduct = dictLifecycleMap.Item(successorKey)
-                
-                ' 2. Check for self-reference (A -> A).
-                If currentProduct.ISD = successorProduct.ISD Then
-                    lngWarningCount = lngWarningCount + 1
-                    WriteToLog ltWarning, "ValidateLifecycleLinks", "Self-reference found in successor link.", , _
-                        "Product '" & currentProduct.DebugSummary() & "' is set to be superseded by itself."
-                End If
-                
-                ' 3. Check for simple circular reference (A -> B and B -> A).
-                If Len(successorProduct.SupersededByProductID) > 0 Then
-                    If successorProduct.SupersededByProductID = currentProduct.ISD Then
-                        lngWarningCount = lngWarningCount + 1
-                        WriteToLog ltWarning, "ValidateLifecycleLinks", "Circular reference detected.", , _
-                            "Product '" & currentProduct.DebugSummary() & "' supersedes '" & successorProduct.DebugSummary() & "', which in turn supersedes it back."
-                    End If
-                End If
-            End If
+        ' Check the chain starting from this product, but only if it hasn't been validated already.
+        If Not dictValidatedChains.Exists(productKey) Then
+            ValidateSingleChain currentProduct
         End If
     Next productKey
     
     LogPerformance tCheckpoint, "Validate Lifecycle Links"
 End Sub
+
+'---------------------------------------------------------------------------------
+' Procedure : ValidateSingleChain
+' Purpose   : A helper function that recursively checks a single chain of
+'             product successions for invalid links or circular references.
+' @param   : startProduct As cProductLifecycle - The product to start the chain from.
+'---------------------------------------------------------------------------------
+Private Sub ValidateSingleChain(ByVal startProduct As cProductLifecycle)
+    Dim pathTracker As Object: Set pathTracker = CreateObject("Scripting.Dictionary")
+    Dim currentProduct As cProductLifecycle: Set currentProduct = startProduct
+    Dim successorProduct As cProductLifecycle
+    Dim successorKey As String
+    Dim chainIsValid As Boolean: chainIsValid = True
+    
+    Do While True ' Loop until the end of the chain is reached or a problem is found.
+        ' Add the current product to the path. If it's already there, we have a loop.
+        If pathTracker.Exists(currentProduct.ISD) Then
+            lngWarningCount = lngWarningCount + 1
+            WriteToLog ltWarning, "ValidateLifecycleLinks", "Circular reference detected.", , _
+                "Product '" & startProduct.DebugSummary() & "' is part of a successor loop that includes '" & currentProduct.DebugSummary() & "'."
+            chainIsValid = False
+            Exit Do
+        End If
+        pathTracker.Add currentProduct.ISD, 1
+        
+        ' If the current product has no successor, the chain ends here and is valid.
+        If Len(currentProduct.SupersededByProductID) = 0 Then
+            Exit Do
+        End If
+        
+        ' Check if the next link in the chain has already been validated.
+        Dim currentProductKey As String: currentProductKey = BuildCompositeKey(currentProduct.Affiliate, currentProduct.ISD)
+        If dictValidatedChains.Exists(currentProductKey) Then
+            ' If the sub-chain is invalid, this whole chain is invalid.
+            If Not dictValidatedChains.Item(currentProductKey) Then chainIsValid = False
+            Exit Do
+        End If
+        
+        successorKey = BuildCompositeKey(currentProduct.Affiliate, currentProduct.SupersededByProductID)
+        
+        ' Check if the successor exists.
+        If Not dictLifecycleMap.Exists(successorKey) Then
+            lngWarningCount = lngWarningCount + 1
+            WriteToLog ltWarning, "ValidateLifecycleLinks", "Successor product not found (broken link).", , _
+                "Product '" & currentProduct.DebugSummary() & "' lists successor ISD '" & currentProduct.SupersededByProductID & "' which does not exist in the same affiliate."
+            chainIsValid = False
+            Exit Do
+        End If
+        
+        ' Move to the next product in the chain.
+        Set currentProduct = dictLifecycleMap.Item(successorKey)
+    Loop
+    
+    ' Cache the validation result for every product in the path we just checked.
+    Dim pathKey As Variant
+    For Each pathKey In pathTracker.Keys
+        Dim productMapKey As String: productMapKey = BuildCompositeKey(startProduct.Affiliate, pathKey)
+        If Not dictValidatedChains.Exists(productMapKey) Then
+            dictValidatedChains.Add productMapKey, chainIsValid
+        End If
+    Next pathKey
+End Sub
+
 
 '---------------------------------------------------------------------------------
 ' Procedure : GetHistoricalSumFromCache
@@ -948,6 +1011,8 @@ Private Sub CleanupMemory()
     Set dictHistSumCache = Nothing
     Set dictDemandCache = Nothing
     Set gTierReportCols = Nothing
+    Set gSummaryReportCols = Nothing
+    Set dictValidatedChains = Nothing
     Erase arrStatusData
     Erase arrHistoryData
     Erase arrDemandData
