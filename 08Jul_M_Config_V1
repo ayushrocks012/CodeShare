@@ -6,17 +6,15 @@ Option Explicit
 ' Purpose:     This module defines all global constants and utility functions for the project.
 '              It acts as a central control panel for sheet names, column positions,
 '              and business logic enumerations.
-' Version:     33.0
+' Version:     34.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V34.0:       - STAGE 2 REFACTOR: Implemented Dimension Key pattern.
+'              - Marked the old `BuildCompositeKey` function as deprecated. The new
+'                `cDimensionKey` class is now the standard for creating cache keys.
 ' V33.0:       - STAGE 1 REFACTOR: Abstracted Data Sources.
-'              - Removed all hard-coded `..._COL` constants.
-'              - Introduced global cDataSource objects (g_dsProductStatus, etc.)
-'                to define sheet structures in a data-driven way.
-'              - Added initialization and cleanup routines for data source objects.
-' V32.1:       - Added CleanupAllReportConfigs subroutine.
 '================================================================================================
 
 ' --- DEBUGGING & LOGGING FLAGS ---
@@ -226,11 +224,8 @@ End Sub
 
 '---------------------------------------------------------------------------------
 ' Procedure : BuildCompositeKey
-' Purpose   : Creates a standardized, pipe-delimited key from two string parts
-'             for consistent use in dictionary lookups. Trims whitespace from parts.
-' @param   : keyPart1 As String - The first component of the key (e.g., Affiliate).
-' @param   : keyPart2 As String - The second component of the key (e.g., I-S-D).
-' @return  : String - The combined composite key (e.g., "UK|12345").
+' Purpose   : DEPRECATED. This function is obsolete and will be removed in a future
+'             version. Use the cDimensionKey class to build dictionary keys instead.
 '---------------------------------------------------------------------------------
 Public Function BuildCompositeKey(ByVal keyPart1 As String, ByVal keyPart2 As String) As String
     Const SEPARATOR As String = "|"
