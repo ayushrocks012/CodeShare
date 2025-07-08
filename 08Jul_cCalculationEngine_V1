@@ -1,0 +1,148 @@
+'@Folder("Classes")
+Option Explicit
+
+'================================================================================================
+' Class:       cCalculationEngine
+' Purpose:     Encapsulates the core forecast calculation logic. This class is configured
+'              with the names of the relevant business dimensions and executes the
+'              forecast formula, completely decoupling the business rule from the main
+'              orchestration module (M_Forecasting).
+' Version:     1.0
+' Author:      Ayush Goyal
+' Date:        08-Jul-2025
+'================================================================================================
+
+' --- Private Member Variables ---
+Private m_TotalLevelDim As String   ' e.g., "Tier"
+Private m_ShareLevelDim As String   ' e.g., "SubTier"
+Private m_KeyFigureDim As String    ' e.g., "KeyFigure"
+Private m_AffiliateDim As String    ' e.g., "Affiliate"
+
+' --- Public Configuration Properties ---
+Public Property Let TotalLevelDim(ByVal Value As String): m_TotalLevelDim = Value: End Property
+Public Property Let ShareLevelDim(ByVal Value As String): m_ShareLevelDim = Value: End Property
+Public Property Let KeyFigureDim(ByVal Value As String): m_KeyFigureDim = Value: End Property
+Public Property Let AffiliateDim(ByVal Value As String): m_AffiliateDim = Value: End Property
+
+'================================================================================================
+'--- PUBLIC EXECUTION METHOD ---
+'================================================================================================
+
+'---------------------------------------------------------------------------------
+' Procedure : Execute
+' Purpose   : Calculates the full monthly forecast for a single forecast item.
+'             This is the main entry point for the engine.
+' @param   : item As cForecastItem - The item to calculate the forecast for.
+' @param   : strKeyFigure As String - The current key figure being processed.
+' @param   : histCache As Object - The dictionary cache of historical sums.
+' @param   : demandCache As Object - The dictionary cache of demand values.
+' @param   : demandDataArray As Variant - The array of raw demand data (for month headers).
+' @param   : demandMonthsCol As Long - The starting column of month data in the demand array.
+'---------------------------------------------------------------------------------
+Public Sub Execute(ByVal item As cForecastItem, _
+                   ByVal strKeyFigure As String, _
+                   ByVal histCache As Object, _
+                   ByVal demandCache As Object, _
+                   ByVal demandDataArray As Variant, _
+                   ByVal demandMonthsCol As Long)
+
+    Dim histSubTierSum As Double, histTierSum As Double
+    Dim tierSumKey As cDimensionKey, subTierSumKey As cDimensionKey
+    
+    ' --- Get historical sums from the cache ---
+    Set tierSumKey = BuildTotalLevelKey(item, strKeyFigure)
+    Set subTierSumKey = BuildShareLevelKey(item, strKeyFigure)
+    
+    histTierSum = GetValueFromCache(histCache, tierSumKey.ToString())
+    
+    ' --- Only proceed if the overall tier has a sales history ---
+    If histTierSum > 0 Then
+        histSubTierSum = GetValueFromCache(histCache, subTierSumKey.ToString())
+        
+        ' Loop through all future months
+        Dim monthIndex As Long
+        For monthIndex = 1 To UBound(demandDataArray, 2) - demandMonthsCol + 1
+            Dim forecastMonth As Date: forecastMonth = demandDataArray(1, demandMonthsCol + monthIndex - 1)
+            Dim demandTierValue As Double
+            Dim demandKey As cDimensionKey
+            
+            ' --- Get the tier's demand value from the cache ---
+            Set demandKey = BuildDemandKey(item, strKeyFigure, forecastMonth)
+            demandTierValue = GetValueFromCache(demandCache, demandKey.ToString())
+            
+            ' --- CORE FORECAST LOGIC ---
+            Dim productShareOfTier As Double
+            If histTierSum <> 0 Then productShareOfTier = histSubTierSum / histTierSum
+
+            Dim baseForecast As Double
+            baseForecast = productShareOfTier * demandTierValue
+            
+            ' Store the calculated value in the item object's dictionary
+            item.ForecastValues.Add strKeyFigure & "|" & forecastMonth, baseForecast
+        Next monthIndex
+    Else
+        ' --- If tier has no history, all forecasts for this key figure are zero ---
+        Dim i As Long
+        For i = 1 To UBound(demandDataArray, 2) - demandMonthsCol + 1
+            Dim fMonth As Date: fMonth = demandDataArray(1, demandMonthsCol + i - 1)
+            item.ForecastValues.Add strKeyFigure & "|" & fMonth, 0
+        Next i
+    End If
+End Sub
+
+'================================================================================================
+'--- PRIVATE HELPER METHODS ---
+'================================================================================================
+
+'---------------------------------------------------------------------------------
+' Procedure : BuildTotalLevelKey
+' Purpose   : Builds the dimension key for the "Total" level (e.g., Tier) history lookup.
+'---------------------------------------------------------------------------------
+Private Function BuildTotalLevelKey(ByVal item As cForecastItem, ByVal strKeyFigure As String) As cDimensionKey
+    Set BuildTotalLevelKey = New cDimensionKey
+    With BuildTotalLevelKey
+        .Add m_AffiliateDim, item.Affiliate
+        .Add m_TotalLevelDim, CallByName(item, m_TotalLevelDim, VbGet) ' e.g., item.ForecastTier
+        .Add m_KeyFigureDim, strKeyFigure
+    End With
+End Function
+
+'---------------------------------------------------------------------------------
+' Procedure : BuildShareLevelKey
+' Purpose   : Builds the dimension key for the "Share" level (e.g., SubTier) history lookup.
+'---------------------------------------------------------------------------------
+Private Function BuildShareLevelKey(ByVal item As cForecastItem, ByVal strKeyFigure As String) As cDimensionKey
+    Set BuildShareLevelKey = New cDimensionKey
+    With BuildShareLevelKey
+        .Add m_AffiliateDim, item.Affiliate
+        .Add m_TotalLevelDim, CallByName(item, m_TotalLevelDim, VbGet)
+        .Add m_ShareLevelDim, CallByName(item, m_ShareLevelDim, VbGet) ' e.g., item.ForecastSubTier
+        .Add m_KeyFigureDim, strKeyFigure
+    End With
+End Function
+
+'---------------------------------------------------------------------------------
+' Procedure : BuildDemandKey
+' Purpose   : Builds the dimension key for the demand forecast lookup.
+'---------------------------------------------------------------------------------
+Private Function BuildDemandKey(ByVal item As cForecastItem, ByVal strKeyFigure As String, ByVal dteMonth As Date) As cDimensionKey
+    Set BuildDemandKey = New cDimensionKey
+    With BuildDemandKey
+        .Add m_AffiliateDim, item.Affiliate
+        .Add m_TotalLevelDim, CallByName(item, m_TotalLevelDim, VbGet)
+        .Add m_KeyFigureDim, strKeyFigure
+        .Add "Month", dteMonth
+    End With
+End Function
+
+'---------------------------------------------------------------------------------
+' Procedure : GetValueFromCache
+' Purpose   : Safely retrieves a value from a dictionary cache.
+'---------------------------------------------------------------------------------
+Private Function GetValueFromCache(ByVal cache As Object, ByVal cacheKey As String) As Double
+    If cache.Exists(cacheKey) Then
+        GetValueFromCache = cache.Item(cacheKey)
+    Else
+        GetValueFromCache = 0
+    End If
+End Function
