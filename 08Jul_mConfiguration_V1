@@ -2,18 +2,18 @@
 Option Explicit
 
 '================================================================================================
-' Module:      mConfig
+' Module:      mConfiguration
 ' Purpose:     This module defines all global constants and utility functions for the project.
 '              It acts as a central control panel for sheet names, column positions,
 '              and business logic enumerations.
-' Version:     36.0
+' Version:     37.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V37.0:       - Renamed module to mConfiguration for improved clarity and consistency.
 ' V36.0:       - Renamed module to mConfig for naming consistency with class modules.
 ' V35.0:       - STAGE 4 REFACTOR: Isolate Calculation Logic.
-' V34.0:       - STAGE 2 REFACTOR: Implement Dimension Key Pattern.
 '================================================================================================
 
 ' --- DEBUGGING & LOGGING FLAGS ---
