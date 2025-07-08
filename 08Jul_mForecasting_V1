@@ -2,17 +2,16 @@
 Option Explicit
 
 '================================================================================================
-' Module:      M_Forecasting
+' Module:      mForecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     36.1
+' Version:     37.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V36.1:       - BUGFIX: Corrected key creation in BuildDataCaches to use the shared
-'                dimension name constants from M_Config (e.g., CALC_TOTAL_LEVEL_DIM).
-'                This ensures cache keys match the keys used by cCalculationEngine,
-'                fixing the blank forecast issue.
+' V37.0:       - Renamed module to mForecasting for naming consistency with class modules.
+' V36.1:       - BUGFIX: Corrected key creation in BuildDataCaches to use shared
+'                dimension name constants, fixing the blank forecast issue.
 ' V36.0:       - STAGE 4 REFACTOR: Isolate Calculation Logic.
 '================================================================================================
 
@@ -186,7 +185,6 @@ Private Sub BuildDataCaches()
     Set dictHistSumCache = CreateObject("Scripting.Dictionary")
     dictHistSumCache.CompareMode = vbTextCompare
     For r = 2 To UBound(arrHistoryData, 1)
-        ' BUGFIX: Use the dimension name constants from M_Config to ensure keys match the calculation engine.
         Set subTierKey = New cDimensionKey
         subTierKey.Add CALC_AFFILIATE_DIM, arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
         subTierKey.Add CALC_TOTAL_LEVEL_DIM, arrHistoryData(r, g_dsHistory.GetCol("Tier"))
@@ -212,7 +210,6 @@ Private Sub BuildDataCaches()
     dictDemandCache.CompareMode = vbTextCompare
     For r = 2 To UBound(arrDemandData, 1)
         For c = g_dsDemand.StartOfMonthsCol To UBound(arrDemandData, 2)
-            ' BUGFIX: Use the dimension name constants from M_Config here as well.
             Set demandKey = New cDimensionKey
             demandKey.Add CALC_AFFILIATE_DIM, arrDemandData(r, g_dsDemand.GetCol("Affiliate"))
             demandKey.Add CALC_TOTAL_LEVEL_DIM, arrDemandData(r, g_dsDemand.GetCol("Tier"))
