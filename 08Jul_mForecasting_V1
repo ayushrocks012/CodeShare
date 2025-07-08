@@ -4,17 +4,17 @@ Option Explicit
 '================================================================================================
 ' Module:      mForecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     41.0
+' Version:     42.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V42.0:       - Implemented a "single-pass" calculation strategy. A new procedure,
+'                'CalculateAndFinalizeForecasts', now handles base calculation,
+'                lifecycle adjustments, and successor transfers in a single loop.
+'                This significantly improves performance and simplifies reporting logic.
 ' V41.0:       - Refactored lifecycle logic into the new cLifecycleManager class.
-'                The main module now delegates all phase-in/out and successor
-'                calculations, making the workflow clearer and more focused.
-' V40.0:       - Added detailed PERFORMANCE NOTE to the ComputeBaseForecasts procedure
-'                to document the trade-off between architectural flexibility and
-'                execution speed, and to outline a potential optimization path.
+' V40.0:       - Added detailed PERFORMANCE NOTE to the ComputeBaseForecasts procedure.
 ' V39.0:       - Renamed main public procedure to UpdateForecast.
 '================================================================================================
 
@@ -301,8 +301,7 @@ End Sub
 '---------------------------------------------------------------------------------
 Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String)
     InitializeForecastValues strAffiliate
-    ComputeBaseForecasts strAffiliate
-    ApplySuccessorAdjustments strAffiliate
+    CalculateAndFinalizeForecasts strAffiliate
     GenerateAffiliateReport strAffiliate
 End Sub
 
@@ -320,82 +319,88 @@ Private Sub InitializeForecastValues(ByVal strAffiliate As String)
     Next itemKey
 End Sub
 
-'================================================================================
-' PERFORMANCE NOTE (For developers and AI assistants):
-'
-' This procedure uses the cCalculationEngine class to perform the forecast.
-' This approach offers maximum architectural flexibility but comes at a
-' performance cost due to repeated object creation within the loops.
-'
-' **THE TRADE-OFF:**
-'   - CURRENT STATE (Flexible): Easy to change the calculation logic by just
-'     modifying the CALC_... constants in mConfiguration.
-'   - OPTIMIZED STATE (Fast): Would require moving the calculation logic from
-'     the engine back into this sub and using direct string concatenation for
-'     cache lookups, which is significantly faster.
-'
-' **TO OPTIMIZE FOR SPEED:**
-'   1. Remove the cCalculationEngine.
-'   2. Re-implement the logic from the engine's Execute method directly inside
-'      the loops below.
-'   3. Build the cache lookup keys using simple string concatenation instead
-'      of the cDimensionKey class (e.g., `key = item.Affiliate & "|" & ...`).
-'
-' This optimization would restore the performance of the pre-refactoring version
-' while keeping the other benefits of the new architecture.
-'================================================================================
 '---------------------------------------------------------------------------------
-' Procedure : ComputeBaseForecasts
-' Purpose   : The core calculation engine. It iterates through every item for
-'             the affiliate, calculates its base forecast using the main formula,
-'             and stores the result in the item object's forecast dictionary.
+' Procedure : CalculateAndFinalizeForecasts
+' Purpose   : A single-pass procedure that calculates the base forecast, applies
+'             all lifecycle adjustments, and transfers values to successors.
 ' @param   : strAffiliate As String - The affiliate being processed.
 '---------------------------------------------------------------------------------
-Private Sub ComputeBaseForecasts(ByVal strAffiliate As String)
-    Dim forecastItem As cForecastItem
-    Dim itemKey As Variant, keyFigure As Variant
+Private Sub CalculateAndFinalizeForecasts(ByVal strAffiliate As String)
+    Dim forecastItem As cForecastItem, successorItem As cForecastItem
+    Dim itemKey As Variant, keyFigure As Variant, fcstKey As Variant
     Dim engine As cCalculationEngine
+    Dim manager As cLifecycleManager
     
-    ' --- Create and configure the calculation engine ---
+    ' --- Create and configure the calculation and logic engines ---
     Set engine = New cCalculationEngine
-    engine.AffiliateDim = CALC_AFFILIATE_DIM
-    engine.TotalLevelDim = CALC_TOTAL_LEVEL_DIM
-    engine.ShareLevelDim = CALC_SHARE_LEVEL_DIM
-    engine.KeyFigureDim = CALC_KEY_FIGURE_DIM
+    With engine
+        .AffiliateDim = CALC_AFFILIATE_DIM
+        .TotalLevelDim = CALC_TOTAL_LEVEL_DIM
+        .ShareLevelDim = CALC_SHARE_LEVEL_DIM
+        .KeyFigureDim = CALC_KEY_FIGURE_DIM
+    End With
     
-    ' --- Loop through all items and execute the engine ---
+    Set manager = New cLifecycleManager
+    
+    ' --- SINGLE PASS: Loop through all items for the affiliate ---
     For Each itemKey In dictForecastItemMap.Keys
         Set forecastItem = dictForecastItemMap.Item(itemKey)
         If forecastItem.Affiliate = strAffiliate Then
             
-            If DEBUG_MODE Then WriteToLog ltInfo, "ComputeBaseForecasts", "Processing: " & forecastItem.DebugSummary()
-            
+            ' 1. Calculate the raw, unadjusted forecast for all key figures
             For Each keyFigure In dictKeyFigures.Keys
-                ' Delegate the entire calculation for this item/key figure to the engine.
                 engine.Execute forecastItem, CStr(keyFigure), dictHistSumCache, dictDemandCache, arrDemandData, g_dsDemand.StartOfMonthsCol
             Next keyFigure
+            
+            ' 2. Finalize the forecast values in place and transfer remainders
+            If forecastItem.ForecastValues.Count > 0 Then
+                Set successorItem = GetSuccessorItem(forecastItem) ' Get successor once per item
+                
+                For Each fcstKey In forecastItem.ForecastValues.Keys
+                    Dim baseValue As Double: baseValue = forecastItem.ForecastValues.Item(fcstKey)
+                    If baseValue > 0 Then
+                        Dim dteFcstMonth As Date: dteFcstMonth = CDate(Split(fcstKey, "|")(1))
+                        Dim multiplier As Double: multiplier = manager.CalculateMultiplier(forecastItem, dteFcstMonth)
+                        
+                        Dim finalValue As Double: finalValue = baseValue * multiplier
+                        Dim transferValue As Double: transferValue = baseValue - finalValue
+                        
+                        ' Update the item's own forecast to its final value
+                        forecastItem.ForecastValues.Item(fcstKey) = finalValue
+                        
+                        ' If there's a remainder, transfer it to the successor
+                        If transferValue > 0 And Not successorItem Is Nothing Then
+                            If successorItem.ForecastValues.Exists(fcstKey) Then
+                                successorItem.ForecastValues.Item(fcstKey) = successorItem.ForecastValues.Item(fcstKey) + transferValue
+                            Else
+                                successorItem.ForecastValues.Add fcstKey, transferValue
+                            End If
+                        End If
+                    End If
+                Next fcstKey
+            End If
         End If
     Next itemKey
 End Sub
 
 '---------------------------------------------------------------------------------
-' Procedure : ApplySuccessorAdjustments
-' Purpose   : Iterates through all items and applies successor forecast transfers
-'             by delegating to the cLifecycleManager.
+' Procedure : GetSuccessorItem
+' Purpose   : Helper function to find and return the successor for a given item.
+' @param   : item As cForecastItem - The item for which to find the successor.
+' @return  : cForecastItem - The successor item object, or Nothing if not found.
 '---------------------------------------------------------------------------------
-Private Sub ApplySuccessorAdjustments(ByVal strAffiliate As String)
-    Dim forecastItem As cForecastItem, itemKey As Variant
-    Dim manager As cLifecycleManager
-    Set manager = New cLifecycleManager
+Private Function GetSuccessorItem(ByVal item As cForecastItem) As cForecastItem
+    If Len(item.SupersededByProductID) = 0 Then Exit Function
     
-    For Each itemKey In dictForecastItemMap.Keys
-        Set forecastItem = dictForecastItemMap.Item(itemKey)
-        If forecastItem.Affiliate = strAffiliate Then
-            ' Delegate the transfer logic to the specialized manager class
-            manager.ApplySuccessorTransfer forecastItem, dictForecastItemMap
-        End If
-    Next itemKey
-End Sub
+    Dim successorKey As cDimensionKey
+    Set successorKey = New cDimensionKey
+    successorKey.Add "Affiliate", item.Affiliate
+    successorKey.Add "ISD", item.SupersededByProductID
+    
+    If dictForecastItemMap.Exists(successorKey.ToString()) Then
+        Set GetSuccessorItem = dictForecastItemMap.Item(successorKey.ToString())
+    End If
+End Function
 
 
 '================================================================================================
@@ -457,9 +462,7 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
     Dim numHistMonths As Long, numFcstMonths As Long
     Dim outputRowIndex As Long, subtotalStartRow As Long
     Dim histKey As cDimensionKey
-    Dim manager As cLifecycleManager
     
-    Set manager = New cLifecycleManager
     Set colProducts = GetItemsForTier(strAffiliate, strTier)
     If colProducts.Count = 0 Then Exit Sub
     
@@ -514,10 +517,8 @@ Private Sub PopulateTierSheet(ByVal ws As Worksheet, ByVal strAffiliate As Strin
                 Dim dteFcstMonth As Date: dteFcstMonth = arrDemandData(1, g_dsDemand.StartOfMonthsCol + monthIndex - 1)
                 Dim fcstKey As String: fcstKey = CStr(varKeyFigure) & "|" & dteFcstMonth
                 If forecastItem.ForecastValues.Exists(fcstKey) Then
-                    Dim baseValue As Double: baseValue = forecastItem.ForecastValues.Item(fcstKey)
-                    ' Use the manager to get the lifecycle multiplier
-                    Dim finalValue As Double: finalValue = baseValue * manager.CalculateMultiplier(forecastItem, dteFcstMonth)
-                    arrOutput(outputRowIndex, staticColCount + numHistMonths + monthIndex) = finalValue
+                    ' Logic is simplified: just read the final, pre-calculated value.
+                    arrOutput(outputRowIndex, staticColCount + numHistMonths + monthIndex) = forecastItem.ForecastValues.Item(fcstKey)
                 End If
             Next monthIndex
             outputRowIndex = outputRowIndex + 1
@@ -603,9 +604,7 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
     Dim monthIndex As Long, colIndex As Long, staticColCount As Long
     Dim numFcstMonths As Long, outputRowIndex As Long
     Dim strFullKeyFigure As String, varKey As Variant
-    Dim manager As cLifecycleManager
     
-    Set manager = New cLifecycleManager
     staticColCount = GetSummaryReportCols().Count
     numFcstMonths = UBound(arrDemandData, 2) - g_dsDemand.StartOfMonthsCol + 1
     
@@ -635,10 +634,8 @@ Private Sub PopulateSummarySheets(ByVal wbReport As Workbook, ByVal strAffiliate
                         Dim forecastKey As String: forecastKey = strFullKeyFigure & "|" & dteFcstMonth
                         
                         If forecastItem.ForecastValues.Exists(forecastKey) Then
-                            Dim baseValue As Double: baseValue = forecastItem.ForecastValues.Item(forecastKey)
-                            ' Use the manager to get the lifecycle multiplier
-                            Dim finalValue As Double: finalValue = baseValue * manager.CalculateMultiplier(forecastItem, dteFcstMonth)
-                            arrOutput(outputRowIndex, staticColCount + monthIndex) = finalValue
+                            ' Logic is simplified: just read the final, pre-calculated value.
+                            arrOutput(outputRowIndex, staticColCount + monthIndex) = forecastItem.ForecastValues.Item(forecastKey)
                         End If
                     Next monthIndex
                     outputRowIndex = outputRowIndex + 1
