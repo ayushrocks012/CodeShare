@@ -6,15 +6,16 @@ Option Explicit
 ' Purpose:     Main orchestrator for the forecasting process. It initializes the environment
 '              and uses dedicated class objects to manage data, execute calculations,
 '              and generate reports.
-' Version:     42.0
+' Version:     42.1
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V42.1:       - BUGFIX: Correctly configured the cCalculationEngine instance by setting
+'                its dimension properties before use, resolving a compile error.
 ' V42.0:       - REFACTOR: Major architectural overhaul.
 '                - Delegated all data loading and caching to a new cDataManager class.
 '                - Delegated all report generation to a new cReportGenerator class.
-'                - This module is now a lean orchestrator, improving separation of concerns.
 ' V41.0:       - REFACTOR: Modified ApplySuccessorAdjustments to use cProductLifecycle.
 '================================================================================================
 
@@ -106,6 +107,14 @@ Private Sub ProcessAllAffiliates(ByVal dataManager As cDataManager)
     ' --- Create and configure the calculation engine once ---
     Dim engine As cCalculationEngine
     Set engine = New cCalculationEngine
+    
+    ' Configure the engine's dimensions using constants from mConfiguration
+    engine.AffiliateDim = CALC_AFFILIATE_DIM
+    engine.TotalLevelDim = CALC_TOTAL_LEVEL_DIM
+    engine.ShareLevelDim = CALC_SHARE_LEVEL_DIM
+    engine.KeyFigureDim = CALC_KEY_FIGURE_DIM
+    
+    ' Initialize the engine with data it needs for its lifetime
     engine.Init dataManager.DemandDataArray, g_dsDemand.StartOfMonthsCol
     
     ' --- Create the report generator once ---
