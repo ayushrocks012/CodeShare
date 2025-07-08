@@ -4,14 +4,14 @@ Option Explicit
 '================================================================================================
 ' Module:      mForecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     38.0
+' Version:     39.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V38.0:       - Applied Rubberduck code inspection fixes. Corrected all instances
-'                of object auto-instantiation to use explicit Dim/Set pattern.
-' V37.0:       - Renamed module to mForecasting.
+' V39.0:       - Renamed main public procedure from UpdateForecast_V8 to UpdateForecast
+'                for simplicity and to remove versioning from the name.
+' V38.0:       - Applied Rubberduck code inspection fixes.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -38,11 +38,11 @@ Private dictValidatedChains As Object
 
 '@Ignore UnusedMember
 '---------------------------------------------------------------------------------
-' Procedure : UpdateForecast_V8
+' Procedure : UpdateForecast
 ' Purpose   : This is the main public entry point for the entire forecasting process.
 '             It orchestrates the complete workflow from initialization to finalization.
 '---------------------------------------------------------------------------------
-Public Sub UpdateForecast_V8()
+Public Sub UpdateForecast()
     Dim tStart As Double: tStart = Timer
 
     If Not InitializeRun() Then GoTo Main_Exit
