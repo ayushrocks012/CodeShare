@@ -7,9 +7,14 @@ Option Explicit
 '              replaces hard-coded, pipe-delimited strings, allowing for flexible and
 '              scalable key management. It ensures that keys are always generated in a
 '              consistent, sorted order.
-' Version:     1.0
+' Version:     1.1
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
+'
+' Change Log:
+' V1.1:        - Applied Rubberduck code inspection fixes. Removed the unused
+'                'GetValue' function.
+' V1.0:        - Initial class creation for Stage 2 refactoring.
 '================================================================================================
 
 ' --- Private Member Variables ---
@@ -39,20 +44,6 @@ Public Sub Add(ByVal Name As String, ByVal Value As Variant)
 End Sub
 
 '---------------------------------------------------------------------------------
-' Procedure : GetValue
-' Purpose   : Retrieves the value for a given dimension name.
-' @param   : Name As String - The name of the dimension to retrieve.
-' @return  : Variant - The value of the dimension. Returns Empty if not found.
-'---------------------------------------------------------------------------------
-Public Function GetValue(ByVal Name As String) As Variant
-    If m_Dimensions.Exists(Name) Then
-        GetValue = m_Dimensions.Item(Name)
-    Else
-        GetValue = Empty
-    End If
-End Function
-
-'---------------------------------------------------------------------------------
 ' Procedure : ToString
 ' Purpose   : Generates a consistent, repeatable string representation of the key.
 '             It sorts the dimension names alphabetically before joining them to
@@ -66,8 +57,12 @@ Public Function ToString() As String
         Exit Function
     End If
     
-    Dim sortedKeys As Object: Set sortedKeys = GetSortedKeys()
-    Dim keyParts() As String: ReDim keyParts(0 To sortedKeys.Count - 1)
+    Dim sortedKeys As Object
+    Set sortedKeys = GetSortedKeys()
+    
+    Dim keyParts() As String
+    ReDim keyParts(0 To sortedKeys.Count - 1)
+    
     Dim i As Long
     Dim dimName As Variant
     
