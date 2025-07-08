@@ -3,58 +3,66 @@ Option Explicit
 
 '================================================================================================
 ' Class:       cForecastItem
-' Purpose:     Represents a single, generic item to be forecasted. This class replaces
-'              the specific cProductLifecycle class. It uses a flexible, dictionary-based
-'              approach to store properties, making the application scalable to new
-'              business dimensions without code changes to the object model.
-' Version:     1.1
+' Purpose:     Represents a single, generic item to be forecasted.
+' Version:     1.2
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V1.1:        - BUGFIX: Changed PhaseOutDate property to return a Variant. This allows
-'                it to return Empty for non-phasing-out items, preventing the "Jan-00"
-'                error in the final report.
-'              - Updated HandlePhaseOutInit to not add a zero-date.
+' V1.2:        - Applied Rubberduck code inspection fixes. Corrected auto-instantiation
+'                of the successorKey object.
+' V1.1:        - BUGFIX: Changed PhaseOutDate property to return a Variant.
 ' V1.0:        - Initial creation, replacing cProductLifecycle.
 '================================================================================================
 
 ' --- Private Member Variables ---
-Private m_Dimensions As cDimensionKey   ' Holds the unique identifying dimensions for this item.
-Private m_Properties As Object          ' Dictionary: Holds all other non-identifying attributes.
-Private m_ForecastValues As Object      ' Dictionary: Holds the calculated forecast values for each month/key figure.
+Private m_Dimensions As cDimensionKey
+Private m_Properties As Object
+Private m_ForecastValues As Object
 
 ' --- Constants ---
-Private Const DEFAULT_PHASE_OUT_PCT As Double = 1# ' Default to 100% if blank or invalid
+Private Const DEFAULT_PHASE_OUT_PCT As Double = 1#
 
 '================================================================================================
 '--- PUBLIC WRAPPER PROPERTIES (For Reporting and Business Logic) ---
 '================================================================================================
 
+'@Ignore UnusedMember
 Public Property Get Affiliate() As String: Affiliate = GetProp("Affiliate"): End Property
+'@Ignore UnusedMember
 Public Property Get ForecastTier() As String: ForecastTier = GetProp("Tier"): End Property
+'@Ignore UnusedMember
 Public Property Get ForecastSubTier() As String: ForecastSubTier = GetProp("SubTier"): End Property
+'@Ignore UnusedMember
 Public Property Get LocalItemNbr() As String: LocalItemNbr = GetProp("LocalItemNbr"): End Property
+'@Ignore UnusedMember
 Public Property Get Description() As String: Description = GetProp("Description"): End Property
+'@Ignore UnusedMember
 Public Property Get ISD() As String: ISD = GetProp("ISD"): End Property
+'@Ignore UnusedMember
 Public Property Get Status() As ProductStatus: Status = GetProp("Status"): End Property
 
-' BUGFIX: Return type changed to Variant to allow returning Empty for blank dates.
 Public Property Get PhaseOutDate() As Variant
     Dim val As Variant
     val = GetProp("PhaseOutDate")
     If IsDate(val) And val > 0 Then
         PhaseOutDate = val
     Else
-        PhaseOutDate = Empty ' Return Empty to produce a blank cell in Excel
+        PhaseOutDate = Empty
     End If
 End Property
 
+'@Ignore UnusedMember
 Public Property Get PhaseOutPercent() As Double: PhaseOutPercent = GetProp("PhaseOutPercent"): End Property
+'@Ignore UnusedMember
 Public Property Get SupersededByProductID() As String: SupersededByProductID = GetProp("SupersededBy"): End Property
+'@Ignore UnusedMember
 Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = GetProp("IsPhasingOut"): End Property
+'@Ignore UnusedMember
 Public Property Get IsPhasingIn() As Boolean: IsPhasingIn = GetProp("IsPhasingIn"): End Property
+'@Ignore UnusedMember
 Public Property Get PhaseInDate() As Date: PhaseInDate = GetProp("PhaseInDate"): End Property
+'@Ignore UnusedMember
 Public Property Get PhaseInPercent() As Double: PhaseInPercent = GetProp("PhaseInPercent"): End Property
 
 Public Property Get ForecastValues() As Object: Set ForecastValues = m_ForecastValues: End Property
@@ -62,10 +70,7 @@ Public Property Set ForecastValues(ByVal Value As Object): Set m_ForecastValues 
 
 Public Property Get Dimensions() As cDimensionKey: Set Dimensions = m_Dimensions: End Property
 
-'---------------------------------------------------------------------------------
-' Procedure : StatusString (Property Get)
-' Purpose   : Returns the string representation of the item's status enum.
-'---------------------------------------------------------------------------------
+'@Ignore UnusedMember
 Public Property Get StatusString() As String
     StatusString = GetStatusString(Me.Status)
 End Property
@@ -74,9 +79,6 @@ End Property
 '--- INITIALIZATION AND LIFECYCLE LOGIC ---
 '================================================================================================
 
-'---------------------------------------------------------------------------------
-' Procedure : Class_Initialize (Constructor)
-'---------------------------------------------------------------------------------
 Private Sub Class_Initialize()
     Set m_Dimensions = New cDimensionKey
     Set m_Properties = CreateObject("Scripting.Dictionary")
@@ -84,10 +86,6 @@ Private Sub Class_Initialize()
     Set m_ForecastValues = CreateObject("Scripting.Dictionary")
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : Init
-' Purpose   : Initializes a new forecast item from a row of source data.
-'---------------------------------------------------------------------------------
 Public Sub Init(ByVal ds As cDataSource, ByVal arrDataSource As Variant, ByVal lngRow As Long)
     m_Dimensions.Add "Affiliate", Trim$(arrDataSource(lngRow, ds.GetCol("Affiliate")))
     m_Dimensions.Add "ISD", Trim$(arrDataSource(lngRow, ds.GetCol("ISD")))
@@ -104,10 +102,6 @@ Public Sub Init(ByVal ds As cDataSource, ByVal arrDataSource As Variant, ByVal l
     HandlePhaseOutInit ds, arrDataSource, lngRow
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : GetForecastMultiplier
-' Purpose   : Calculates the forecast multiplier (0.0 to 1.0) for a given month.
-'---------------------------------------------------------------------------------
 Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
     GetForecastMultiplier = 1
 
@@ -130,14 +124,11 @@ Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
     End If
 End Function
 
-'---------------------------------------------------------------------------------
-' Procedure : LinkAndTransferSuccessorForecast
-' Purpose   : Finds this item's successor and transfers forecast value.
-'---------------------------------------------------------------------------------
 Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
     If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
     
-    Dim successorKey As New cDimensionKey
+    Dim successorKey As cDimensionKey
+    Set successorKey = New cDimensionKey
     successorKey.Add "Affiliate", Me.Affiliate
     successorKey.Add "ISD", Me.SupersededByProductID
     
@@ -172,10 +163,6 @@ Public Sub LinkAndTransferSuccessorForecast(ByVal dictMap As Object)
     End If
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : DebugSummary
-' Purpose   : Provides a simple, one-line string summary of the object.
-'---------------------------------------------------------------------------------
 Public Function DebugSummary() As String
     DebugSummary = Me.Affiliate & " | " & Me.LocalItemNbr & " | " & GetStatusString(Me.Status)
 End Function
@@ -184,10 +171,6 @@ End Function
 '--- PRIVATE HELPER METHODS ---
 '================================================================================================
 
-'---------------------------------------------------------------------------------
-' Procedure : AddProp
-' Purpose   : Adds or updates a value in the internal properties dictionary.
-'---------------------------------------------------------------------------------
 Public Sub AddProp(ByVal Key As String, ByVal Value As Variant)
     Dim cleanValue As Variant
     If IsObject(Value) Then
@@ -205,10 +188,6 @@ Public Sub AddProp(ByVal Key As String, ByVal Value As Variant)
     End If
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : GetProp
-' Purpose   : Safely retrieves a value from the properties dictionary.
-'---------------------------------------------------------------------------------
 Private Function GetProp(ByVal Key As String, Optional ByVal DefaultValue As Variant) As Variant
     If m_Properties.Exists(Key) Then
         GetProp = m_Properties.Item(Key)
@@ -221,10 +200,6 @@ Private Function GetProp(ByVal Key As String, Optional ByVal DefaultValue As Var
     End If
 End Function
 
-'---------------------------------------------------------------------------------
-' Procedure : HandlePhaseOutInit
-' Purpose   : Extracts and sets phase-out properties during initialization.
-'---------------------------------------------------------------------------------
 Private Sub HandlePhaseOutInit(ByVal ds As cDataSource, ByVal arrDataSource As Variant, ByVal lngRow As Long)
     Dim varPhaseOutPct As Variant: varPhaseOutPct = arrDataSource(lngRow, ds.GetCol("PhaseOutPercent"))
     
@@ -236,7 +211,6 @@ Private Sub HandlePhaseOutInit(ByVal ds As cDataSource, ByVal arrDataSource As V
 
     If Me.Status = psPhaseInOut Or Me.Status = psDiscontinued Then
         AddProp "IsPhasingOut", True
-        ' Only add the date property if it's a valid date
         If IsDate(arrDataSource(lngRow, ds.GetCol("PhaseOutDate"))) Then
             AddProp "PhaseOutDate", CDate(arrDataSource(lngRow, ds.GetCol("PhaseOutDate")))
         End If
@@ -245,10 +219,6 @@ Private Sub HandlePhaseOutInit(ByVal ds As cDataSource, ByVal arrDataSource As V
     End If
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : FirstDayOfMonth
-' Purpose   : Normalizes a date to the first day of its month.
-'---------------------------------------------------------------------------------
 Private Function FirstDayOfMonth(ByVal d As Date) As Date
     FirstDayOfMonth = DateSerial(Year(d), Month(d), 1)
 End Function
