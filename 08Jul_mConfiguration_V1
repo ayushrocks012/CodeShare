@@ -6,14 +6,14 @@ Option Explicit
 ' Purpose:     This module defines all global constants and utility functions for the project.
 '              It acts as a central control panel for sheet names, column positions,
 '              and business logic enumerations.
-' Version:     37.0
+' Version:     38.0
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V38.0:       - Changed scope of InitializeAllConfigs and CleanupAllConfigs to Friend
+'                to hide them from the Macro dialog box.
 ' V37.0:       - Renamed module to mConfiguration for improved clarity and consistency.
-' V36.0:       - Renamed module to mConfig for naming consistency with class modules.
-' V35.0:       - STAGE 4 REFACTOR: Isolate Calculation Logic.
 '================================================================================================
 
 ' --- DEBUGGING & LOGGING FLAGS ---
@@ -68,7 +68,7 @@ End Enum
 ' Purpose   : A master routine that calls the individual initialization
 '             procedures for all configurations (Reports and Data Sources).
 '---------------------------------------------------------------------------------
-Public Sub InitializeAllConfigs()
+Friend Sub InitializeAllConfigs()
     ' Initialize Data Source Mappings First
     InitializeProductStatusSource
     InitializeHistorySource
@@ -84,7 +84,7 @@ End Sub
 ' Purpose   : A public routine to release all configuration objects from memory.
 '             Called by mForecasting during its cleanup phase.
 '---------------------------------------------------------------------------------
-Public Sub CleanupAllConfigs()
+Friend Sub CleanupAllConfigs()
     ' --- Cleanup Report Configs ---
     Set pTierReportCols = Nothing
     Set pSummaryReportCols = Nothing
