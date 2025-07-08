@@ -4,16 +4,16 @@ Option Explicit
 '================================================================================================
 ' Module:      M_Forecasting
 ' Purpose:     Main engine that loads data, calculates forecasts, and generates reports.
-' Version:     36.0
+' Version:     36.1
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V36.1:       - BUGFIX: Corrected key creation in BuildDataCaches to use the shared
+'                dimension name constants from M_Config (e.g., CALC_TOTAL_LEVEL_DIM).
+'                This ensures cache keys match the keys used by cCalculationEngine,
+'                fixing the blank forecast issue.
 ' V36.0:       - STAGE 4 REFACTOR: Isolate Calculation Logic.
-'              - Created and integrated the new cCalculationEngine class.
-'              - The ComputeBaseForecasts sub is now extremely simple. It configures
-'                and calls the engine, which now contains all calculation logic.
-' V35.0:       - STAGE 3 REFACTOR: Generalize Product Object.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -186,16 +186,17 @@ Private Sub BuildDataCaches()
     Set dictHistSumCache = CreateObject("Scripting.Dictionary")
     dictHistSumCache.CompareMode = vbTextCompare
     For r = 2 To UBound(arrHistoryData, 1)
+        ' BUGFIX: Use the dimension name constants from M_Config to ensure keys match the calculation engine.
         Set subTierKey = New cDimensionKey
-        subTierKey.Add "Affiliate", arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
-        subTierKey.Add "Tier", arrHistoryData(r, g_dsHistory.GetCol("Tier"))
-        subTierKey.Add "SubTier", arrHistoryData(r, g_dsHistory.GetCol("SubTier"))
-        subTierKey.Add "KeyFigure", arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
+        subTierKey.Add CALC_AFFILIATE_DIM, arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
+        subTierKey.Add CALC_TOTAL_LEVEL_DIM, arrHistoryData(r, g_dsHistory.GetCol("Tier"))
+        subTierKey.Add CALC_SHARE_LEVEL_DIM, arrHistoryData(r, g_dsHistory.GetCol("SubTier"))
+        subTierKey.Add CALC_KEY_FIGURE_DIM, arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
         
         Set tierKey = New cDimensionKey
-        tierKey.Add "Affiliate", arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
-        tierKey.Add "Tier", arrHistoryData(r, g_dsHistory.GetCol("Tier"))
-        tierKey.Add "KeyFigure", arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
+        tierKey.Add CALC_AFFILIATE_DIM, arrHistoryData(r, g_dsHistory.GetCol("Affiliate"))
+        tierKey.Add CALC_TOTAL_LEVEL_DIM, arrHistoryData(r, g_dsHistory.GetCol("Tier"))
+        tierKey.Add CALC_KEY_FIGURE_DIM, arrHistoryData(r, g_dsHistory.GetCol("KeyFigure"))
                  
         dblSum = 0
         For c = g_dsHistory.StartOfMonthsCol To UBound(arrHistoryData, 2)
@@ -211,10 +212,11 @@ Private Sub BuildDataCaches()
     dictDemandCache.CompareMode = vbTextCompare
     For r = 2 To UBound(arrDemandData, 1)
         For c = g_dsDemand.StartOfMonthsCol To UBound(arrDemandData, 2)
+            ' BUGFIX: Use the dimension name constants from M_Config here as well.
             Set demandKey = New cDimensionKey
-            demandKey.Add "Affiliate", arrDemandData(r, g_dsDemand.GetCol("Affiliate"))
-            demandKey.Add "Tier", arrDemandData(r, g_dsDemand.GetCol("Tier"))
-            demandKey.Add "KeyFigure", arrDemandData(r, g_dsDemand.GetCol("KeyFigure"))
+            demandKey.Add CALC_AFFILIATE_DIM, arrDemandData(r, g_dsDemand.GetCol("Affiliate"))
+            demandKey.Add CALC_TOTAL_LEVEL_DIM, arrDemandData(r, g_dsDemand.GetCol("Tier"))
+            demandKey.Add CALC_KEY_FIGURE_DIM, arrDemandData(r, g_dsDemand.GetCol("KeyFigure"))
             demandKey.Add "Month", CDate(arrDemandData(1, c))
             
             If IsNumeric(arrDemandData(r, c)) Then
