@@ -6,14 +6,15 @@ Option Explicit
 ' Purpose:     Encapsulates all data loading, validation, and caching logic. This class
 '              acts as the single source of truth for all data required by the forecasting
 '              engine, abstracting away the details of reading from Excel sheets.
-' Version:     1.1
+' Version:     1.2
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V1.1:        - PERFORMANCE: Replaced cDimensionKey with direct string concatenation
-'                in the high-frequency BuildDataCaches and BuildHistoryCache loops.
-'                This significantly reduces object creation overhead and improves speed.
+' V1.2:        - PERFORMANCE: Replaced cDimensionKey in BuildForecastItemMap and
+'                ValidateSingleChain with direct string concatenation to further
+'                reduce object creation overhead during data setup.
+' V1.1:        - PERFORMANCE: Optimized BuildDataCaches and BuildHistoryCache loops.
 ' V1.0:        - Initial creation for architectural refactoring.
 '================================================================================================
 
@@ -82,7 +83,7 @@ Main_Exit:
 End Function
 
 '================================================================================================
-'--- PRIVATE DATA LOADING AND VALIDATION ---
+'--- PRIVATE DATA LOADING AND VALIDATION (OPTIMIZED) ---
 '================================================================================================
 
 Private Function LoadAndValidateSourceSheets() As Boolean
@@ -113,13 +114,12 @@ End Function
 
 Private Function BuildForecastItemMap(ByVal arrStatus As Variant) As Object
     Dim dictMap As Object: Set dictMap = CreateObject("Scripting.Dictionary")
-    Dim rowIndex As Long, obj As cForecastItem, key As cDimensionKey
+    Dim rowIndex As Long, obj As cForecastItem, strKey As String
     
     For rowIndex = 2 To UBound(arrStatus, 1)
-        Set key = New cDimensionKey
-        key.Add "Affiliate", arrStatus(rowIndex, g_dsProductStatus.GetCol("Affiliate"))
-        key.Add "ISD", arrStatus(rowIndex, g_dsProductStatus.GetCol("ISD"))
-        Dim strKey As String: strKey = key.ToString()
+        ' OPTIMIZED: Use direct string concatenation for the primary key.
+        ' Key is "Affiliate|ISD"
+        strKey = arrStatus(rowIndex, g_dsProductStatus.GetCol("Affiliate")) & "|" & arrStatus(rowIndex, g_dsProductStatus.GetCol("ISD"))
         
         If Not dictMap.Exists(strKey) Then
             Set obj = New cForecastItem
@@ -151,7 +151,6 @@ End Sub
 Private Sub ValidateSingleChain(ByVal startItem As cForecastItem)
     Dim pathTracker As Object: Set pathTracker = CreateObject("Scripting.Dictionary")
     Dim currentItem As cForecastItem: Set currentItem = startItem
-    Dim successorKey As cDimensionKey
     Dim strSuccessorKey As String, chainIsValid As Boolean: chainIsValid = True
     
     Do While True
@@ -164,15 +163,17 @@ Private Sub ValidateSingleChain(ByVal startItem As cForecastItem)
         
         If Len(currentItem.SupersededByProductID) = 0 Then Exit Do
         
-        If m_dictValidatedChains.Exists(currentItem.Dimensions.ToString()) Then
-            If Not m_dictValidatedChains.Item(currentItem.Dimensions.ToString()) Then chainIsValid = False
+        ' OPTIMIZED: Use direct string concatenation for the item's key
+        Dim currentItemKey As String
+        currentItemKey = currentItem.Affiliate & "|" & currentItem.ISD
+        
+        If m_dictValidatedChains.Exists(currentItemKey) Then
+            If Not m_dictValidatedChains.Item(currentItemKey) Then chainIsValid = False
             Exit Do
         End If
         
-        Set successorKey = New cDimensionKey
-        successorKey.Add "Affiliate", currentItem.Affiliate
-        successorKey.Add "ISD", currentItem.SupersededByProductID
-        strSuccessorKey = successorKey.ToString()
+        ' OPTIMIZED: Build successor key with direct concatenation
+        strSuccessorKey = currentItem.Affiliate & "|" & currentItem.SupersededByProductID
         
         If Not m_dictForecastItemMap.Exists(strSuccessorKey) Then
             m_lngWarningCount = m_lngWarningCount + 1
@@ -183,13 +184,12 @@ Private Sub ValidateSingleChain(ByVal startItem As cForecastItem)
         Set currentItem = m_dictForecastItemMap.Item(strSuccessorKey)
     Loop
     
-    Dim pathKey As Variant, itemMapKey As cDimensionKey
+    Dim pathKey As Variant
     For Each pathKey In pathTracker.Keys
-        Set itemMapKey = New cDimensionKey
-        itemMapKey.Add "Affiliate", startItem.Affiliate
-        itemMapKey.Add "ISD", pathKey
+        ' OPTIMIZED: Build the final key for the validation dictionary
+        Dim strItemMapKey As String
+        strItemMapKey = startItem.Affiliate & "|" & pathKey
         
-        Dim strItemMapKey As String: strItemMapKey = itemMapKey.ToString()
         If Not m_dictValidatedChains.Exists(strItemMapKey) Then
             m_dictValidatedChains.Add strItemMapKey, chainIsValid
         End If
