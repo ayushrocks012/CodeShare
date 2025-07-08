@@ -1,0 +1,108 @@
+'@Folder("Classes")
+Option Explicit
+
+'================================================================================================
+' Class:       cDimensionKey
+' Purpose:     Manages a dynamic collection of dimension values (e.g., Affiliate, Tier)
+'              and generates a unique, sorted, and consistent string representation
+'              to be used as a key in dictionaries. This replaces hard-coded,
+'              pipe-delimited strings and is the core of the scalable architecture.
+' Version:     1.0
+' Author:      Ayush Goyal
+' Date:        08-Jul-2025
+'================================================================================================
+
+' --- Private Member Variables ---
+Private m_Dimensions As Object ' Dictionary: Key = Dimension Name, Item = Dimension Value
+
+' --- Constructor ---
+Private Sub Class_Initialize()
+    Set m_Dimensions = CreateObject("Scripting.Dictionary")
+    m_Dimensions.CompareMode = vbTextCompare ' Case-insensitive dimension names
+End Sub
+
+' --- Public Methods ---
+
+'---------------------------------------------------------------------------------
+' Procedure : Add
+' Purpose   : Adds a dimension (key-value pair) to the object.
+' @param   : Name As String - The name of the dimension (e.g., "Tier").
+' @param   : Value As Variant - The value of the dimension (e.g., "Premium").
+'---------------------------------------------------------------------------------
+Public Sub Add(ByVal Name As String, ByVal Value As Variant)
+    If m_Dimensions.Exists(Name) Then
+        m_Dimensions.Item(Name) = Value
+    Else
+        m_Dimensions.Add Name, Value
+    End If
+End Sub
+
+'---------------------------------------------------------------------------------
+' Procedure : Value
+' Purpose   : Retrieves the value for a given dimension name.
+' @param   : Name As String - The name of the dimension to retrieve.
+' @return  : Variant - The value of the dimension. Returns Empty if not found.
+'---------------------------------------------------------------------------------
+Public Function Value(ByVal Name As String) As Variant
+    If m_Dimensions.Exists(Name) Then
+        Value = m_Dimensions.Item(Name)
+    Else
+        Value = Empty
+    End If
+End Function
+
+'---------------------------------------------------------------------------------
+' Procedure : KeyString
+' Purpose   : Generates the unique, consistent string representation of the key.
+'             It works by sorting the dimension names alphabetically before joining
+'             them, ensuring that the order of addition does not affect the final key.
+'             Example: "Affiliate=UK|KeyFigure=Volume|Tier=Premium"
+' @return  : String - The generated key string.
+'---------------------------------------------------------------------------------
+Public Function KeyString() As String
+    If m_Dimensions.Count = 0 Then Exit Function
+
+    Dim arrKeys As Variant
+    arrKeys = m_Dimensions.Keys
+    
+    ' Sort the dimension names alphabetically for consistency
+    SortArrayInPlace arrKeys
+    
+    Dim i As Long
+    Dim parts() As String
+    ReDim parts(0 To m_Dimensions.Count - 1)
+    
+    For i = 0 To UBound(arrKeys)
+        parts(i) = arrKeys(i) & "=" & m_Dimensions(arrKeys(i))
+    Next i
+    
+    KeyString = Join(parts, "|")
+End Function
+
+' --- Private Helper Methods ---
+
+'---------------------------------------------------------------------------------
+' Procedure : SortArrayInPlace
+' Purpose   : A simple bubble sort algorithm to sort an array of strings in place.
+'             This is a private helper for the KeyString method.
+' @param   : arr As Variant (ByRef) - The array to be sorted.
+'---------------------------------------------------------------------------------
+Private Sub SortArrayInPlace(ByRef arr As Variant)
+    Dim i As Long, j As Long
+    Dim temp As Variant
+    
+    For i = LBound(arr) To UBound(arr) - 1
+        For j = i + 1 To UBound(arr)
+            If arr(i) > arr(j) Then
+                temp = arr(j)
+                arr(j) = arr(i)
+                arr(i) = temp
+            End If
+        Next j
+    Next i
+End Sub
+
+' --- Destructor ---
+Private Sub Class_Terminate()
+    Set m_Dimensions = Nothing
+End Sub
