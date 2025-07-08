@@ -6,17 +6,15 @@ Option Explicit
 ' Purpose:     Main orchestrator for the forecasting process. It initializes the environment
 '              and uses dedicated class objects to manage data, execute calculations,
 '              and generate reports.
-' Version:     42.1
+' Version:     42.2
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
-' V42.1:       - BUGFIX: Correctly configured the cCalculationEngine instance by setting
-'                its dimension properties before use, resolving a compile error.
+' V42.2:       - PERFORMANCE: Added Application.EnableEvents = False/True to the
+'                main setup and finalization routines for a minor speed boost.
+' V42.1:       - BUGFIX: Correctly configured the cCalculationEngine instance.
 ' V42.0:       - REFACTOR: Major architectural overhaul.
-'                - Delegated all data loading and caching to a new cDataManager class.
-'                - Delegated all report generation to a new cReportGenerator class.
-' V41.0:       - REFACTOR: Modified ApplySuccessorAdjustments to use cProductLifecycle.
 '================================================================================================
 
 '--- Private Module-Level Variables ---
@@ -29,27 +27,18 @@ Private lngWarningCount As Long
 '================================================================================================
 
 '@Ignore UnusedMember
-'---------------------------------------------------------------------------------
-' Procedure : UpdateForecast
-' Purpose   : The main public entry point for the entire forecasting process.
-'             It orchestrates the complete workflow from initialization to finalization.
-'---------------------------------------------------------------------------------
 Public Sub UpdateForecast()
     Dim tStart As Double: tStart = Timer
     Dim dataManager As cDataManager
     
-    ' --- 1. INITIALIZE ENVIRONMENT ---
     If Not InitializeRun() Then GoTo Main_Exit
     
-    ' --- 2. LOAD & PROCESS DATA ---
     Set dataManager = New cDataManager
     dataManager.Init wbHost, wsLog
     If Not dataManager.LoadAndProcessData() Then GoTo Main_Exit
     
-    ' --- 3. PROCESS FORECASTS ---
     ProcessAllAffiliates dataManager
     
-    ' --- 4. FINALIZE ---
     lngWarningCount = dataManager.WarningCount
     
 Main_Exit:
@@ -61,11 +50,6 @@ End Sub
 ' 2. CORE WORKFLOW STAGES
 '================================================================================================
 
-'---------------------------------------------------------------------------------
-' Procedure : InitializeRun
-' Purpose   : Prepares the Excel application and workbook environment for the run.
-' @return  : Boolean - True if initialization succeeds, False otherwise.
-'---------------------------------------------------------------------------------
 Private Function InitializeRun() As Boolean
     Dim tCheckpoint As Double: tCheckpoint = Timer
     On Error GoTo Init_ErrorHandler
@@ -94,30 +78,19 @@ Init_ErrorHandler:
     InitializeRun = False
 End Function
 
-'---------------------------------------------------------------------------------
-' Procedure : ProcessAllAffiliates
-' Purpose   : Main loop to process each unique affiliate.
-' @param   : dataManager As cDataManager - The fully loaded data manager object.
-'---------------------------------------------------------------------------------
 Private Sub ProcessAllAffiliates(ByVal dataManager As cDataManager)
     Dim varAffiliate As Variant, strAffiliate As String
     Dim lngCounter As Long, lngTotal As Long
     Dim tCheckpoint As Double: tCheckpoint = Timer
     
-    ' --- Create and configure the calculation engine once ---
     Dim engine As cCalculationEngine
     Set engine = New cCalculationEngine
-    
-    ' Configure the engine's dimensions using constants from mConfiguration
     engine.AffiliateDim = CALC_AFFILIATE_DIM
     engine.TotalLevelDim = CALC_TOTAL_LEVEL_DIM
     engine.ShareLevelDim = CALC_SHARE_LEVEL_DIM
     engine.KeyFigureDim = CALC_KEY_FIGURE_DIM
-    
-    ' Initialize the engine with data it needs for its lifetime
     engine.Init dataManager.DemandDataArray, g_dsDemand.StartOfMonthsCol
     
-    ' --- Create the report generator once ---
     Dim reporter As cReportGenerator
     Set reporter = New cReportGenerator
     reporter.Init dataManager, wsLog, wbHost.Path
@@ -128,7 +101,6 @@ Private Sub ProcessAllAffiliates(ByVal dataManager As cDataManager)
         Exit Sub
     End If
     
-    ' --- Loop through each affiliate ---
     For Each varAffiliate In dataManager.Affiliates.Keys
         strAffiliate = CStr(varAffiliate)
         lngCounter = lngCounter + 1
@@ -137,7 +109,6 @@ Private Sub ProcessAllAffiliates(ByVal dataManager As cDataManager)
         Application.StatusBar = "Processing Affiliate: " & strAffiliate & " (" & lngCounter & " of " & lngTotal & ")..."
         WriteToLog ltInfo, "ProcessAllAffiliates", "Starting: " & strAffiliate
         
-        ' --- Execute the forecast and generate the report for the affiliate ---
         ProcessForecastForAffiliate strAffiliate, dataManager, engine, reporter
         
         GoTo Next_Affiliate
@@ -152,27 +123,13 @@ Next_Affiliate:
     LogPerformance tCheckpoint, "Process All Affiliates"
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : ProcessForecastForAffiliate
-' Purpose   : Orchestrates the calculation and reporting for a single affiliate.
-' @param   : strAffiliate As String - The affiliate being processed.
-' @param   : dataManager As cDataManager - The data source object.
-' @param   : engine As cCalculationEngine - The configured calculation engine.
-' @param   : reporter As cReportGenerator - The configured report generator.
-'---------------------------------------------------------------------------------
 Private Sub ProcessForecastForAffiliate(ByVal strAffiliate As String, ByVal dataManager As cDataManager, ByVal engine As cCalculationEngine, ByVal reporter As cReportGenerator)
     InitializeForecastValues strAffiliate, dataManager.ForecastItems
     ComputeBaseForecasts strAffiliate, dataManager, engine
     ApplySuccessorAdjustments strAffiliate, dataManager.ForecastItems
-    
-    ' Delegate report generation to the dedicated class
     reporter.GenerateAffiliateReport strAffiliate
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : FinalizeRun
-' Purpose   : Cleans up the application environment and shows a summary message.
-'---------------------------------------------------------------------------------
 Private Sub FinalizeRun(ByVal tStart As Double)
     On Error Resume Next
     
@@ -182,6 +139,7 @@ Private Sub FinalizeRun(ByVal tStart As Double)
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
+    Application.EnableEvents = True ' Re-enable events
     
     Dim strMessage As String
     strMessage = "Forecast process completed in " & Format$(Timer - tStart, "#,##0.00") & " seconds." & vbCrLf & vbCrLf
@@ -197,10 +155,6 @@ End Sub
 ' 3. FORECAST CALCULATION LOGIC
 '================================================================================================
 
-'---------------------------------------------------------------------------------
-' Procedure : InitializeForecastValues
-' Purpose   : Resets the forecast data for a given affiliate's items.
-'---------------------------------------------------------------------------------
 Private Sub InitializeForecastValues(ByVal strAffiliate As String, ByVal dictForecastItems As Object)
     Dim forecastItem As cForecastItem, itemKey As Variant
     For Each itemKey In dictForecastItems.Keys
@@ -211,56 +165,30 @@ Private Sub InitializeForecastValues(ByVal strAffiliate As String, ByVal dictFor
     Next itemKey
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : ComputeBaseForecasts
-' Purpose   : The core calculation loop. It iterates through every item for
-'             the affiliate and calls the calculation engine.
-' @param   : strAffiliate As String - The affiliate being processed.
-' @param   : dataManager As cDataManager - The data source object.
-' @param   : engine As cCalculationEngine - The configured calculation engine.
-'---------------------------------------------------------------------------------
 Private Sub ComputeBaseForecasts(ByVal strAffiliate As String, ByVal dataManager As cDataManager, ByVal engine As cCalculationEngine)
-    Dim forecastItem As cForecastItem
-    Dim itemKey As Variant, keyFigure As Variant
+    Dim forecastItem As cForecastItem, itemKey As Variant, keyFigure As Variant
     
-    ' Loop through all items and execute the engine
     For Each itemKey In dataManager.ForecastItems.Keys
         Set forecastItem = dataManager.ForecastItems.Item(itemKey)
         If forecastItem.Affiliate = strAffiliate Then
-            
             If DEBUG_MODE Then WriteToLog ltInfo, "ComputeBaseForecasts", "Processing: " & forecastItem.DebugSummary()
-            
             For Each keyFigure In dataManager.KeyFigures.Keys
-                ' Delegate the entire calculation to the engine.
                 engine.Execute forecastItem, CStr(keyFigure), dataManager.HistorySumCache, dataManager.DemandCache
             Next keyFigure
         End If
     Next itemKey
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : ApplySuccessorAdjustments
-' Purpose   : Applies successor forecast transfers using the lifecycle manager class.
-' @param   : strAffiliate As String - The affiliate being processed.
-' @param   : dictForecastItems As Object - The master collection of all items.
-'---------------------------------------------------------------------------------
 Private Sub ApplySuccessorAdjustments(ByVal strAffiliate As String, ByVal dictForecastItems As Object)
-    ' Create a dedicated dictionary containing only the items for the current affiliate.
-    Dim affiliateItems As Object
-    Set affiliateItems = CreateObject("Scripting.Dictionary")
+    Dim affiliateItems As Object: Set affiliateItems = CreateObject("Scripting.Dictionary")
+    Dim itemKey As Variant, forecastItem As cForecastItem
     
-    Dim itemKey As Variant
-    Dim forecastItem As cForecastItem
     For Each itemKey In dictForecastItems.Keys
         Set forecastItem = dictForecastItems.Item(itemKey)
-        If forecastItem.Affiliate = strAffiliate Then
-            affiliateItems.Add itemKey, forecastItem
-        End If
+        If forecastItem.Affiliate = strAffiliate Then affiliateItems.Add itemKey, forecastItem
     Next itemKey
     
-    ' If there are items for this affiliate, process them.
     If affiliateItems.Count > 0 Then
-        ' Delegate the successor adjustment process to the lifecycle manager.
         Dim lifecycleManager As cProductLifecycle
         Set lifecycleManager = New cProductLifecycle
         lifecycleManager.ProcessSuccessorTransfers affiliateItems
@@ -272,20 +200,13 @@ End Sub
 ' 4. UTILITY & HELPER FUNCTIONS
 '================================================================================================
 
-'---------------------------------------------------------------------------------
-' Procedure : SetupApplication
-' Purpose   : Configures global Excel application settings for performance.
-'---------------------------------------------------------------------------------
 Private Sub SetupApplication()
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
     Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False ' Disable events for performance
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : InitializeLogSheet
-' Purpose   : Sets up the header row for a new log sheet.
-'---------------------------------------------------------------------------------
 Private Sub InitializeLogSheet(ByVal ws As Worksheet)
     ws.Name = SHEET_LOG
     With ws.Range("A1:E1")
@@ -295,33 +216,21 @@ Private Sub InitializeLogSheet(ByVal ws As Worksheet)
     ws.Columns("A:E").AutoFit
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : WriteToLog
-' Purpose   : Writes a new entry to the log sheet.
-'---------------------------------------------------------------------------------
 Private Sub WriteToLog(ByVal logType As logType, ByVal procedureName As String, ByVal message As String, Optional ByVal errNumber As Long = 0, Optional ByVal errContext As String = "")
     If wsLog Is Nothing Then Exit Sub
     Dim nextRow As Long: nextRow = wsLog.Cells(wsLog.Rows.Count, "A").End(xlUp).Row + 1
-    With wsLog.Rows(nextRow)
+    With m_wsLog.Rows(nextRow)
         .Cells(1).Value = Now(): .Cells(2).Value = GetLogTypeString(logType)
         .Cells(3).Value = procedureName: .Cells(4).Value = message
         If errNumber <> 0 Then .Cells(5).Value = "Err " & errNumber & ": " & errContext Else .Cells(5).Value = errContext
     End With
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : LogPerformance
-' Purpose   : A specialized logging function to record the time taken for major stages.
-'---------------------------------------------------------------------------------
 Private Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
     WriteToLog ltProfile, strStageName, "Stage completed in " & Format$(Timer - tCheckpoint, "#,##0.00") & "s"
     tCheckpoint = Timer
 End Sub
 
-'---------------------------------------------------------------------------------
-' Procedure : GetLogTypeString
-' Purpose   : Converts a logType enum value to its string representation.
-'---------------------------------------------------------------------------------
 Private Function GetLogTypeString(ByVal logType As logType) As String
     Select Case logType
         Case ltInfo: GetLogTypeString = "Info"
