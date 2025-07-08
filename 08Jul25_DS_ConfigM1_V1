@@ -6,16 +6,16 @@ Option Explicit
 ' Purpose:     This module defines all global constants and utility functions for the project.
 '              It acts as a central control panel for sheet names, column positions,
 '              and business logic enumerations.
-' Version:     32.0
+' Version:     32.1
 ' Author:      Ayush Goyal
 ' Date:        08-Jul-2025
 '
 ' Change Log:
+' V32.1:       - Added CleanupAllReportConfigs subroutine to properly manage the
+'                lifetime of the private report configuration collections.
 ' V32.0:       - Applied Rubberduck code inspection fixes.
-'              - Improved encapsulation for report collections (gTierReportCols, etc.)
-'                by making them private and adding public "getter" functions.
-'              - Removed unused constants (HS_DESC_COL, HS_ISD_COL).
-' V31.0:       - Implemented Stage 5 Data-Driven Summary Sheets.
+'              - Improved encapsulation for report collections.
+'              - Removed unused constants.
 '================================================================================================
 
 ' --- DEBUGGING & LOGGING FLAGS ---
@@ -67,7 +67,6 @@ Public Const HS_TIER_COL As Long = 2
 Public Const HS_SUB_TIER_COL As Long = 3
 Public Const HS_KEY_FIGURE_COL As Long = 4
 Public Const HS_LOCAL_ITEM_NBR_COL As Long = 5
-' Unused constants removed based on Rubberduck inspection.
 Public Const HS_START_OF_MONTHS_COL As Long = 8
 
 '-- 'Demand Forecast' Sheet Columns --
@@ -88,6 +87,16 @@ Public Const DF_START_OF_MONTHS_COL As Long = 4
 Public Sub InitializeAllReportConfigs()
     InitializeTierReportConfig
     InitializeSummaryReportConfig
+End Sub
+
+'---------------------------------------------------------------------------------
+' Procedure : CleanupAllReportConfigs
+' Purpose   : A public routine to release the report configuration collections
+'             from memory. Called by M_Forecasting during its cleanup phase.
+'---------------------------------------------------------------------------------
+Public Sub CleanupAllReportConfigs()
+    Set pTierReportCols = Nothing
+    Set pSummaryReportCols = Nothing
 End Sub
 
 '---------------------------------------------------------------------------------
